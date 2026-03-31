@@ -5,8 +5,8 @@ include(
 //    "on-demand-common",
 //    "on-demand-proto",
 //    "gateway-service",
-    "auth-service"
-//    "user-profile-service",
+    "auth-service",
+    "user-profile-service"
 //    "task-service",
 //    "bidding-service",
 //    "payment-service",

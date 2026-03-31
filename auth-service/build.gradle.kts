@@ -18,6 +18,8 @@ repositories {
     mavenCentral()
 }
 
+// can list JJWT dependencies WITHOUT version numbers
+
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
@@ -27,8 +29,9 @@ dependencies {
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
+    implementation("org.springframework.kafka:spring-kafka")
 
-    // Now you can list JJWT dependencies WITHOUT version numbers
+
     implementation("io.jsonwebtoken:jjwt-api")
     runtimeOnly("io.jsonwebtoken:jjwt-impl")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson")

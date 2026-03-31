@@ -3,6 +3,8 @@ package com.marketplace.authservice.service;
 import com.marketplace.authservice.dto.AuthResponse;
 import com.marketplace.authservice.dto.LoginRequest;
 import com.marketplace.authservice.dto.RegisterRequest;
+import com.marketplace.authservice.event.UserEventPublisher;
+import com.marketplace.authservice.event.UserRegisteredEvent;
 import com.marketplace.authservice.model.User;
 import com.marketplace.authservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +19,7 @@ public class AuthService {
     private final UserRepository  userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService      jwtService;
+    private final UserEventPublisher eventPublisher;
 
     public AuthResponse register(RegisterRequest request) {
 
@@ -35,6 +38,13 @@ public class AuthService {
                 .build();
 
         User savedUser = userRepository.save(user);
+
+        eventPublisher.publishUserRegistered(new UserRegisteredEvent(
+                savedUser.getId().toString(),
+                savedUser.getEmail(),
+                savedUser.getRole()
+        ));
+
 
         // 3. Issue tokens immediately — user is logged in after registering
         String accessToken  = jwtService.generateAccessToken(
