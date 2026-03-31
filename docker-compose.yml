@@ -1,0 +1,54 @@
+
+
+services:
+  marketplace-auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    image: auth-service:latest
+    container_name: auth-service
+    networks:
+    - marketplace-net
+    restart: on-failure
+
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_DATASOURCE_PASSWORD=password
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://marketplace-auth-db:5432/auth-db
+      - SPRING_DATASOURCE_USERNAME=admin_user
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - SPRING_SQL_INIT_MODE=never
+      - JWT_SECRET=x8aRLBjC1V9Tz1IuE3o47gCN88TwOiD4g2KuJX5u6H7EJ5PSpvnM0NYlcbL0W3Dc
+
+    depends_on:
+      marketplace-auth-db:
+        condition: service_healthy
+
+
+  marketplace-auth-db:
+    image: postgres:17
+    container_name: marketplace-auth-db
+    restart: always
+    environment:
+      POSTGRES_DB: auth-db
+      POSTGRES_USER: admin_user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5001:5432"
+    volumes:
+      #      - patient-management-data:/var/lib/postgresql/data
+      - ./db_volumes/auth-service-db:/var/lib/postgresql
+    networks:
+      - marketplace-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_user -d auth-db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
+networks:
+  marketplace-net:
+    driver: bridge
