@@ -13,7 +13,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update       # use 'validate' in production
+      ddl-auto: update
     show-sql: false
     properties:
       hibernate:
@@ -22,16 +22,20 @@ spring:
 
   threads:
     virtual:
-      enabled: true          # Java 25 Virtual Threads
+      enabled: true
 
-# JWT config — move these to environment variables / Vault in production
 jwt:
   secret: "your-256-bit-secret-key-replace-this-in-production-use-env-var"
-  access-token-expiry-ms: 900000      # 15 minutes
-  refresh-token-expiry-ms: 2592000000 # 30 days
+  access-token-expiry-ms: 900000
+  refresh-token-expiry-ms: 2592000000
 
 management:
   endpoints:
     web:
       exposure:
         include: health, info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
