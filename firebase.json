@@ -1,0 +1,31 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "fairbid-c9340",
+          "appId": "1:203512303560:android:cb922e831b079cf4143afd",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "fairbid-c9340",
+          "configurations": {
+            "android": "1:203512303560:android:cb922e831b079cf4143afd"
+          }
+        }
+      }
+    }
+  }
+}

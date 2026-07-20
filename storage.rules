@@ -1,0 +1,46 @@
+rules_version = '2';
+
+// FairBid Storage security rules.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // An admin is identified by their `role` on the Firestore user doc.
+    // Storage rules can cross-read Firestore, so we reuse the same source of
+    // truth as `firestore.rules` — no custom auth claim / backend needed.
+    function isAdmin() {
+      return request.auth != null
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid))
+             .data.role == 'admin';
+    }
+
+    // Verification documents: ID photo, selfie, certificates, portfolio
+    // images. The owner may read and write their own files; an admin may read
+    // any of them so the in-app verification queue can display them for review.
+    match /verification/{userId}/{allPaths=**} {
+      allow read: if request.auth != null
+                  && (request.auth.uid == userId || isAdmin());
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Job photos: readable by any signed-in user (providers browse jobs),
+    // writable only by the owner who posted them.
+    match /jobs/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Dispute photo evidence: the uploader writes their own files; the
+    // uploader and admins may read (the other party sees the images via the
+    // tokened download URLs on the dispute doc, like verification documents).
+    match /disputes/{userId}/{allPaths=**} {
+      allow read: if request.auth != null
+                  && (request.auth.uid == userId || isAdmin());
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Deny everything else by default until its own rule is written.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

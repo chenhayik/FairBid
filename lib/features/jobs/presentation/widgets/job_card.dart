@@ -1,0 +1,114 @@
+import 'package:flutter/material.dart';
+
+import '../../../../core/theme/app_theme.dart';
+import '../../../../core/util/time_ago.dart';
+import '../../../../core/widgets/app_widgets.dart';
+import '../../domain/job.dart';
+
+/// Compact job summary used in the feed, "Jobs near you" and My Jobs.
+class JobCard extends StatelessWidget {
+  const JobCard({
+    super.key,
+    required this.job,
+    this.onTap,
+    this.distanceLabel,
+  });
+
+  final Job job;
+  final VoidCallback? onTap;
+
+  /// Optional "2.5 km" shown on provider-facing lists.
+  final String? distanceLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final budget = job.budget?.label;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                // Flexible (not Expanded) so the pill hugs its text instead of
+                // stretching to fill the row.
+                Flexible(
+                  child: PillBadge(
+                    label: job.category,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (job.status == JobStatus.open)
+                  PillBadge(
+                      label: 'Open', color: context.fairbid.verified)
+                else
+                  PillBadge(
+                      label: job.status.label,
+                      color: theme.colorScheme.onSurfaceVariant),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(job.title,
+                style: theme.textTheme.titleLarge,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 6),
+            Text(
+              job.description,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(Icons.location_on_outlined,
+                    size: 16, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    [job.location.address, distanceLabel]
+                        .where((s) => s != null && s.isNotEmpty)
+                        .join('  •  '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                if (budget != null)
+                  Flexible(
+                    child: Text(budget,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelLarge
+                            ?.copyWith(color: context.fairbid.verified)),
+                  ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${job.bidCount} bids  •  ${timeAgo(job.createdAt)}',
+                    textAlign: TextAlign.end,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

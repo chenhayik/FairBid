@@ -1,0 +1,305 @@
+rules_version = '2';
+
+// FairBid Firestore security rules.
+// Starting point covering the auth/profile flow; extend per feature (jobs,
+// bids, milestones, etc.) as they are built.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function roleOf(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && roleOf(request.auth.uid) == 'admin';
+    }
+
+    // User profiles. Any signed-in user may read a profile (needed to show
+    // names/ratings on jobs, bids and chats). A user may create/edit their own
+    // document, except for the Trust Score fields (score, breakdown and its
+    // raw inputs) and the wallet balance — those are only ever written by
+    // Cloud Functions (admin SDK, bypasses rules), so they can't be forged by
+    // a client write, at creation time or later. An admin may additionally
+    // record a verification decision on any user (only the verification
+    // fields), which is how pending providers and requestors are approved
+    // into the marketplace. Deletion is client-denied.
+    match /users/{userId} {
+      function trustFields() {
+        return ['trustScore', 'ratingSum', 'ratingCount', 'jobsCompleted',
+                'disputesLost', 'trust'];
+      }
+
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && !request.resource.data.keys().hasAny(trustFields())
+                    && request.resource.data
+                        .get('walletBalanceSen', 0) == 0;
+      allow update: if isSignedIn() && (
+                      (request.auth.uid == userId
+                          && !request.resource.data.diff(resource.data)
+                              .affectedKeys()
+                              .hasAny(trustFields()
+                                  .concat(['walletBalanceSen'])))
+                      || (isAdmin()
+                          && request.resource.data.diff(resource.data)
+                              .affectedKeys()
+                              .hasOnly(['verificationStatus',
+                                        'verificationReason',
+                                        'reviewedAt']))
+                    );
+      allow delete: if false;
+
+      // Reviews left on a user's profile after a completed job. Readable by
+      // any signed-in user; a reviewer may only create a review as themselves,
+      // never on their own profile, and only once the named job is completed
+      // and both parties were its participants — this ensures the
+      // `recomputeTrustScore` Cloud Function only ever fires for genuine
+      // completed-job reviews. Reviews are immutable once written.
+      match /reviews/{reviewId} {
+        function jobData(jobId) {
+          return get(/databases/$(database)/documents/jobs/$(jobId)).data;
+        }
+
+        allow read: if isSignedIn();
+        allow create: if isSignedIn()
+                      && request.resource.data.reviewerId == request.auth.uid
+                      && request.auth.uid != userId
+                      && jobData(request.resource.data.jobId).status == 'completed'
+                      && jobData(request.resource.data.jobId).requestorId
+                          in [request.auth.uid, userId]
+                      && jobData(request.resource.data.jobId).acceptedProviderId
+                          in [request.auth.uid, userId];
+        // One narrow carve-out from immutability: reporting a review for
+        // moderation may set the flag fields, once. Hiding/keeping (and the
+        // Trust Score reversal) is exclusively the moderateReview Cloud
+        // Function, which runs with the admin SDK and bypasses rules.
+        allow update: if isSignedIn()
+                      && resource.data.flagged != true
+                      && request.resource.data.flagged == true
+                      && request.resource.data.diff(resource.data)
+                          .affectedKeys()
+                          .hasOnly(['flagged', 'flagReason', 'flaggedByUid']);
+        allow delete: if false;
+      }
+
+      // Sensitive onboarding data (identity/selfie/ID-document photo URLs).
+      // The owner writes it; only the owner and admins may read it — so a
+      // Storage download URL (whose token bypasses Storage rules) can't be
+      // harvested from another user's world-readable profile.
+      match /private/{doc} {
+        allow read: if isSignedIn()
+                    && (request.auth.uid == userId || isAdmin());
+        allow write: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      // Notifications are written only by the Cloud Functions (`notify()`);
+      // the owner reads their feed and may flip `read`, nothing else. Nested
+      // under the user doc so cleanupUserDoc's recursive delete covers them.
+      match /notifications/{notificationId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow update: if isSignedIn() && request.auth.uid == userId
+                      && request.resource.data.diff(resource.data)
+                          .affectedKeys().hasOnly(['read']);
+        allow create, delete: if false;
+      }
+    }
+
+    function isApprovedProvider(uid) {
+      let user = get(/databases/$(database)/documents/users/$(uid)).data;
+      return user.role == 'provider' && user.verificationStatus == 'approved';
+    }
+
+    function ownsJob(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId))
+          .data.requestorId == request.auth.uid;
+    }
+
+    function isAcceptedProvider(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId))
+          .data.acceptedProviderId == request.auth.uid;
+    }
+
+    function jobIsOpen(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId))
+          .data.status == 'open';
+    }
+
+    function jobIsInProgress(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId))
+          .data.status == 'in_progress';
+    }
+
+    // The only `status` transitions a client may write: the requestor
+    // accepting a bid (open → in_progress) or cancelling a still-open job
+    // (open → cancelled). Every other transition — completion, mid-flight
+    // cancellation — is owned by a Cloud Function (admin SDK bypasses rules),
+    // so a requestor can't self-complete or strand escrow by a direct write.
+    function jobStatusWriteOk() {
+      return request.resource.data.status == resource.data.status
+          || (resource.data.status == 'open'
+              && request.resource.data.status in ['in_progress', 'cancelled']);
+    }
+
+    // Cancellation audit fields are Cloud-Function-owned: a client must never
+    // write them, or a requestor could forge a cancellation request and
+    // self-accept it, bypassing the counterparty's consent.
+    function noCancelFieldWrites() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['cancellationRequestedBy', 'cancellationReason',
+                   'cancellationRequestedAt', 'cancelledAt', 'cancelledBy']);
+    }
+
+    // Jobs. Readable by any signed-in user (providers browse). Only a
+    // requestor may create their own job; only the owner may edit it (subject
+    // to the status/cancellation guards above) — except `bidCount`, which any
+    // signed-in user may bump so a provider's bid submit/withdraw batch can
+    // keep the counter in sync.
+    match /jobs/{jobId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.requestorId == request.auth.uid
+                    && roleOf(request.auth.uid) == 'requestor';
+      allow update: if isSignedIn()
+                    && ((resource.data.requestorId == request.auth.uid
+                         && jobStatusWriteOk()
+                         && noCancelFieldWrites())
+                        || request.resource.data.diff(resource.data)
+                            .affectedKeys().hasOnly(['bidCount']));
+      allow delete: if false;
+
+      // Bids on a job, keyed by the bidding provider's uid (one bid per
+      // provider per job). Only approved providers may place or edit their
+      // own bid; the job's owner may update bids (accept/reject); a provider
+      // may withdraw (delete) their own bid.
+      match /bids/{bidId} {
+        allow read: if isSignedIn();
+        allow create, update: if isSignedIn()
+                              && ((request.auth.uid == bidId
+                                   && request.resource.data.providerId == bidId
+                                   && isApprovedProvider(request.auth.uid)
+                                   && jobIsOpen(jobId))
+                                  || ownsJob(jobId));
+        // Withdraw own bid — but only while it's still pending, so a provider
+        // can't delete a bid the requestor just accepted and orphan the job's
+        // winner fields.
+        allow delete: if isSignedIn() && request.auth.uid == bidId
+                      && resource.data.status == 'pending';
+      }
+
+      // Escrow milestones. The plan is authored server-side by the
+      // proposeMilestonePlan / approveMilestonePlan / rejectMilestonePlan
+      // Cloud Functions (so the amounts must total the accepted bid and can't
+      // be forged), as are funding, release and dispute rulings. The only
+      // client-writable change is the money-free funded → submitted delivery
+      // mark. All the money-and-plan mutations run with the admin SDK and
+      // bypass rules.
+      match /milestones/{milestoneId} {
+        allow read: if isSignedIn()
+                    && (ownsJob(jobId) || isAcceptedProvider(jobId));
+        allow create: if false;
+        allow update: if isSignedIn() && isAcceptedProvider(jobId)
+                      && resource.data.status == 'funded'
+                      && request.resource.data.status == 'submitted'
+                      && request.resource.data.diff(resource.data)
+                          .affectedKeys()
+                          .hasOnly(['status', 'submissionNote']);
+        allow delete: if false;
+      }
+    }
+
+    // Collection-group reads for a provider's own cross-job listings — their
+    // bids ("Pending Bids") and their milestones (the Earnings figures).
+    // Rules v2 only applies `match /{path=**}` rules to collectionGroup
+    // queries, so the per-job rules above don't cover these; both queries
+    // filter on providerId == the caller, which is exactly what is checked.
+    match /{path=**}/bids/{bidId} {
+      allow read: if isSignedIn()
+                  && resource.data.providerId == request.auth.uid;
+    }
+    match /{path=**}/milestones/{milestoneId} {
+      allow read: if isSignedIn()
+                  && resource.data.providerId == request.auth.uid;
+    }
+    // Admin moderation queue: the flagged-reviews collectionGroup query.
+    match /{path=**}/reviews/{reviewId} {
+      allow read: if isAdmin();
+    }
+
+    // Chat between a job's requestor and its accepted provider. The doc id is
+    // `{jobId}_{providerId}`; either participant may lazily create it. Reads
+    // and updates are participant-only — updates carry the last-message
+    // preview and unread counters, and like the plan's other client-side
+    // counter writes, rules can't cross-check them against the sibling
+    // message write. The participant list itself is immutable.
+    match /conversations/{conversationId} {
+      // Admins may read (not write) so they can review the job's chat
+      // history when ruling on a dispute.
+      allow read: if isSignedIn()
+                  && (request.auth.uid in resource.data.participantIds
+                      || isAdmin());
+      allow create: if isSignedIn()
+                    && request.auth.uid in request.resource.data.participantIds
+                    && request.resource.data.participantIds.size() == 2;
+      allow update: if isSignedIn()
+                    && request.auth.uid in resource.data.participantIds
+                    && request.resource.data.participantIds
+                        == resource.data.participantIds;
+      allow delete: if false;
+
+      // Messages are append-only: participants write as themselves; nobody
+      // edits or deletes chat history.
+      match /messages/{messageId} {
+        function conversation() {
+          return get(/databases/$(database)/documents/conversations/$(conversationId))
+              .data;
+        }
+        // The chat is open while `chatClosesAt` is unset or still in the
+        // future; a Cloud Function sets it 14 days after the job ends. History
+        // stays readable regardless — only new sends are gated.
+        function chatIsOpen(conv) {
+          return !('chatClosesAt' in conv)
+              || conv.chatClosesAt == null
+              || request.time < conv.chatClosesAt;
+        }
+        allow read: if isSignedIn()
+                    && (request.auth.uid in conversation().participantIds
+                        || isAdmin());
+        allow create: if isSignedIn()
+                      && request.auth.uid in conversation().participantIds
+                      && request.resource.data.senderId == request.auth.uid
+                      && chatIsOpen(conversation());
+        allow update, delete: if false;
+      }
+    }
+
+    // Append-only wallet ledger; only the Cloud Functions (admin SDK) write
+    // it. `participantIds` holds the entry's real uids (never the escrow
+    // sentinel), so each party reads only their own history. Admins may read
+    // it all — the platform-stats released-volume aggregation needs it.
+    match /transactions/{transactionId} {
+      allow read: if isSignedIn()
+                  && (request.auth.uid in resource.data.participantIds
+                      || isAdmin());
+      allow write: if false;
+    }
+
+    // Milestone disputes. Readable by the two parties and admins; every
+    // mutation goes through the raiseDispute/resolveDispute Cloud Functions
+    // (admin SDK bypasses rules), like the transactions ledger above.
+    match /disputes/{disputeId} {
+      allow read: if isSignedIn()
+                  && (request.auth.uid in resource.data.participantIds
+                      || isAdmin());
+      allow write: if false;
+    }
+
+    // Deny everything else by default until its own rules are written.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

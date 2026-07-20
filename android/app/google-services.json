@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "203512303560",
+    "project_id": "fairbid-c9340",
+    "storage_bucket": "fairbid-c9340.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:203512303560:android:cb922e831b079cf4143afd",
+        "android_client_info": {
+          "package_name": "com.FYP.fairbid"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "203512303560-rh8ansu74e44cuv7q8260u4a94pgnkme.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.FYP.fairbid",
+            "certificate_hash": "37e65c487d6c8072b28544a0722c4a813b28a606"
+          }
+        },
+        {
+          "client_id": "203512303560-97vcsraib4kebej5fbcdh37oplc5rrh1.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEGt8KeZ2-D_Z4xQmcyme4NyuRFoUPaxc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "203512303560-97vcsraib4kebej5fbcdh37oplc5rrh1.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

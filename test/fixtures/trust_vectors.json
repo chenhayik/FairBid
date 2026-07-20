@@ -1,0 +1,61 @@
+{
+  "_comment": "Shared Trust Score v2 test vectors. Consumed by test/widget_test.dart (Dart) and functions/check_vectors.js (JS, via npm test) to pin both implementations to identical results. Extend this file whenever the formula changes.",
+  "vectors": [
+    {
+      "name": "fresh unverified provider, name only",
+      "ratingSum": 0, "ratingCount": 0, "verificationStatus": "none",
+      "jobsCompleted": 0, "disputesLost": 0,
+      "hasDisplayName": true, "hasPhone": false, "hasBio": false, "hasPhoto": false, "hasLocation": false,
+      "expected": { "reviewScore": 70, "trackRecordScore": 0, "verificationScore": 0, "profileScore": 20, "composite": 335, "scoreVisible": false }
+    },
+    {
+      "name": "pending verification, full profile, no jobs",
+      "ratingSum": 0, "ratingCount": 0, "verificationStatus": "pending",
+      "jobsCompleted": 0, "disputesLost": 0,
+      "hasDisplayName": true, "hasPhone": true, "hasBio": true, "hasPhoto": true, "hasLocation": true,
+      "expected": { "reviewScore": 70, "trackRecordScore": 0, "verificationScore": 40, "profileScore": 100, "composite": 495, "scoreVisible": false }
+    },
+    {
+      "name": "approved but only 2 jobs (below visibility boundary)",
+      "ratingSum": 0, "ratingCount": 0, "verificationStatus": "approved",
+      "jobsCompleted": 2, "disputesLost": 0,
+      "hasDisplayName": true, "hasPhone": true, "hasBio": true, "hasPhoto": true, "hasLocation": true,
+      "expected": { "reviewScore": 70, "trackRecordScore": 20, "verificationScore": 100, "profileScore": 100, "composite": 665, "scoreVisible": false }
+    },
+    {
+      "name": "approved, 3 jobs, one 5-star, partial profile (visibility unlocks)",
+      "ratingSum": 5, "ratingCount": 1, "verificationStatus": "approved",
+      "jobsCompleted": 3, "disputesLost": 0,
+      "hasDisplayName": true, "hasPhone": true, "hasBio": true, "hasPhoto": false, "hasLocation": false,
+      "expected": { "reviewScore": 73, "trackRecordScore": 30, "verificationScore": 100, "profileScore": 60, "composite": 664, "scoreVisible": true }
+    },
+    {
+      "name": "established: 4.5 avg over 20 reviews, 10 jobs, approved, full profile",
+      "ratingSum": 90, "ratingCount": 20, "verificationStatus": "approved",
+      "jobsCompleted": 10, "disputesLost": 0,
+      "hasDisplayName": true, "hasPhone": true, "hasBio": true, "hasPhoto": true, "hasLocation": true,
+      "expected": { "reviewScore": 83, "trackRecordScore": 100, "verificationScore": 100, "profileScore": 100, "composite": 924, "scoreVisible": true }
+    },
+    {
+      "name": "dispute penalty: 5 jobs but 2 disputes lost",
+      "ratingSum": 25, "ratingCount": 5, "verificationStatus": "approved",
+      "jobsCompleted": 5, "disputesLost": 2,
+      "hasDisplayName": true, "hasPhone": true, "hasBio": true, "hasPhoto": true, "hasLocation": true,
+      "expected": { "reviewScore": 80, "trackRecordScore": 10, "verificationScore": 100, "profileScore": 100, "composite": 685, "scoreVisible": true }
+    },
+    {
+      "name": "track record clamps at 0 (1 job, 3 disputes lost)",
+      "ratingSum": 0, "ratingCount": 0, "verificationStatus": "approved",
+      "jobsCompleted": 1, "disputesLost": 3,
+      "hasDisplayName": false, "hasPhone": false, "hasBio": false, "hasPhoto": false, "hasLocation": false,
+      "expected": { "reviewScore": 70, "trackRecordScore": 0, "verificationScore": 100, "profileScore": 0, "composite": 515, "scoreVisible": false }
+    },
+    {
+      "name": "job cap at 10 and rejected verification hides the score",
+      "ratingSum": 40, "ratingCount": 10, "verificationStatus": "rejected",
+      "jobsCompleted": 25, "disputesLost": 0,
+      "hasDisplayName": true, "hasPhone": false, "hasBio": false, "hasPhoto": true, "hasLocation": false,
+      "expected": { "reviewScore": 75, "trackRecordScore": 100, "verificationScore": 0, "profileScore": 40, "composite": 628, "scoreVisible": false }
+    }
+  ]
+}
