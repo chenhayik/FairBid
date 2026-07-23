@@ -26,6 +26,9 @@ abstract interface class AuthRepository {
     required String password,
   });
 
+  /// Sends a password-reset email to [email].
+  Future<void> sendPasswordReset(String email);
+
   Future<void> registerWithEmail({
     required String email,
     required String password,
@@ -53,6 +56,15 @@ abstract interface class AuthRepository {
     required String? phone,
     required String? location,
     required String? bio,
+  });
+
+  /// Toggles whether [jobId] is on [uid]'s watchlist (the bookmark on a job
+  /// card / feed / "Jobs near you"). Not a protected field — the self-update
+  /// rule already permits it.
+  Future<void> setJobSaved({
+    required String uid,
+    required String jobId,
+    required bool saved,
   });
 
   Future<void> signOut();
@@ -135,6 +147,11 @@ class FirebaseAuthRepository implements AuthRepository {
           email: email.trim(),
           password: password,
         ));
+  }
+
+  @override
+  Future<void> sendPasswordReset(String email) {
+    return _guard(() => _auth.sendPasswordResetEmail(email: email.trim()));
   }
 
   @override
@@ -222,6 +239,19 @@ class FirebaseAuthRepository implements AuthRepository {
       'location': location?.trim(),
       'bio': bio?.trim(),
     }, SetOptions(merge: true));
+  }
+
+  @override
+  Future<void> setJobSaved({
+    required String uid,
+    required String jobId,
+    required bool saved,
+  }) {
+    return _users.doc(uid).update({
+      'watchlist': saved
+          ? FieldValue.arrayUnion([jobId])
+          : FieldValue.arrayRemove([jobId]),
+    });
   }
 
   @override
@@ -336,6 +366,7 @@ class FirebaseAuthRepository implements AuthRepository {
       baseAddress: data?['baseAddress'] as String?,
       bio: data?['bio'] as String?,
       walletBalanceSen: (data?['walletBalanceSen'] as num?)?.toInt() ?? 0,
+      escrowLockedSen: (data?['escrowLockedSen'] as num?)?.toInt() ?? 0,
       ratingCount: (data?['ratingCount'] as num?)?.toInt() ?? 0,
       ratingSum: (data?['ratingSum'] as num?)?.toInt() ?? 0,
       jobsCompleted: (data?['jobsCompleted'] as num?)?.toInt() ?? 0,
@@ -349,6 +380,9 @@ class FirebaseAuthRepository implements AuthRepository {
       payoutAccountLast4:
           accountLast4 == null || accountLast4.isEmpty ? null : accountLast4,
       isPasswordAccount: _isPasswordAccount(user),
+      watchlist:
+          (data?['watchlist'] as List?)?.whereType<String>().toList() ??
+              const [],
     );
   }
 

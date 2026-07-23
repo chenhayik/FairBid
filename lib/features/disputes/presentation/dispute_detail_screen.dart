@@ -347,8 +347,8 @@ class _ChatLine extends StatelessWidget {
             Text(message.text, style: theme.textTheme.bodyMedium),
             const SizedBox(height: 2),
             Text(timeAgo(message.createdAt),
-                style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 11, color: theme.colorScheme.onSurfaceVariant)),
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           ],
         ),
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
@@ -51,6 +52,7 @@ class _PostJobViewState extends State<_PostJobView> {
   final _budgetMax = TextEditingController();
   bool _hourly = false;
   bool _showOptional = false;
+  DateTime? _deadline;
 
   @override
   void dispose() {
@@ -75,6 +77,26 @@ class _PostJobViewState extends State<_PostJobView> {
     controller.setLocation(picked);
     _address.text = picked.address;
   }
+
+  /// Opens a date picker for the optional bidding deadline (tomorrow through
+  /// ~90 days out). The picked date is normalised to end-of-day (23:59:59) so
+  /// choosing "today" — the day after tomorrow's midnight boundary aside —
+  /// never reads as already expired.
+  Future<void> _pickDeadline() async {
+    final tomorrow = DateTime.now().add(const Duration(days: 1));
+    final firstDate = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _deadline ?? firstDate,
+      firstDate: firstDate,
+      lastDate: firstDate.add(const Duration(days: 90)),
+    );
+    if (picked == null) return;
+    setState(() => _deadline =
+        DateTime(picked.year, picked.month, picked.day, 23, 59, 59));
+  }
+
+  void _clearDeadline() => setState(() => _deadline = null);
 
   Future<void> _submit() async {
     final controller = context.read<PostJobController>();
@@ -105,6 +127,7 @@ class _PostJobViewState extends State<_PostJobView> {
         hourly: _hourly,
       ),
       photoUrls: List.of(controller.photoUrls),
+      deadline: _deadline,
     );
     final id = await controller.submit(job);
     if (id != null && mounted) {
@@ -221,6 +244,10 @@ class _PostJobViewState extends State<_PostJobView> {
                     onPressed: controller.isBusy ? null : _suggestDescription,
                   ),
                 ),
+                _PhotoAssistHint(
+                  hasPhoto: controller.photoUrls.isNotEmpty,
+                  onAddPhoto: () => setState(() => _showOptional = true),
+                ),
                 _LocationField(
                   address: controller.location == null ? null : _address.text,
                   onTap: _pickLocation,
@@ -233,6 +260,12 @@ class _PostJobViewState extends State<_PostJobView> {
                     hint: 'e.g. Bangsar, Kuala Lumpur',
                   ),
                 ],
+                const SizedBox(height: 8),
+                _DeadlineField(
+                  deadline: _deadline,
+                  onTap: _pickDeadline,
+                  onClear: _clearDeadline,
+                ),
                 const SizedBox(height: 8),
                 _OptionalToggle(
                   expanded: _showOptional,
@@ -300,6 +333,60 @@ class _LocationField extends StatelessWidget {
               const Icon(Icons.chevron_right),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Optional bidding-deadline picker, modelled on [_LocationField]'s tappable
+/// row: shows "Set a bidding deadline" or the chosen date, with a clear (×)
+/// affordance once one is set.
+class _DeadlineField extends StatelessWidget {
+  const _DeadlineField({
+    required this.deadline,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final DateTime? deadline;
+  final VoidCallback onTap;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: context.fairbid.borderSubtle),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.timer_outlined, color: context.fairbid.verified),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                deadline == null
+                    ? 'Set a bidding deadline'
+                    : 'Bidding closes ${DateFormat.yMMMd().format(deadline!)}',
+                style: theme.textTheme.bodyLarge,
+              ),
+            ),
+            if (deadline != null)
+              IconButton(
+                tooltip: 'Remove deadline',
+                icon: const Icon(Icons.close),
+                onPressed: onClear,
+              )
+            else
+              const Icon(Icons.chevron_right),
+          ],
         ),
       ),
     );
@@ -441,6 +528,48 @@ class _OptionalDetails extends StatelessWidget {
   }
 }
 
+/// Nudges the requestor to attach a photo so the Gemini assists (description
+/// and price) can analyse it — the assists pass the first photo to the model,
+/// so a photo of the actual problem yields a sharper draft and estimate. Once
+/// a photo is attached it flips to a confirmation.
+class _PhotoAssistHint extends StatelessWidget {
+  const _PhotoAssistHint({required this.hasPhoto, required this.onAddPhoto});
+  final bool hasPhoto;
+  final VoidCallback onAddPhoto;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (hasPhoto) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 12, bottom: 4),
+        child: Row(
+          children: [
+            Icon(Icons.auto_awesome,
+                size: 14, color: context.fairbid.verified),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'The AI reads your photo for a sharper draft and price.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: onAddPhoto,
+        icon: const Icon(Icons.add_photo_alternate_outlined, size: 16),
+        label: const Text('Add a photo for a more accurate estimate'),
+      ),
+    );
+  }
+}
+
 /// A small "✨ assist" text button that swaps its icon for a spinner while
 /// the suggestion call is in flight. Used by both Gemini assists.
 class _AssistButton extends StatelessWidget {
@@ -477,22 +606,62 @@ class _PhotoThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Stack(
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.network(url,
-              width: 80, height: 80, fit: BoxFit.cover),
+          child: Image.network(
+            url,
+            width: 80,
+            height: 80,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, loadingProgress) {
+              if (loadingProgress == null) return child;
+              return const SizedBox(
+                width: 80,
+                height: 80,
+                child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+              );
+            },
+            errorBuilder: (context, error, stackTrace) => Container(
+              width: 80,
+              height: 80,
+              color: context.fairbid.borderSubtle,
+              child: Icon(Icons.broken_image_outlined,
+                  color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
         ),
         Positioned(
           right: 0,
           top: 0,
-          child: GestureDetector(
-            onTap: onRemove,
-            child: Container(
-              decoration: const BoxDecoration(
-                  color: Colors.black54, shape: BoxShape.circle),
-              child: const Icon(Icons.close, size: 16, color: Colors.white),
+          child: Semantics(
+            button: true,
+            label: 'Remove photo',
+            child: InkWell(
+              onTap: onRemove,
+              customBorder: const CircleBorder(),
+              child: const SizedBox(
+                width: 48,
+                height: 48,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: EdgeInsets.all(4),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                          color: Colors.black54, shape: BoxShape.circle),
+                      child: Padding(
+                        padding: EdgeInsets.all(2),
+                        child:
+                            Icon(Icons.close, size: 16, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),

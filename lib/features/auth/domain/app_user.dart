@@ -22,6 +22,7 @@ class AppUser {
     this.baseAddress,
     this.bio,
     this.walletBalanceSen = 0,
+    this.escrowLockedSen = 0,
     this.ratingCount = 0,
     this.ratingSum = 0,
     this.jobsCompleted = 0,
@@ -32,6 +33,7 @@ class AppUser {
     this.payoutBankName,
     this.payoutAccountLast4,
     this.isPasswordAccount = true,
+    this.watchlist = const [],
   });
 
   final String uid;
@@ -46,6 +48,14 @@ class AppUser {
 
   /// Available wallet balance in sen (1/100 RM). Shown on the Earnings screen.
   final int walletBalanceSen;
+
+  /// Sen committed against accepted-but-not-yet-funded bids (server-owned;
+  /// see `acceptBid` and `fundMilestone`). Not free to spend or withdraw.
+  final int escrowLockedSen;
+
+  /// The wallet balance actually free to accept a new bid or withdraw:
+  /// [walletBalanceSen] minus what's already committed to accepted work.
+  int get availableBalanceSen => walletBalanceSen - escrowLockedSen;
 
   /// Aggregate rating data, denormalised on the profile so "Reviews (N)" and
   /// the average star score render without loading the reviews subcollection.
@@ -83,7 +93,7 @@ class AppUser {
   /// Reputation score 0–1000 (see the technical plan): a server-computed
   /// composite of reviews, track record, verification and profile
   /// completeness. Displayed only once [scoreVisible]; until then the UI
-  /// shows a "New Provider" state instead of a number.
+  /// shows a "New User" state instead of a number.
   final int trustScore;
 
   /// Completed jobs (as provider or requestor) and disputes lost, the raw
@@ -99,8 +109,8 @@ class AppUser {
   /// plus [PlatformConfig.minJobsForVisibleScore] completed jobs).
   bool get scoreVisible => trustBreakdown?.scoreVisible ?? false;
 
-  /// True while the score is still hidden — the "New Provider" state.
-  bool get isNewProvider => !scoreVisible;
+  /// True while the score is still hidden — the "New User" state.
+  bool get isNewUser => !scoreVisible;
 
   /// 'none' → not submitted for admin review,
   /// 'pending' → submitted and awaiting admin review,
@@ -121,4 +131,10 @@ class AppUser {
         UserRole.requestor => !onboardingComplete,
         UserRole.admin => false,
       };
+
+  /// Job ids the user has bookmarked (the "Saved Jobs" watchlist).
+  final List<String> watchlist;
+
+  /// Whether [jobId] is on the user's watchlist.
+  bool isSaved(String jobId) => watchlist.contains(jobId);
 }

@@ -30,7 +30,7 @@ class ReviewCard extends StatelessWidget {
                 review.reviewerName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelLarge?.copyWith(fontSize: 14),
+                style: theme.textTheme.labelLarge,
               ),
             ),
             const SizedBox(width: 8),
@@ -39,13 +39,19 @@ class ReviewCard extends StatelessWidget {
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             if (onFlag != null && !review.flagged) ...[
               const SizedBox(width: 4),
-              InkWell(
-                onTap: onFlag,
-                borderRadius: BorderRadius.circular(4),
-                child: Padding(
-                  padding: const EdgeInsets.all(2),
-                  child: Icon(Icons.flag_outlined,
-                      size: 16, color: theme.colorScheme.onSurfaceVariant),
+              Semantics(
+                button: true,
+                label: 'Report review',
+                child: InkWell(
+                  onTap: onFlag,
+                  borderRadius: BorderRadius.circular(24),
+                  child: Container(
+                    constraints:
+                        const BoxConstraints(minWidth: 48, minHeight: 48),
+                    alignment: Alignment.center,
+                    child: Icon(Icons.flag_outlined,
+                        size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  ),
                 ),
               ),
             ] else if (review.flagged) ...[

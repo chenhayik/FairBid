@@ -73,6 +73,11 @@ class AuthController extends ChangeNotifier {
     return _run(() => _repository.signInWithGoogle(roleIfNew: roleIfNew));
   }
 
+  /// Sends a password-reset email to [email].
+  Future<bool> sendPasswordReset(String email) {
+    return _run(() => _repository.sendPasswordReset(email));
+  }
+
   Future<void> signOut() => _run(() async {
         final uid = _user?.uid;
         final hook = onBeforeSignOut;
@@ -123,6 +128,20 @@ class AuthController extends ChangeNotifier {
       phone: phone,
       location: location,
       bio: bio,
+    );
+    await refreshUser();
+  }
+
+  /// Toggles whether [jobId] is on the signed-in user's watchlist (the
+  /// bookmark on a job card), then refreshes so the change reflects
+  /// immediately. No-ops when signed out.
+  Future<void> toggleSaved(String jobId) async {
+    final user = _user;
+    if (user == null) return;
+    await _repository.setJobSaved(
+      uid: user.uid,
+      jobId: jobId,
+      saved: !user.isSaved(jobId),
     );
     await refreshUser();
   }

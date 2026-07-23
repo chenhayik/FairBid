@@ -18,15 +18,9 @@ import 'propose_milestones_sheet.dart';
 /// (server-side, via the `releaseMilestone` Cloud Function), which is what
 /// unlocks reviews.
 class MilestoneSection extends StatefulWidget {
-  const MilestoneSection(
-      {super.key, required this.job, required this.onChanged});
+  const MilestoneSection({super.key, required this.job});
 
   final Job job;
-
-  /// Called after an action that may have changed the job document itself
-  /// (releasing the last milestone completes the job), so the parent screen
-  /// re-fetches it.
-  final VoidCallback onChanged;
 
   @override
   State<MilestoneSection> createState() => _MilestoneSectionState();
@@ -119,10 +113,10 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       actionLabel: 'Release',
     );
     if (confirmed != true || !mounted) return;
-    // A release may complete the job (last milestone), so reload it after.
-    await _run(milestone,
-        () => repo.releaseMilestone(milestone.jobId, milestone.id),
-        reloadJob: true);
+    // A release may complete the job (last milestone) — the job stream on
+    // the detail screen picks that up on its own.
+    await _run(
+        milestone, () => repo.releaseMilestone(milestone.jobId, milestone.id));
   }
 
   Future<void> _dispute(Milestone milestone) async {
@@ -243,13 +237,12 @@ class _MilestoneSectionState extends State<MilestoneSection> {
   /// Runs a milestone [action] while its card shows a spinner, surfacing the
   /// Cloud Function's user-readable message on failure.
   Future<void> _run(Milestone milestone, Future<void> Function() action,
-      {bool refreshBalance = false, bool reloadJob = false}) async {
+      {bool refreshBalance = false}) async {
     setState(() => _busyId = milestone.id);
     try {
       await action();
       if (!mounted) return;
       if (refreshBalance) await context.read<AuthController>().refreshUser();
-      if (reloadJob) widget.onChanged();
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;
       var message = e.message ?? 'Something went wrong. Please try again.';
@@ -292,6 +285,15 @@ class _MilestoneSectionState extends State<MilestoneSection> {
             child: Padding(
               padding: EdgeInsets.all(16),
               child: CircularProgressIndicator(),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return const AppCard(
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load milestones",
+              message: 'Please check your connection and try again.',
             ),
           );
         }

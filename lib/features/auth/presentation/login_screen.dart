@@ -48,6 +48,23 @@ class _LoginScreenState extends State<LoginScreen> {
         );
   }
 
+  Future<void> _forgotPassword() async {
+    final email = _email.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter your email first')));
+      return;
+    }
+    final auth = context.read<AuthController>();
+    final ok = await auth.sendPasswordReset(email);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok
+            ? 'Password reset email sent to $email'
+            : auth.errorMessage ??
+                'Could not send the reset email. Please try again.')));
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthController>();
@@ -96,11 +113,14 @@ class _LoginScreenState extends State<LoginScreen> {
                           textInputAction: TextInputAction.done,
                           validator: Validators.password,
                           onSubmitted: (_) => _submit(),
-                          labelTrailing: Text(
-                            'Forgot?',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                                color: context.fairbid.verified,
-                                fontWeight: FontWeight.w600),
+                          labelTrailing: GestureDetector(
+                            onTap: auth.isBusy ? null : _forgotPassword,
+                            child: Text(
+                              'Forgot?',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: context.fairbid.verified,
+                                  fontWeight: FontWeight.w600),
+                            ),
                           ),
                         ),
                       ],

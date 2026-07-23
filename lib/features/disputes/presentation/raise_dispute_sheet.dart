@@ -216,8 +216,29 @@ class _EvidenceRow extends StatelessWidget {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: Image.network(url,
-                        width: 72, height: 72, fit: BoxFit.cover),
+                    child: Image.network(
+                      url,
+                      width: 72,
+                      height: 72,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return const SizedBox(
+                          width: 72,
+                          height: 72,
+                          child: Center(
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2)),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        width: 72,
+                        height: 72,
+                        color: context.fairbid.borderSubtle,
+                        child: Icon(Icons.broken_image_outlined,
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                    ),
                   ),
                   Positioned(
                     top: 0,

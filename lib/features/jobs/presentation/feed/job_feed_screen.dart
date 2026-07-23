@@ -44,20 +44,21 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         .setBaseLocation(picked.lat, picked.lng, picked.address);
   }
 
-  /// Applies the search, budget and radius filters and sorts by distance
-  /// (nearest first) when a base location is known.
+  /// Applies the category, search, budget and radius filters and sorts by
+  /// distance (nearest first) when a base location is known.
   List<(Job, String?)> _applyFilters(List<Job> jobs, LatLng? base) {
     final query = _search.text.trim().toLowerCase();
     final results = <(Job, double?)>[];
     for (final job in jobs) {
+      if (_category != null && job.category != _category) continue;
       if (query.isNotEmpty &&
           !job.title.toLowerCase().contains(query) &&
           !job.description.toLowerCase().contains(query)) {
         continue;
       }
-      if (_maxBudgetSen != null) {
-        final low = job.budget?.minSen ?? job.budget?.maxSen;
-        if (low != null && low > _maxBudgetSen!) continue;
+      final high = job.budget?.maxSen ?? job.budget?.minSen;
+      if (_maxBudgetSen != null && high != null && high > _maxBudgetSen!) {
+        continue;
       }
       double? km;
       if (base != null) {
@@ -85,7 +86,16 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         : null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Find Jobs')),
+      appBar: AppBar(
+        title: const Text('Find Jobs'),
+        actions: [
+          IconButton(
+            tooltip: 'Saved Jobs',
+            icon: const Icon(Icons.bookmark_border),
+            onPressed: () => context.push('/jobs/saved'),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -124,7 +134,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
               ),
             Expanded(
               child: StreamBuilder<List<Job>>(
-                stream: repo.watchOpenJobs(category: _category),
+                stream: repo.watchOpenJobs(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
@@ -154,6 +164,12 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                         job: job,
                         distanceLabel: distance,
                         onTap: () => context.push('/jobs/${job.id}'),
+                        saved: user?.isSaved(job.id) ?? false,
+                        onToggleSave: user == null
+                            ? null
+                            : () => context
+                                .read<AuthController>()
+                                .toggleSaved(job.id),
                       );
                     },
                   );
@@ -234,6 +250,14 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
+/// Wraps a menu value so a `null` selection (e.g. the "All categories" reset,
+/// whose value is `null`) isn't swallowed by [PopupMenuButton]'s `onCanceled`
+/// path — a non-null wrapper is always distinguishable from a dismissed menu.
+class _MenuOption<T> {
+  const _MenuOption(this.value);
+  final T value;
+}
+
 class _FilterChip<T> extends StatelessWidget {
   const _FilterChip({
     required this.label,
@@ -250,11 +274,15 @@ class _FilterChip<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = value != null;
-    return PopupMenuButton<T>(
-      onSelected: onSelected,
+
+    return PopupMenuButton<_MenuOption<T>>(
+      onSelected: (option) => onSelected(option.value),
       itemBuilder: (context) => [
         for (final entry in items.entries)
-          PopupMenuItem(value: entry.value, child: Text(entry.key)),
+          PopupMenuItem(
+            value: _MenuOption(entry.value),
+            child: Text(entry.key),
+          ),
       ],
       child: Chip(
         label: Text(label),

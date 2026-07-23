@@ -33,7 +33,7 @@ class PendingReviewScreen extends StatelessWidget {
                 children: [
                   InfoBanner(
                     icon: Icons.pending_actions_outlined,
-                    color: const Color(0xFFB07B00),
+                    color: context.fairbid.warningText,
                     background:
                         context.fairbid.warning.withValues(alpha: 0.12),
                     title: 'Admin Verification in Progress',

@@ -84,8 +84,16 @@ class _ProfileStepState extends State<ProfileStep> {
                 maxLines: 4,
                 maxLength: 250,
               ),
-              Text('Skills', style: theme.textTheme.labelLarge),
-              const SizedBox(height: 8),
+              AppTextField(
+                controller: _skillInput,
+                label: 'Skills',
+                hint: 'Add a skill and press Enter...',
+                onSubmitted: (value) {
+                  onboarding.addSkill(value);
+                  _skillInput.clear();
+                },
+              ),
+              if (data.skills.isNotEmpty) const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -98,17 +106,6 @@ class _ProfileStepState extends State<ProfileStep> {
                       side: BorderSide.none,
                     ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _skillInput,
-                decoration: const InputDecoration(
-                  hintText: 'Add a skill and press Enter...',
-                ),
-                onSubmitted: (value) {
-                  onboarding.addSkill(value);
-                  _skillInput.clear();
-                },
               ),
             ],
           ),

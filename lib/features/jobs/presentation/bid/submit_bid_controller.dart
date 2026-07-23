@@ -24,6 +24,10 @@ class SubmitBidController extends ChangeNotifier {
     try {
       await _bids.submitBid(bid);
       return true;
+    } on BidRejectedException {
+      _errorMessage = 'Your profile changed since you opened this form. '
+          'Close it, reopen the bid, and submit again.';
+      return false;
     } catch (_) {
       _errorMessage = 'Could not submit the bid. Please try again.';
       return false;

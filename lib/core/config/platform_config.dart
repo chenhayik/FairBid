@@ -13,6 +13,10 @@ class PlatformConfig {
   /// `topUpWallet` Cloud Function (which keeps its own copy in sync).
   static const int maxTopUpSen = 1000000;
 
+  /// Cumulative wallet balance cap (RM 50,000), enforced by the
+  /// `topUpWallet` Cloud Function (which keeps its own copy in sync).
+  static const int maxWalletBalanceSen = 5000000;
+
   /// Most milestones one plan may hold, enforced by the `proposeMilestonePlan`
   /// Cloud Function (which keeps its own copy in sync).
   static const int maxMilestones = 20;
@@ -59,7 +63,7 @@ class PlatformConfig {
   /// Verification sub-score while an application awaits admin review.
   static const int verificationPendingScore = 40;
 
-  /// The score stays hidden ("New Provider") until the user is admin-approved
+  /// The score stays hidden ("New User") until the user is admin-approved
   /// AND has this many completed jobs (Upwork/Fiverr-style earned visibility).
   static const int minJobsForVisibleScore = 3;
 

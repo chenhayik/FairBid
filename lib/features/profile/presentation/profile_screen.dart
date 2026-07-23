@@ -152,6 +152,7 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
               decoration: InputDecoration(
                 labelText: 'Confirm your password',
                 suffixIcon: IconButton(
+                  tooltip: _obscure ? 'Show password' : 'Hide password',
                   icon: Icon(
                       _obscure ? Icons.visibility_off : Icons.visibility),
                   onPressed: () => setState(() => _obscure = !_obscure),
@@ -179,22 +180,38 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
   }
 }
 
-class _Header extends StatelessWidget {
+class _Header extends StatefulWidget {
   const _Header({required this.user});
   final AppUser user;
+
+  @override
+  State<_Header> createState() => _HeaderState();
+}
+
+class _HeaderState extends State<_Header> {
+  AppUser get user => widget.user;
+
+  /// Set once the avatar fails to load, so the fallback icon is shown instead
+  /// of a broken image.
+  bool _avatarFailed = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final photo = user.profilePhotoUrl;
+    final hasPhoto = photo != null && photo.isNotEmpty && !_avatarFailed;
     return Column(
       children: [
         CircleAvatar(
           radius: 36,
           backgroundColor: context.fairbid.subtleBlue,
-          backgroundImage:
-              photo != null && photo.isNotEmpty ? NetworkImage(photo) : null,
-          child: photo != null && photo.isNotEmpty
+          backgroundImage: hasPhoto ? NetworkImage(photo) : null,
+          onBackgroundImageError: hasPhoto
+              ? (_, _) {
+                  if (mounted) setState(() => _avatarFailed = true);
+                }
+              : null,
+          child: hasPhoto
               ? null
               : Icon(Icons.person_outline,
                   size: 36, color: context.fairbid.verified),
@@ -287,7 +304,7 @@ class _TrustScoreCard extends StatelessWidget {
                         ?.copyWith(color: context.fairbid.verified))
               else
                 PillBadge(
-                  label: 'New Provider',
+                  label: 'New User',
                   icon: Icons.auto_awesome,
                   color: context.fairbid.verified,
                 ),
@@ -492,13 +509,23 @@ class _BasicDetailsCard extends StatelessWidget {
 class _EditLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => context.push('/profile/edit'),
-      child: Text('Edit',
-          style: Theme.of(context)
-              .textTheme
-              .labelLarge
-              ?.copyWith(color: context.fairbid.verified)),
+    return Semantics(
+      button: true,
+      label: 'Edit profile',
+      child: InkWell(
+        onTap: () => context.push('/profile/edit'),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          child: Text('Edit',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelLarge
+                  ?.copyWith(color: context.fairbid.verified)),
+        ),
+      ),
     );
   }
 }
@@ -516,30 +543,19 @@ class _ReviewsCard extends StatelessWidget {
       child: StreamBuilder<List<Review>>(
         stream: reviews.watchReviews(user.uid),
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load reviews",
+              message: 'Please check your connection and try again.',
+            );
+          }
           final items = snapshot.data ?? const <Review>[];
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text('Reviews (${user.ratingCount})',
-                        style: theme.textTheme.titleLarge),
-                  ),
-                  if (items.isNotEmpty)
-                    GestureDetector(
-                      onTap: () =>
-                          ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('The full reviews list is coming soon.'),
-                        ),
-                      ),
-                      child: Text('View All',
-                          style: theme.textTheme.labelLarge
-                              ?.copyWith(color: context.fairbid.verified)),
-                    ),
-                ],
-              ),
+              Text('Reviews (${user.ratingCount})',
+                  style: theme.textTheme.titleLarge),
               const SizedBox(height: 12),
               if (items.isEmpty)
                 const EmptyState(

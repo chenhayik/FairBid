@@ -13,6 +13,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
     required this.danger,
     required this.subtleBlue,
     required this.borderSubtle,
+    required this.warningText,
   });
 
   final Color verified; // #0052FF brand / verified
@@ -21,6 +22,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
   final Color danger; // #D32F2F
   final Color subtleBlue; // #F0F5FF stat-card / banner fill
   final Color borderSubtle; // #E2E8F0 hairline border
+  final Color warningText; // #B07B00 dark amber icon/accent on tinted fills
 
   @override
   FairBidColors copyWith({
@@ -30,6 +32,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
     Color? danger,
     Color? subtleBlue,
     Color? borderSubtle,
+    Color? warningText,
   }) {
     return FairBidColors(
       verified: verified ?? this.verified,
@@ -38,6 +41,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
       danger: danger ?? this.danger,
       subtleBlue: subtleBlue ?? this.subtleBlue,
       borderSubtle: borderSubtle ?? this.borderSubtle,
+      warningText: warningText ?? this.warningText,
     );
   }
 
@@ -51,6 +55,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
       danger: Color.lerp(danger, other.danger, t)!,
       subtleBlue: Color.lerp(subtleBlue, other.subtleBlue, t)!,
       borderSubtle: Color.lerp(borderSubtle, other.borderSubtle, t)!,
+      warningText: Color.lerp(warningText, other.warningText, t)!,
     );
   }
 
@@ -61,6 +66,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
     danger: Color(0xFFD32F2F),
     subtleBlue: Color(0xFFF0F5FF),
     borderSubtle: Color(0xFFE2E8F0),
+    warningText: Color(0xFFB07B00),
   );
 }
 

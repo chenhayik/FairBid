@@ -177,7 +177,7 @@ class _FlaggedReviewCard extends StatelessWidget {
           const SizedBox(height: 12),
           InfoBanner(
             icon: Icons.flag_outlined,
-            color: const Color(0xFFB07B00),
+            color: context.fairbid.warningText,
             background: context.fairbid.warning.withValues(alpha: 0.12),
             title: 'Reported',
             body: review.flagReason?.trim().isNotEmpty == true

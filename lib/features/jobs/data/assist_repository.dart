@@ -8,16 +8,20 @@ import 'package:cloud_functions/cloud_functions.dart';
 /// can use a fake.
 abstract interface class AssistRepository {
   /// Expands the requestor's rough note into a structured job description,
-  /// or null when no suggestion could be made.
+  /// or null when no suggestion could be made. [photoUrl], when given, lets
+  /// the model factor in a photo of the job.
   Future<String?> suggestDescription({
     required String category,
     required String roughText,
+    String? photoUrl,
   });
 
   /// An indicative fair-price range (in sen) for the described job, or null.
+  /// [photoUrl], when given, lets the model factor in a photo of the job.
   Future<({int minSen, int maxSen})?> suggestPriceRange({
     required String category,
     required String description,
+    String? photoUrl,
   });
 }
 
@@ -32,6 +36,7 @@ class FirebaseAssistRepository implements AssistRepository {
     required String kind,
     required String category,
     required String roughText,
+    String? photoUrl,
   }) async {
     // Advisory only: swallow every failure into "no suggestion" — a broken
     // assist must never surface as a form error.
@@ -42,6 +47,7 @@ class FirebaseAssistRepository implements AssistRepository {
         'kind': kind,
         'category': category,
         'roughText': roughText,
+        'photoUrl': ?photoUrl,
       });
       final data = result.data;
       return data == null ? null : Map<String, dynamic>.from(data);
@@ -54,9 +60,13 @@ class FirebaseAssistRepository implements AssistRepository {
   Future<String?> suggestDescription({
     required String category,
     required String roughText,
+    String? photoUrl,
   }) async {
     final data = await _call(
-        kind: 'description', category: category, roughText: roughText);
+        kind: 'description',
+        category: category,
+        roughText: roughText,
+        photoUrl: photoUrl);
     final description = data?['description'] as String?;
     return description == null || description.isEmpty ? null : description;
   }
@@ -65,9 +75,13 @@ class FirebaseAssistRepository implements AssistRepository {
   Future<({int minSen, int maxSen})?> suggestPriceRange({
     required String category,
     required String description,
+    String? photoUrl,
   }) async {
-    final data =
-        await _call(kind: 'price', category: category, roughText: description);
+    final data = await _call(
+        kind: 'price',
+        category: category,
+        roughText: description,
+        photoUrl: photoUrl);
     final minSen = (data?['minSen'] as num?)?.toInt();
     final maxSen = (data?['maxSen'] as num?)?.toInt();
     if (minSen == null || maxSen == null) return null;

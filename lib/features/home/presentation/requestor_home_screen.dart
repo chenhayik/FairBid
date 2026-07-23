@@ -46,6 +46,18 @@ class RequestorHomeScreen extends StatelessWidget {
               StreamBuilder<List<Job>>(
                 stream: repo.watchMyJobs(user.uid),
                 builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return const AppCard(
+                      child: EmptyState(
+                        icon: Icons.error_outline,
+                        title: 'Couldn\'t load your jobs',
+                        message: 'Please check your connection and try again.',
+                      ),
+                    );
+                  }
                   final jobs = (snapshot.data ?? [])
                       .where((j) => j.status != JobStatus.completed)
                       .toList();

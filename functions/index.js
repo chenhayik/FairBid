@@ -63,6 +63,12 @@ exports.recomputeTrustOnUserWrite = functions.firestore
  * Producer: a new review bumps the reviewee's rating aggregates. The consumer
  * above folds them into the Trust Score. (Server-side so a client can't forge
  * ratings — rules deny client writes to these fields.)
+ *
+ * Idempotent against at-least-once trigger retries: a `countedInTrust` marker
+ * on the review doc itself (set in the same transaction as the increment)
+ * means a replayed event sees it already true and returns without
+ * double-counting. This is isolated from `moderateReview`'s subtract logic
+ * (guarded by its own `!review.hidden` check), which is untouched.
  */
 exports.recomputeTrustScore = functions.firestore
     .document("users/{revieweeId}/reviews/{reviewId}")
@@ -70,14 +76,21 @@ exports.recomputeTrustScore = functions.firestore
       const revieweeId = context.params.revieweeId;
       const rating = snapshot.data().rating;
       const userRef = admin.firestore().doc(`users/${revieweeId}`);
+      const reviewRef = snapshot.ref;
 
       await admin.firestore().runTransaction(async (tx) => {
-        const userSnap = await tx.get(userRef);
+        // All reads before any writes.
+        const [userSnap, reviewSnap] = await Promise.all([
+          tx.get(userRef),
+          tx.get(reviewRef),
+        ]);
+        if (reviewSnap.data()?.countedInTrust === true) return; // retried event
         const data = userSnap.data() || {};
         tx.update(userRef, {
           ratingSum: (data.ratingSum || 0) + rating,
           ratingCount: (data.ratingCount || 0) + 1,
         });
+        tx.update(reviewRef, {countedInTrust: true});
       });
     });
 
@@ -85,6 +98,16 @@ exports.recomputeTrustScore = functions.firestore
  * Producer: when a job completes (last milestone released, or a dispute
  * ruling closed it out), both participants earn a completed job toward their
  * track record. One trigger covers every completion path.
+ *
+ * Idempotent against at-least-once trigger retries: a `completionCounted`
+ * marker is read and set on the job doc inside the same transaction as the
+ * increments, so a replayed event sees it already true and returns without
+ * double-counting. NOTE: that marker write is itself an update to this same
+ * job doc, which re-fires this trigger and `closeChatOnJobEnd` — both no-op
+ * on it: `before.status === "completed"` is already true here (the job's
+ * status doesn't change again), so this trigger's own guard above returns
+ * immediately on the replay; `closeChatOnJobEnd` no-ops because
+ * `ended === wasEnded` (both true).
  */
 exports.onJobCompleted = functions.firestore
     .document("jobs/{jobId}")
@@ -95,17 +118,21 @@ exports.onJobCompleted = functions.firestore
         return;
       }
       const db = admin.firestore();
-      const batch = db.batch();
-      const bump = {
-        jobsCompleted: admin.firestore.FieldValue.increment(1),
-      };
-      if (after.acceptedProviderId) {
-        batch.update(db.doc(`users/${after.acceptedProviderId}`), bump);
-      }
-      if (after.requestorId) {
-        batch.update(db.doc(`users/${after.requestorId}`), bump);
-      }
-      await batch.commit();
+      const jobRef = change.after.ref;
+      await db.runTransaction(async (tx) => {
+        const jobSnap = await tx.get(jobRef);
+        if (jobSnap.data()?.completionCounted === true) return; // retried event
+        const bump = {
+          jobsCompleted: admin.firestore.FieldValue.increment(1),
+        };
+        if (after.acceptedProviderId) {
+          tx.update(db.doc(`users/${after.acceptedProviderId}`), bump);
+        }
+        if (after.requestorId) {
+          tx.update(db.doc(`users/${after.requestorId}`), bump);
+        }
+        tx.update(jobRef, {completionCounted: true});
+      });
     });
 
 // ---------------------------------------------------------------------------
@@ -187,6 +214,102 @@ function appendLedger(txOrBatch, entry) {
 const isLocked = (status) =>
   status === "funded" || status === "submitted" ||
   status === "disputed" || isTerminal(status);
+
+/**
+ * Requestor accepts a provider's bid: the winning bid becomes `accepted`,
+ * every other still-pending bid on the job is `rejected`, and the job moves
+ * to `in_progress` with the winner's fields set. No money moves yet — that
+ * happens at `fundMilestone` — but the accepted amount becomes a commitment
+ * against the requestor's wallet, tracked as `escrowLockedSen`, so a
+ * requestor can't accept more work than their balance can eventually fund.
+ * Server-side (this used to be a client Firestore transaction) because both
+ * the balance gate and the amount trusted for it need to be tamper-proof;
+ * `onBidAccepted`, a Firestore trigger on the bid write, still notifies the
+ * winner.
+ */
+exports.acceptBid = functions.https.onCall(async (data, context) => {
+  const uid = callerUid(context);
+  const jobId = checkId(data.jobId, "jobId");
+  const providerId = checkId(data.providerId, "providerId");
+  const db = admin.firestore();
+  const jobRef = db.doc(`jobs/${jobId}`);
+  const bidsRef = jobRef.collection("bids");
+  const winnerRef = bidsRef.doc(providerId);
+  const walletRef = db.doc(`users/${uid}`);
+
+  // Transactions can't run queries, so the candidate pending-bid ids are
+  // fetched once outside it; each is re-read (and re-validated) by reference
+  // inside the transaction, which is what makes the accept safe against a
+  // concurrent accept or withdraw.
+  const candidates = await bidsRef.where("status", "==", "pending").get();
+  const otherRefs = candidates.docs
+      .map((d) => d.ref)
+      .filter((ref) => ref.id !== providerId);
+
+  await db.runTransaction(async (tx) => {
+    // All reads before any writes.
+    const [jobSnap, winnerSnap, walletSnap, ...otherSnaps] =
+        await Promise.all([
+          tx.get(jobRef),
+          tx.get(winnerRef),
+          tx.get(walletRef),
+          ...otherRefs.map((ref) => tx.get(ref)),
+        ]);
+    const job = jobSnap.data();
+    if (job?.requestorId !== uid) {
+      throw new functions.https.HttpsError(
+          "permission-denied", "Only the job's requestor can accept a bid.");
+    }
+    if (job.status !== "open") {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "This job is no longer open.",
+          {reason: "race"});
+    }
+    const winner = winnerSnap.data();
+    if (winner?.status !== "pending") {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "This bid is no longer pending.",
+          {reason: "race"});
+    }
+    // Trust only the server-stored bid amount, never client input — but the
+    // rules' own amountSen validation could in principle be bypassed by a
+    // stale/legacy doc, so re-validate it here too (defense in depth) before
+    // it drives the wallet debit below.
+    const amount = checkAmount(winner.amountSen);
+    const wallet = walletSnap.data() || {};
+    const available =
+        (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
+    if (available < amount) {
+      throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Insufficient available balance to accept this bid.", {
+            reason: "insufficient_balance",
+            shortfallSen: amount - available,
+            availableSen: available,
+            requiredSen: amount,
+          });
+    }
+
+    // Writes.
+    tx.update(winnerRef, {status: "accepted"});
+    for (let i = 0; i < otherRefs.length; i++) {
+      // Skip anything withdrawn/resolved since the pre-fetch — nothing to
+      // reject.
+      if (otherSnaps[i].data()?.status === "pending") {
+        tx.update(otherRefs[i], {status: "rejected"});
+      }
+    }
+    tx.update(walletRef, {
+      escrowLockedSen: (wallet.escrowLockedSen || 0) + amount,
+    });
+    tx.update(jobRef, {
+      status: "in_progress",
+      acceptedProviderId: providerId,
+      acceptedProviderName: winner.providerName || null,
+      acceptedBidAmountSen: amount,
+    });
+  });
+});
 
 /**
  * Provider proposes (or amends) the milestone plan for their in-progress job.
@@ -423,13 +546,20 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError(
           "failed-precondition", "This milestone is not awaiting funding.");
     }
-    const balance = walletSnap.data()?.walletBalanceSen || 0;
+    const wallet = walletSnap.data() || {};
+    const balance = wallet.walletBalanceSen || 0;
     if (balance < milestone.amountSen) {
       throw new functions.https.HttpsError(
           "failed-precondition", "Insufficient wallet balance.");
     }
 
-    tx.update(walletRef, {walletBalanceSen: balance - milestone.amountSen});
+    tx.update(walletRef, {
+      walletBalanceSen: balance - milestone.amountSen,
+      // This portion of the accepted-bid commitment is now actually
+      // escrowed, not just locked against future funding.
+      escrowLockedSen:
+          Math.max(0, (wallet.escrowLockedSen || 0) - milestone.amountSen),
+    });
     tx.update(milestoneRef, {status: "funded"});
     appendLedger(tx, {
       fromUid: uid,
@@ -522,11 +652,19 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
 // (lib/core/config/platform_config.dart), the source of truth.
 const MAX_TOPUP_SEN = 1000000; // RM 10,000
 
+// Cumulative cap on a single wallet's balance — otherwise a client could loop
+// topUpWallet calls (each under the per-call cap) to mint unlimited balance.
+// Must stay in sync with PlatformConfig.maxWalletBalanceSen
+// (lib/core/config/platform_config.dart), the source of truth.
+const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
+
 /**
  * Demo-only top-up that stands in for a payment gateway: credits the caller's
- * own wallet, capped per call so a tampered client can't mint absurd
- * balances. A batch (not a transaction) is enough — increment is atomic and
- * there is no balance precondition.
+ * own wallet, capped per call (MAX_TOPUP_SEN) and capped in total
+ * (MAX_WALLET_BALANCE_SEN) so a tampered — or merely looping — client can't
+ * mint absurd balances. A transaction (not a batch) is needed now: the total
+ * cap is a balance precondition, so the current balance must be read and
+ * checked atomically with the increment.
  */
 exports.topUpWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -536,18 +674,26 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
         "invalid-argument", "Top-ups are capped at RM 10,000.");
   }
   const db = admin.firestore();
-  const batch = db.batch();
-  batch.update(db.doc(`users/${uid}`), {
-    walletBalanceSen: admin.firestore.FieldValue.increment(amountSen),
+  const walletRef = db.doc(`users/${uid}`);
+
+  await db.runTransaction(async (tx) => {
+    const walletSnap = await tx.get(walletRef);
+    const balance = walletSnap.data()?.walletBalanceSen || 0;
+    if (balance + amountSen > MAX_WALLET_BALANCE_SEN) {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "Wallet balance is capped at RM 50,000.");
+    }
+    tx.update(walletRef, {
+      walletBalanceSen: admin.firestore.FieldValue.increment(amountSen),
+    });
+    appendLedger(tx, {
+      fromUid: null,
+      toUid: uid,
+      amountSen,
+      type: "topup",
+      participantIds: [uid],
+    });
   });
-  appendLedger(batch, {
-    fromUid: null,
-    toUid: uid,
-    amountSen,
-    type: "topup",
-    participantIds: [uid],
-  });
-  await batch.commit();
 });
 
 /** Withdraws from the caller's available balance; rejects overdrafts. */
@@ -559,8 +705,12 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
 
   await db.runTransaction(async (tx) => {
     const walletSnap = await tx.get(walletRef);
-    const balance = walletSnap.data()?.walletBalanceSen || 0;
-    if (balance < amountSen) {
+    const wallet = walletSnap.data() || {};
+    const balance = wallet.walletBalanceSen || 0;
+    // Gate on the AVAILABLE balance — money locked against an accepted bid
+    // isn't free to withdraw, even though it hasn't left walletBalanceSen yet.
+    const available = balance - (wallet.escrowLockedSen || 0);
+    if (available < amountSen) {
       throw new functions.https.HttpsError(
           "failed-precondition", "Insufficient wallet balance.");
     }
@@ -582,6 +732,229 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// toyyibPay (sandbox) wallet top-up — the real payment-gateway path,
+// alongside the demo `topUpWallet` above (left untouched). A requestor
+// creates a bill here; toyyibPay's hosted page collects payment in a WebView;
+// and the money only ever moves in `creditToyyibpayTopup`, which never trusts
+// a caller-supplied status — it re-verifies against toyyibPay's own
+// `getBillTransactions` API and credits the amount stored in OUR OWN
+// `topups/{billCode}` record, never the gateway's. Both `toyyibpayCallback`
+// (the webhook) and `reconcileToyyibpayTopup` (a client-driven safety net for
+// a dropped callback) share that one helper so the two paths can't diverge.
+// ---------------------------------------------------------------------------
+
+const {defineSecret} = require("firebase-functions/params");
+const toyyibpaySecret = defineSecret("TOYYIBPAY_SECRET_KEY");
+const TOYYIBPAY_BASE = "https://dev.toyyibpay.com";
+const TOYYIBPAY_CATEGORY = "0zghdj8k";
+const TOYYIBPAY_RETURN_URL = "https://fairbid-c9340.web.app/payment-return";
+const TOYYIBPAY_CALLBACK_URL =
+    "https://us-central1-fairbid-c9340.cloudfunctions.net/toyyibpayCallback";
+
+/**
+ * Requestor starts a real top-up: creates a toyyibPay sandbox bill for
+ * `data.amountSen` and returns its hosted payment page for the client to open
+ * in a WebView. Capped exactly like `topUpWallet` (per-call and cumulative),
+ * so an over-cap top-up can't even be initiated — but no money moves here;
+ * that only happens once the bill is independently confirmed paid.
+ */
+exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
+    .https.onCall(async (data, context) => {
+      const uid = callerUid(context);
+      const amountSen = checkAmount(data.amountSen);
+      if (amountSen > MAX_TOPUP_SEN) {
+        throw new functions.https.HttpsError(
+            "invalid-argument", "Top-ups are capped at RM 10,000.");
+      }
+      const db = admin.firestore();
+      const userSnap = await db.doc(`users/${uid}`).get();
+      const user = userSnap.data() || {};
+      if ((user.walletBalanceSen || 0) + amountSen > MAX_WALLET_BALANCE_SEN) {
+        throw new functions.https.HttpsError(
+            "failed-precondition", "Wallet balance is capped at RM 50,000.");
+      }
+
+      // billAmount is cents == sen, so amountSen is passed through unchanged.
+      const form = new URLSearchParams({
+        userSecretKey: toyyibpaySecret.value(),
+        categoryCode: TOYYIBPAY_CATEGORY,
+        billName: "FairBid_TopUp",
+        billDescription: "Wallet_topup",
+        billPriceSetting: "1",
+        billPayorInfo: "1",
+        billAmount: String(amountSen),
+        billReturnUrl: TOYYIBPAY_RETURN_URL,
+        billCallbackUrl: TOYYIBPAY_CALLBACK_URL,
+        billExternalReferenceNo: uid,
+        billTo: user.displayName || "FairBid user",
+        billEmail: user.email || "user@fairbid.app",
+        // toyyibPay rejects an empty billPhone; fall back to a placeholder
+        // when the profile has no phone (it's only used on the receipt).
+        billPhone: user.phone || "0123456789",
+        billPaymentChannel: "2",
+        billExpiryDays: "1",
+      });
+      const res = await fetch(`${TOYYIBPAY_BASE}/index.php/api/createBill`, {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: form,
+      });
+      const parsed = await res.json().catch(() => null);
+      const billCode = Array.isArray(parsed) ? parsed[0]?.BillCode : null;
+      if (!billCode) {
+        // Never logs the secret — `parsed` is toyyibPay's own reply.
+        functions.logger.error("createToyyibpayBill: no BillCode", {parsed});
+        throw new functions.https.HttpsError(
+            "internal", "Could not start the payment. Please try again.");
+      }
+
+      await db.doc(`topups/${billCode}`).set({
+        uid,
+        amountSen,
+        status: "pending",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return {billCode, paymentUrl: `${TOYYIBPAY_BASE}/${billCode}`};
+    });
+
+/**
+ * The authoritative verify-and-credit for one bill — the actual money path,
+ * shared by `toyyibpayCallback` and `reconcileToyyibpayTopup` so they can't
+ * diverge. Always re-fetches the bill's transactions from toyyibPay itself
+ * (never trusts a caller-supplied status), matches the paid amount against
+ * our own stored `topups/{billCode}` record (crediting THAT amount, never the
+ * gateway's), and credits the wallet at most once via a transactional
+ * re-read. Returns `{credited, reason}`; `reason` is one of `"not_paid"`,
+ * `"unknown_bill"`, `"amount_mismatch"`, `"already_credited"` or `"credited"`.
+ */
+async function creditToyyibpayTopup(billCode) {
+  const db = admin.firestore();
+  const form = new URLSearchParams({
+    userSecretKey: toyyibpaySecret.value(),
+    billCode,
+  });
+  const res = await fetch(
+      `${TOYYIBPAY_BASE}/index.php/api/getBillTransactions`, {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: form,
+      });
+  const transactions = await res.json().catch(() => null);
+  const paid = Array.isArray(transactions) ?
+      transactions.find((t) => t.billpaymentStatus === "1") : null;
+  if (!paid) return {credited: false, reason: "not_paid"};
+
+  const topupRef = db.doc(`topups/${billCode}`);
+  const topupSnap = await topupRef.get();
+  if (!topupSnap.exists) return {credited: false, reason: "unknown_bill"};
+
+  // getBillTransactions reports the ringgit amount as a decimal string
+  // ("10.00") — convert to sen before comparing to our own stored amount.
+  const paidSen = Math.round(parseFloat(paid.billpaymentAmount) * 100);
+  if (paidSen !== topupSnap.data().amountSen) {
+    functions.logger.error("toyyibpay amount mismatch", {
+      billCode, expected: topupSnap.data().amountSen, got: paidSen,
+    });
+    return {credited: false, reason: "amount_mismatch"};
+  }
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(topupRef);
+    const rec = snap.data();
+    if (!rec) return {credited: false, reason: "unknown_bill"};
+    if (rec.status === "credited") {
+      return {credited: true, reason: "already_credited"}; // idempotent no-op
+    }
+
+    const walletRef = db.doc(`users/${rec.uid}`);
+    const walletSnap = await tx.get(walletRef);
+    const wallet = walletSnap.data() || {};
+    const newBalance = (wallet.walletBalanceSen || 0) + rec.amountSen;
+    if (newBalance > MAX_WALLET_BALANCE_SEN) {
+      // Genuinely-paid money is credited regardless — the cap is only ever
+      // pre-checked at bill creation, never a reason to refuse real funds.
+      functions.logger.warn("toyyibpay credit exceeds wallet cap",
+          {billCode, uid: rec.uid, newBalance});
+    }
+    tx.update(walletRef, {
+      walletBalanceSen: admin.firestore.FieldValue.increment(rec.amountSen),
+    });
+    tx.update(topupRef, {
+      status: "credited",
+      creditedAt: admin.firestore.FieldValue.serverTimestamp(),
+      invoiceNo: paid.billpaymentInvoiceNo,
+    });
+    // Mirrors topUpWallet's ledger write exactly, plus a `ref` back to the
+    // bill for support/audit lookups.
+    appendLedger(tx, {
+      fromUid: null,
+      toUid: rec.uid,
+      amountSen: rec.amountSen,
+      type: "topup",
+      ref: billCode,
+      participantIds: [rec.uid],
+    });
+    return {credited: true, reason: "credited"};
+  });
+}
+
+/**
+ * toyyibPay's server-to-server webhook — the money path. Answers 200 for
+ * every business-logic outcome (paid-but-forged-billcode, amount mismatch,
+ * not yet paid, or a genuine credit) so toyyibPay stops retrying once we've
+ * made a decision; only an actual failure to reach toyyibPay's API answers
+ * 500, so toyyibPay retries and `reconcileToyyibpayTopup` remains the
+ * client-driven backstop for the same gap.
+ */
+exports.toyyibpayCallback = functions.runWith({secrets: [toyyibpaySecret]})
+    .https.onRequest(async (req, res) => {
+      if (req.method !== "POST") {
+        res.status(405).send("Method Not Allowed");
+        return;
+      }
+      const billCode = req.body?.billcode;
+      if (!billCode) {
+        res.status(400).send("missing billcode");
+        return;
+      }
+      try {
+        const {reason} = await creditToyyibpayTopup(billCode);
+        const messages = {
+          not_paid: "not paid",
+          unknown_bill: "unknown bill",
+          amount_mismatch: "amount mismatch",
+        };
+        res.status(200).send(messages[reason] || "ok");
+      } catch (err) {
+        // Never logs the secret or the raw request body.
+        functions.logger.error(
+            "toyyibpayCallback failed", {billCode, message: err?.message});
+        res.status(500).send("error");
+      }
+    });
+
+/**
+ * Client-driven safety net for a callback toyyibPay never delivered: the
+ * client calls this once the WebView returns. The caller must own the bill;
+ * it then runs the exact same verify-and-credit helper as the webhook, so
+ * the two paths can never disagree on when money moves.
+ */
+exports.reconcileToyyibpayTopup =
+    functions.runWith({secrets: [toyyibpaySecret]})
+        .https.onCall(async (data, context) => {
+          const uid = callerUid(context);
+          const billCode = checkId(data.billCode, "billCode");
+          const topupSnap =
+              await admin.firestore().doc(`topups/${billCode}`).get();
+          if (topupSnap.data()?.uid !== uid) {
+            throw new functions.https.HttpsError(
+                "permission-denied", "This top-up does not belong to you.");
+          }
+          const {credited} = await creditToyyibpayTopup(billCode);
+          return {credited};
+        });
 
 /**
  * Admin ruling on a flagged review. Hiding removes it from public display
@@ -764,10 +1137,18 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     }
     const amountSen = dispute.amountSen;
 
-    tx.update(beneficiaryRef, {
+    const beneficiaryUpdate = {
       walletBalanceSen:
           (beneficiarySnap.data()?.walletBalanceSen || 0) + amountSen,
-    });
+    };
+    if (resolution === "refund") {
+      // The milestone reopens to `pending` below (re-fundable), so this
+      // amount is a live commitment against the requestor's wallet again —
+      // re-lock it.
+      beneficiaryUpdate.escrowLockedSen =
+          (beneficiarySnap.data()?.escrowLockedSen || 0) + amountSen;
+    }
+    tx.update(beneficiaryRef, beneficiaryUpdate);
     if (resolution === "release") {
       // Terminal: the provider is paid. Completing the job when this was the
       // last un-released milestone is the review-unlock gate.
@@ -900,13 +1281,38 @@ const ESCROW_HELD_MESSAGE =
     "resolve any dispute, before cancelling.";
 
 /**
- * Deletes every not-yet-funded milestone and marks the job cancelled with an
- * audit trail. Callers must already have verified authority and re-checked the
- * escrow guard inside [tx].
+ * The still-locked portion of [job]'s accepted bid: the total minus whatever
+ * has already been funded (which moved that slice from `escrowLockedSen`
+ * into actual escrow at `fundMilestone`) — i.e. every terminal (released)
+ * milestone. Cancellation is refused while any milestone is
+ * funded/submitted/disputed, so those statuses never occur here.
  */
-function finaliseCancellation(tx, jobRef, milestonesSnap, cancelledBy) {
+function remainingLockedSen(job, milestonesSnap) {
+  const funded = milestonesSnap.docs.reduce((sum, doc) => {
+    const m = doc.data();
+    return isTerminal(m.status) ? sum + (m.amountSen || 0) : sum;
+  }, 0);
+  return Math.max(0, (job.acceptedBidAmountSen || 0) - funded);
+}
+
+/**
+ * Deletes every not-yet-funded milestone, releases the requestor's remaining
+ * unfunded commitment on this job (locked at accept, decremented as each
+ * milestone was funded) back to their available balance, and marks the job
+ * cancelled with an audit trail. Callers must already have verified authority
+ * and re-checked the escrow guard inside [tx]; [remainingSen] is
+ * [remainingLockedSen] computed by the caller from the same reads.
+ */
+function finaliseCancellation(tx, jobRef, milestonesSnap, cancelledBy,
+    requestorWalletRef, requestorWalletSnap, remainingSen) {
   for (const doc of milestonesSnap.docs) {
     if (!isLocked(doc.data().status)) tx.delete(doc.ref);
+  }
+  if (remainingSen > 0) {
+    const locked = requestorWalletSnap.data()?.escrowLockedSen || 0;
+    tx.update(requestorWalletRef, {
+      escrowLockedSen: Math.max(0, locked - remainingSen),
+    });
   }
   tx.update(jobRef, {
     status: "cancelled",
@@ -1031,7 +1437,10 @@ exports.respondToJobCancellation =
         throw new functions.https.HttpsError(
             "failed-precondition", ESCROW_HELD_MESSAGE);
       }
-      finaliseCancellation(tx, jobRef, milestones, uid);
+      const requestorWalletRef = db.doc(`users/${job.requestorId}`);
+      const requestorWalletSnap = await tx.get(requestorWalletRef);
+      finaliseCancellation(tx, jobRef, milestones, uid, requestorWalletRef,
+          requestorWalletSnap, remainingLockedSen(job, milestones));
       notify(tx, requesterUid, {
         type: "cancellation",
         title: "Job cancelled",
@@ -1060,7 +1469,8 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
       tx.get(jobRef),
       tx.get(milestonesRef),
     ]);
-    if (jobSnap.data()?.status !== "in_progress") {
+    const job = jobSnap.data();
+    if (job?.status !== "in_progress") {
       throw new functions.https.HttpsError(
           "failed-precondition", "This job is not in progress.");
     }
@@ -1068,9 +1478,11 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError(
           "failed-precondition", ESCROW_HELD_MESSAGE);
     }
+    const requestorWalletRef = db.doc(`users/${job.requestorId}`);
+    const requestorWalletSnap = await tx.get(requestorWalletRef);
     tx.update(jobRef, {cancellationReason: reason || null});
-    finaliseCancellation(tx, jobRef, milestones, "admin");
-    const job = jobSnap.data();
+    finaliseCancellation(tx, jobRef, milestones, "admin", requestorWalletRef,
+        requestorWalletSnap, remainingLockedSen(job, milestones));
     for (const partyUid of [job.requestorId, job.acceptedProviderId]) {
       notify(tx, partyUid, {
         type: "cancellation",
@@ -1082,6 +1494,44 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bidding deadline enforcement.
+//
+// Firestore rules (jobBiddingOpen) already block a new/updated bid once a
+// job's deadline passes, but nothing flips the job's own status on its
+// own — an open job whose deadline lapsed with no bid accepted would
+// otherwise sit "open" forever. This periodic sweep closes those out, reusing
+// `cancelled` rather than adding a new terminal status: the existing
+// `logJobStatusChange` timeline trigger already logs a cancellation, and
+// `closeChatOnJobEnd` is a no-op here (an open job never has a conversation
+// yet).
+// ---------------------------------------------------------------------------
+
+/**
+ * Every 6 hours, cancels any still-open job whose bidding deadline has
+ * passed. Requires the Blaze plan and the Cloud Scheduler API, plus the
+ * `jobs` composite index on (status ASC, deadline ASC) — see
+ * firestore.indexes.json.
+ */
+exports.closeExpiredJobs = functions.pubsub
+    .schedule("every 6 hours")
+    .onRun(async () => {
+      const now = admin.firestore.Timestamp.now();
+      const snap = await admin.firestore().collection("jobs")
+          .where("status", "==", "open")
+          .where("deadline", "<=", now)
+          .get();
+      const batch = admin.firestore().batch();
+      snap.docs.forEach((doc) => batch.update(doc.ref, {
+        status: "cancelled",
+        cancelledBy: "system",
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancellationReason: "Bidding deadline passed — no bid was accepted.",
+      }));
+      if (!snap.empty) await batch.commit();
+      functions.logger.info(`closeExpiredJobs: closed ${snap.size} job(s)`);
+    });
 
 // Grace window during which a completed/cancelled job's chat stays writable
 // for loose ends, after which it becomes read-only (never deleted — the
@@ -1316,6 +1766,94 @@ exports.onReviewCreated = functions.firestore
     });
 
 // ---------------------------------------------------------------------------
+// Job activity timeline: a per-job, server-written event log shown on the job
+// detail. Events live at `jobs/{jobId}/events/{eventId}`, written only by the
+// triggers below (client writes are denied — see firestore.rules), so the
+// timeline can't be forged. Deterministic event ids make at-least-once
+// trigger retries idempotent (overwrite instead of duplicate), at the cost of
+// collapsing a rare repeat of the same transition (e.g. a re-fund after a
+// refund) — acceptable here.
+// ---------------------------------------------------------------------------
+
+/** Writes (or, on a retried trigger, overwrites) one timeline entry. */
+function logJobEvent(jobId, eventId, type, title) {
+  return admin.firestore()
+      .doc(`jobs/${jobId}/events/${eventId}`)
+      .set({type, title, at: admin.firestore.FieldValue.serverTimestamp()});
+}
+
+/** A job posting starts its timeline. */
+exports.logJobPosted = functions.firestore.document("jobs/{jobId}")
+    .onCreate((snap, ctx) =>
+      logJobEvent(ctx.params.jobId, "posted", "posted", "Job posted"));
+
+/**
+ * Logs the job-level transitions worth surfacing on the timeline. Guarded on
+ * an actual `status` change, so the many non-status writes on this doc —
+ * bidCount, completionCounted, cancellation request fields — are ignored.
+ */
+exports.logJobStatusChange = functions.firestore
+    .document("jobs/{jobId}")
+    .onUpdate((change, ctx) => {
+      const before = change.before.data();
+      const after = change.after.data();
+      if (before.status === after.status) return null;
+      const jobId = ctx.params.jobId;
+      if (before.status === "open" && after.status === "in_progress") {
+        return logJobEvent(jobId, "assigned", "assigned",
+            `Provider assigned — ${after.acceptedProviderName || "provider"} ` +
+            `(${rm(after.acceptedBidAmountSen || 0)})`);
+      }
+      if (after.status === "completed") {
+        return logJobEvent(jobId, "completed", "completed", "Job completed");
+      }
+      if (after.status === "cancelled") {
+        return logJobEvent(jobId, "cancelled", "cancelled",
+            `Job cancelled${after.cancellationReason ?
+                `: ${after.cancellationReason}` : ""}`);
+      }
+      return null;
+    });
+
+/**
+ * Logs the meaningful milestone-status transitions on the timeline — skips
+ * `proposed`/`pending` from the plan/approve flow (noise), and only logs a
+ * `pending` transition when it follows `disputed` (a dispute refund reopening
+ * the milestone for rework).
+ */
+exports.logMilestoneStatusChange = functions.firestore
+    .document("jobs/{jobId}/milestones/{milestoneId}")
+    .onWrite((change, ctx) => {
+      const before = change.before.exists ? change.before.data() : null;
+      const after = change.after.exists ? change.after.data() : null;
+      if (!after || before?.status === after.status) return null; // deletion
+      const jobId = ctx.params.jobId;
+      const milestoneId = ctx.params.milestoneId;
+      const d = after.description;
+      const amt = after.amountSen;
+      switch (after.status) {
+        case "funded":
+          return logJobEvent(jobId, `${milestoneId}_funded`, "funded",
+              `Funded "${d}" — ${rm(amt)}`);
+        case "submitted":
+          return logJobEvent(jobId, `${milestoneId}_submitted`, "submitted",
+              `Work delivered — "${d}"`);
+        case "released":
+          return logJobEvent(jobId, `${milestoneId}_released`, "released",
+              `Payment released — "${d}" (${rm(amt)})`);
+        case "disputed":
+          return logJobEvent(jobId, `${milestoneId}_disputed`, "disputed",
+              `Disputed — "${d}"`);
+        case "pending":
+          if (before?.status !== "disputed") return null;
+          return logJobEvent(jobId, `${milestoneId}_refunded`, "refunded",
+              `Refunded & reopened — "${d}"`);
+        default:
+          return null;
+      }
+    });
+
+// ---------------------------------------------------------------------------
 // Gemini posting assistant (plan §3.4.5).
 //
 // Proxied through this callable so the API key never ships in the APK — it
@@ -1325,44 +1863,77 @@ exports.onReviewCreated = functions.firestore
 // post-job form keeps working when the quota is hit or the model misbehaves.
 // ---------------------------------------------------------------------------
 
-const {defineSecret} = require("firebase-functions/params");
+// `defineSecret` is already required above, for `toyyibpaySecret`.
+const {GoogleGenAI, Type, ThinkingLevel, MediaResolution} =
+    require("@google/genai");
 const geminiKey = defineSecret("GEMINI_KEY");
+// Current Gemini Flash-Lite id; requires the @google/genai SDK.
+const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
-/** Prompt for the description helper: rough text → structured description. */
-function descriptionPrompt(category, roughText) {
-  return "You help customers on FairBid, a Malaysian home-services " +
-      "marketplace, write clear job postings. Expand the customer's rough " +
-      "note into a job description in plain prose (no markdown, no " +
-      "headings), under 120 words, covering: what the problem is, any " +
-      "access details the provider should confirm, and the expected " +
-      "outcome. Never invent prices, deadlines or commitments the customer " +
-      `did not state.\n\nCategory: ${category}\n` +
-      `Customer's note: ${roughText}`;
-}
+/** System instruction for the description helper: rough text → structured
+ * description. */
+const DESCRIPTION_SYSTEM = "You help customers on FairBid, a Malaysian " +
+    "home-services marketplace, write clear job postings. Expand the " +
+    "customer's rough note into a job description in plain prose (no " +
+    "markdown, no headings), under 120 words, covering: what the problem " +
+    "is, any access details the provider should confirm, and the expected " +
+    "outcome. Never invent prices, deadlines or commitments the customer " +
+    "did not state. If a photo is provided, use it to make the " +
+    "description more specific and accurate.";
 
-/** Prompt for the fair-price guide: strict JSON, RM range. */
-function pricePrompt(category, roughText) {
-  return "You estimate fair market prices for home services in Malaysia. " +
-      "Given the job below, reply with ONLY a JSON object — no prose, no " +
-      "code fences — of the form {\"minRm\": number, \"maxRm\": number} " +
-      "giving a realistic ringgit range a customer should expect to pay.\n\n" +
-      `Category: ${category}\nJob description: ${roughText}`;
-}
+/** System instruction for the fair-price guide; the JSON shape is enforced
+ * by `PRICE_SCHEMA`, so no "reply with ONLY JSON" wording is needed here. */
+const PRICE_SYSTEM = "You estimate fair market prices for home services " +
+    "in Malaysia. Give a realistic ringgit range a customer should expect " +
+    "to pay for the job described. If a photo is provided, factor it into " +
+    "the estimate.";
+
+/** Structured-output schema for the fair-price guide: a ringgit range. */
+const PRICE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    minRm: {type: Type.NUMBER},
+    maxRm: {type: Type.NUMBER},
+  },
+  required: ["minRm", "maxRm"],
+  propertyOrdering: ["minRm", "maxRm"],
+};
 
 /**
- * Defensively parses the model's price reply. Models return fences or prose
- * despite instructions, so extract the first JSON object and range-check it.
- * Returns `{minSen, maxSen}` (integer sen — the client never handles floating
- * ringgit) or null when unusable.
+ * Parses the model's price reply. `PRICE_SCHEMA` constrains the model to
+ * clean JSON, but a truncated body can still throw, so this stays
+ * try/catch. Returns `{minSen, maxSen}` (integer sen — the client never
+ * handles floating ringgit) or null when unusable.
  */
 function parsePriceJson(text) {
   try {
-    const match = String(text).match(/\{[^{}]*\}/);
-    if (!match) return null;
-    const {minRm, maxRm} = JSON.parse(match[0]);
+    const {minRm, maxRm} = JSON.parse(String(text));
     if (typeof minRm !== "number" || typeof maxRm !== "number") return null;
     if (!(minRm > 0) || !(maxRm >= minRm) || maxRm > 1000000) return null;
     return {minSen: Math.round(minRm * 100), maxSen: Math.round(maxRm * 100)};
+  } catch (_) {
+    return null;
+  }
+}
+
+const IMG_PREFIX =
+  "https://firebasestorage.googleapis.com/v0/b/fairbid-c9340.firebasestorage.app/o/";
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** Fetches a job photo as base64 inline data, or null (→ text-only). SSRF-
+ * guarded to this project's Storage bucket; all failures degrade to null. */
+async function fetchInlineImage(photoUrl) {
+  try {
+    if (typeof photoUrl !== "string" || !photoUrl.startsWith(IMG_PREFIX)) {
+      return null;
+    }
+    const res = await fetch(photoUrl, {signal: AbortSignal.timeout(5000)});
+    if (!res.ok) return null;
+    const mimeType = res.headers.get("content-type") || "";
+    if (!mimeType.startsWith("image/")) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > MAX_IMAGE_BYTES) return null;
+    return {mimeType, data: buf.toString("base64")};
   } catch (_) {
     return null;
   }
@@ -1381,6 +1952,7 @@ exports.suggestJobDetails = functions
       const kind = data.kind;
       const category = String(data.category || "").slice(0, 60);
       const roughText = String(data.roughText || "").trim().slice(0, 600);
+      const photoUrl = data.photoUrl;
       if (kind !== "description" && kind !== "price") {
         throw new functions.https.HttpsError(
             "invalid-argument", "Unknown kind.");
@@ -1391,21 +1963,59 @@ exports.suggestJobDetails = functions
       }
 
       try {
-        const {GoogleGenerativeAI} = require("@google/generative-ai");
-        const model = new GoogleGenerativeAI(geminiKey.value())
-            .getGenerativeModel({model: "gemini-2.0-flash"});
-        const result = await model.generateContent(
-            kind === "description" ?
-                descriptionPrompt(category, roughText) :
-                pricePrompt(category, roughText));
-        const text = result.response.text();
+        const ai = new GoogleGenAI({apiKey: geminiKey.value()});
+
+        const config = kind === "description" ? {
+          systemInstruction: DESCRIPTION_SYSTEM,
+          temperature: 0.4,
+          maxOutputTokens: 512,
+          thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
+        } : {
+          systemInstruction: PRICE_SYSTEM,
+          temperature: 0.2,
+          maxOutputTokens: 256,
+          responseMimeType: "application/json",
+          responseSchema: PRICE_SCHEMA,
+          thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
+        };
+        const text = kind === "description" ?
+            `Category: ${category}\nCustomer's note: ${roughText}` :
+            `Category: ${category}\nJob description: ${roughText}`;
+
+        const img = photoUrl ? await fetchInlineImage(photoUrl) : null;
+        let contents;
+        if (img) {
+          contents = [{text}, {inlineData: img}];
+          config.mediaResolution = MediaResolution.MEDIA_RESOLUTION_LOW;
+        } else {
+          contents = text;
+        }
+
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents,
+          config,
+        });
+        const responseText = response.text;
         if (kind === "description") {
-          const description = text.trim();
+          const description = (responseText || "").trim();
           return description === "" ? null : {description};
         }
-        return parsePriceJson(text);
+        return parsePriceJson(responseText);
       } catch (err) {
-        functions.logger.warn("Gemini assist failed", err);
+        const status = typeof err?.status === "number" ? err.status :
+            (typeof err?.code === "number" ? err.code : null);
+        // 400/403/404 = a real config bug (bad model id, permission, API
+        // disabled) we must be able to find in logs; 429/network/offline/
+        // parse are advisory soft-misses. Never log the API key or the
+        // request body.
+        if (status === 400 || status === 403 || status === 404) {
+          functions.logger.error("assist MISCONFIGURED",
+              {status, model: GEMINI_MODEL, kind});
+        } else {
+          functions.logger.info("assist soft-miss (quota/offline/transient)",
+              {status, kind});
+        }
         return null; // advisory only — never a hard failure
       }
     });

@@ -26,6 +26,7 @@ import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/data/milestone_repository.dart';
 import 'package:fairbid/features/jobs/domain/bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
+import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
 import 'package:fairbid/features/jobs/presentation/widgets/bid_card.dart';
 import 'package:fairbid/features/messages/data/chat_repository.dart';
@@ -72,10 +73,19 @@ class FakeAuthRepository implements AuthRepository {
   String? payoutBankName;
   String? payoutAccountLast4;
   int walletBalanceSen = 0;
+
+  /// Sen committed against accepted-but-not-yet-funded bids. Bumped by
+  /// [FakeBidRepository.acceptBid] on success, mirroring the `acceptBid`
+  /// Cloud Function's `escrowLockedSen` write.
+  int escrowLockedSen = 0;
   int ratingCount = 0;
   int ratingSum = 0;
   int jobsCompleted = 0;
   int disputesLost = 0;
+
+  /// Mirrors the `watchlist` array Firestore field; seed a job id here (or
+  /// mutate it via [setJobSaved]) so tests can assert the watchlist toggle.
+  List<String> watchlist = [];
 
   @override
   Stream<AppUser?> authStateChanges() async* {
@@ -114,12 +124,14 @@ class FakeAuthRepository implements AuthRepository {
       payoutBankName: payoutBankName,
       payoutAccountLast4: payoutAccountLast4,
       walletBalanceSen: walletBalanceSen,
+      escrowLockedSen: escrowLockedSen,
       ratingCount: ratingCount,
       ratingSum: ratingSum,
       jobsCompleted: jobsCompleted,
       disputesLost: disputesLost,
       trustScore: trust.composite,
       trustBreakdown: trust,
+      watchlist: List.of(watchlist),
     );
   }
 
@@ -169,6 +181,15 @@ class FakeAuthRepository implements AuthRepository {
   }) async =>
       _signIn(UserRole.requestor);
 
+  /// Emails for which [sendPasswordReset] was called, for tests to assert.
+  final passwordResetsSent = <String>[];
+
+  @override
+  Future<void> sendPasswordReset(String email) async {
+    if (failWith != null) throw failWith!;
+    passwordResetsSent.add(email);
+  }
+
   @override
   Future<void> registerWithEmail({
     required String email,
@@ -181,6 +202,25 @@ class FakeAuthRepository implements AuthRepository {
   @override
   Future<void> signInWithGoogle({required UserRole roleIfNew}) async =>
       _signIn(roleIfNew);
+
+  @override
+  Future<void> setJobSaved({
+    required String uid,
+    required String jobId,
+    required bool saved,
+  }) async {
+    if (saved) {
+      if (!watchlist.contains(jobId)) watchlist.add(jobId);
+    } else {
+      watchlist.remove(jobId);
+    }
+    // Re-emit so a live UI (watching AuthController) sees the new watchlist,
+    // mirroring the real repo's live profile stream.
+    if (_current != null) {
+      _current = _build(_current!.role);
+      _controller.add(_current);
+    }
+  }
 
   @override
   Future<void> signOut() async {
@@ -275,20 +315,20 @@ class FakeJobRepository implements JobRepository {
   FakeJobRepository([List<Job> jobs = const []]) : _jobs = [...jobs];
 
   final List<Job> _jobs;
+  final _changes = StreamController<void>.broadcast();
+
+  void _notify() => _changes.add(null);
 
   @override
   Future<String> create(Job job) async {
     _jobs.add(job);
+    _notify();
     return 'job-${_jobs.length}';
   }
 
   @override
-  Stream<List<Job>> watchOpenJobs({String? category}) async* {
-    yield _jobs
-        .where((j) =>
-            j.status == JobStatus.open &&
-            (category == null || j.category == category))
-        .toList();
+  Stream<List<Job>> watchOpenJobs() async* {
+    yield _jobs.where((j) => j.status == JobStatus.open).toList();
   }
 
   @override
@@ -306,9 +346,20 @@ class FakeJobRepository implements JobRepository {
       _jobs.cast<Job?>().firstWhere((j) => j!.id == id, orElse: () => null);
 
   @override
+  Stream<Job?> watchJob(String id) async* {
+    Job? find() =>
+        _jobs.cast<Job?>().firstWhere((j) => j!.id == id, orElse: () => null);
+    yield find();
+    await for (final _ in _changes.stream) {
+      yield find();
+    }
+  }
+
+  @override
   Future<void> cancelOpenJob(String id) async {
     final i = _jobs.indexWhere((j) => j.id == id);
     if (i != -1) _jobs[i] = _rebuild(_jobs[i], status: JobStatus.cancelled);
+    _notify();
   }
 
   @override
@@ -317,6 +368,7 @@ class FakeJobRepository implements JobRepository {
     if (i == -1) return;
     _jobs[i] = _rebuild(_jobs[i],
         cancellationRequestedBy: 'requestor', cancellationReason: reason);
+    _notify();
   }
 
   @override
@@ -327,12 +379,30 @@ class FakeJobRepository implements JobRepository {
     _jobs[i] = _rebuild(_jobs[i],
         status: accept ? JobStatus.cancelled : null,
         clearCancellationRequest: true);
+    _notify();
   }
 
   @override
   Future<void> adminCancelJob(String jobId, {String? reason}) async {
     final i = _jobs.indexWhere((j) => j.id == jobId);
     if (i != -1) _jobs[i] = _rebuild(_jobs[i], status: JobStatus.cancelled);
+    _notify();
+  }
+
+  /// No test currently seeds the activity timeline — an empty stream still
+  /// satisfies the interface.
+  @override
+  Stream<List<JobEvent>> watchJobEvents(String jobId) async* {
+    yield const [];
+  }
+
+  @override
+  Stream<List<Job>> watchSavedJobs(List<String> jobIds) async* {
+    List<Job> mine() => _jobs.where((j) => jobIds.contains(j.id)).toList();
+    yield mine();
+    await for (final _ in _changes.stream) {
+      yield mine();
+    }
   }
 
   /// Mimics the `releaseMilestone` Cloud Function's completion write when the
@@ -341,6 +411,7 @@ class FakeJobRepository implements JobRepository {
     final i = _jobs.indexWhere((j) => j.id == id);
     if (i == -1) return;
     _jobs[i] = _rebuild(_jobs[i], status: JobStatus.completed);
+    _notify();
   }
 
   /// Mimics the accept batch: assigns the winner and flips the job's status.
@@ -353,6 +424,7 @@ class FakeJobRepository implements JobRepository {
       acceptedProviderName: bid.providerName,
       acceptedBidAmountSen: bid.amountSen,
     );
+    _notify();
   }
 
   /// Rebuilds [j] with overrides — the fake's stand-in for a Firestore update,
@@ -394,12 +466,17 @@ class FakeJobRepository implements JobRepository {
 }
 
 /// In-memory [BidRepository]. Streams re-emit whenever a bid changes so the
-/// detail screen updates live, like Firestore snapshots would.
+/// detail screen updates live, like Firestore snapshots would. [auth] backs
+/// the `acceptBid` wallet-balance gate: accepting is blocked when the bid
+/// amount exceeds the requestor's available balance, and a successful accept
+/// locks the amount away (bumping [FakeAuthRepository.escrowLockedSen]) —
+/// mirroring the `acceptBid` Cloud Function.
 class FakeBidRepository implements BidRepository {
-  FakeBidRepository(this.jobs, [List<Bid> bids = const []])
+  FakeBidRepository(this.jobs, this.auth, [List<Bid> bids = const []])
       : _bids = [...bids];
 
   final FakeJobRepository jobs;
+  final FakeAuthRepository auth;
   final List<Bid> _bids;
   final _changes = StreamController<void>.broadcast();
 
@@ -462,6 +539,16 @@ class FakeBidRepository implements BidRepository {
 
   @override
   Future<void> acceptBid(Bid bid) async {
+    // Mirrors the `acceptBid` Cloud Function's balance gate: available =
+    // wallet balance minus what's already locked against other accepted bids.
+    final available = auth.walletBalanceSen - auth.escrowLockedSen;
+    if (bid.amountSen > available) {
+      throw InsufficientBalanceException(
+        shortfallSen: bid.amountSen - available,
+        availableSen: available,
+        requiredSen: bid.amountSen,
+      );
+    }
     for (var i = 0; i < _bids.length; i++) {
       final b = _bids[i];
       if (b.jobId != bid.jobId || b.status != BidStatus.pending) continue;
@@ -471,6 +558,7 @@ class FakeBidRepository implements BidRepository {
               ? BidStatus.accepted
               : BidStatus.rejected);
     }
+    auth.escrowLockedSen += bid.amountSen;
     jobs.assign(bid);
     _notify();
   }
@@ -626,7 +714,9 @@ class FakeMilestoneRepository implements MilestoneRepository {
 }
 
 /// In-memory [WalletRepository]; records the amounts of top-up/withdraw calls
-/// so tests can assert them. The ledger stays empty.
+/// so tests can assert them. The ledger stays empty. The toyyibPay methods
+/// return canned values — the live gateway is never exercised in widget
+/// tests.
 class FakeWalletRepository implements WalletRepository {
   final topUps = <int>[];
   final withdrawals = <int>[];
@@ -636,6 +726,14 @@ class FakeWalletRepository implements WalletRepository {
 
   @override
   Future<void> withdraw(int amountSen) async => withdrawals.add(amountSen);
+
+  @override
+  Future<({String billCode, String paymentUrl})> createTopUpBill(
+          int amountSen) async =>
+      (billCode: 'test', paymentUrl: 'https://example.com');
+
+  @override
+  Future<bool> reconcileTopUp(String billCode) async => true;
 
   @override
   Stream<List<LedgerEntry>> watchMyTransactions(String uid) async* {
@@ -933,6 +1031,7 @@ class FakeAssistRepository implements AssistRepository {
   Future<String?> suggestDescription({
     required String category,
     required String roughText,
+    String? photoUrl,
   }) async =>
       description;
 
@@ -940,6 +1039,7 @@ class FakeAssistRepository implements AssistRepository {
   Future<({int minSen, int maxSen})?> suggestPriceRange({
     required String category,
     required String description,
+    String? photoUrl,
   }) async =>
       priceRange;
 }
@@ -1144,6 +1244,7 @@ Job sampleJob({
   String? acceptedProviderId,
   String? acceptedProviderName,
   int? acceptedBidAmountSen,
+  DateTime? deadline,
 }) =>
     Job(
       id: id,
@@ -1159,6 +1260,7 @@ Job sampleJob({
       acceptedProviderId: acceptedProviderId,
       acceptedProviderName: acceptedProviderName,
       acceptedBidAmountSen: acceptedBidAmountSen,
+      deadline: deadline,
     );
 
 /// Builds a sample pending bid on [jobId] for tests. Defaults to an
@@ -1207,7 +1309,7 @@ Widget buildApp(FakeAuthRepository auth,
     requestorOnboardingRepository: FakeRequestorOnboardingRepository(auth),
     documentStorageRepository: FakeDocumentStorageRepository(),
     jobRepository: jobRepo,
-    bidRepository: FakeBidRepository(jobRepo, bids),
+    bidRepository: FakeBidRepository(jobRepo, auth, bids),
     reviewRepository: review ?? FakeReviewRepository(reviews),
     verificationRepository: verification ?? FakeVerificationRepository(),
     chatRepository: chat ?? FakeChatRepository(),
@@ -1308,6 +1410,34 @@ void main() {
       // Lands on the app shell (requestor home).
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.text('Hello, Test'), findsOneWidget);
+    });
+
+    testWidgets('Forgot password with no email prompts for one',
+        (tester) async {
+      final repo = FakeAuthRepository();
+      await tester.pumpWidget(buildApp(repo));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Forgot?'));
+      await tester.pump(); // let the snackbar animate in
+
+      expect(find.text('Enter your email first'), findsOneWidget);
+      expect(repo.passwordResetsSent, isEmpty);
+    });
+
+    testWidgets('Forgot password sends a reset email for the typed address',
+        (tester) async {
+      final repo = FakeAuthRepository();
+      await tester.pumpWidget(buildApp(repo));
+      await tester.pumpAndSettle();
+
+      await fillField(tester, 'Email', 'test@fairbid.app');
+      await tester.tap(find.text('Forgot?'));
+      await tester.pumpAndSettle();
+
+      expect(repo.passwordResetsSent, ['test@fairbid.app']);
+      expect(find.text('Password reset email sent to test@fairbid.app'),
+          findsOneWidget);
     });
 
     testWidgets('failed sign-in shows an error banner', (tester) async {
@@ -1651,7 +1781,7 @@ void main() {
       expect(find.text('"Communications were clear."'), findsOneWidget);
     });
 
-    testWidgets('Trust Score card shows the New Provider state until earned',
+    testWidgets('Trust Score card shows the New User state until earned',
         (tester) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1665,7 +1795,7 @@ void main() {
       await openRegisterAs(tester, 'Work');
       await openProfileTab(tester);
 
-      expect(find.text('New Provider'), findsOneWidget);
+      expect(find.text('New User'), findsOneWidget);
       // The four real sub-bars replace the old decorative ones.
       expect(find.text('Track Record'), findsOneWidget);
       expect(find.text('Verification'), findsOneWidget);
@@ -1687,7 +1817,7 @@ void main() {
       await openRegisterAs(tester, 'Work');
       await openProfileTab(tester);
 
-      expect(find.text('New Provider'), findsNothing);
+      expect(find.text('New User'), findsNothing);
       expect(find.textContaining('/100'), findsOneWidget);
     });
 
@@ -1950,12 +2080,39 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsNothing);
     });
 
+    testWidgets(
+        'approved provider sees "Bidding closed" once the deadline has '
+        'passed', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()
+        ..verificationStatus = 'approved'
+        ..baseLat = 3.139
+        ..baseLng = 101.6869;
+      final job = sampleJob(
+        requestorId: 'req-9',
+        deadline: DateTime.now().subtract(const Duration(hours: 1)),
+      );
+      await tester.pumpWidget(buildApp(auth, jobs: [job]));
+      await tester.pumpAndSettle();
+      await openJobAsProvider(tester);
+
+      // "Bidding closed" also appears as the job's own deadline info row, so
+      // assert on the locked-state banner's more specific body text.
+      expect(find.text('Bidding for this job has closed.'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsNothing);
+    });
+
     testWidgets('requestor sees a bid and accepting flips the job to '
         'in progress', (tester) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester.pumpWidget(buildApp(FakeAuthRepository(),
+      // Enough available balance to cover the RM 150 bid (see FakeBidRepository
+      // .acceptBid's balance gate, mirroring the acceptBid Cloud Function).
+      final auth = FakeAuthRepository()..walletBalanceSen = 20000;
+      await tester.pumpWidget(buildApp(auth,
           jobs: [sampleJob()], bids: [sampleBid()]));
       await tester.pumpAndSettle();
       await fillField(tester, 'Email', 'a@b.com');
@@ -1985,6 +2142,128 @@ void main() {
       expect(find.text('In Progress'), findsOneWidget);
       expect(find.text('Assigned Provider'), findsOneWidget);
       expect(find.text('Pro Fixer'), findsOneWidget);
+    });
+  });
+
+  group('Watchlist', () {
+    testWidgets('bookmarking a job on the feed toggles its saved state',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()..verificationStatus = 'approved';
+      await tester.pumpWidget(
+          buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]));
+      await tester.pumpAndSettle();
+      await openRegisterAs(tester, 'Work');
+
+      // Into the full "Find Jobs" feed, where the bookmark toggle lives.
+      await tester.tap(find.text('View all'));
+      await tester.pumpAndSettle();
+
+      // Scoped to the job list — the feed's AppBar has its own (separate)
+      // bookmark_border icon that opens the Saved Jobs screen.
+      final list = find.byType(ListView);
+      Finder cardBookmark(IconData icon) =>
+          find.descendant(of: list, matching: find.byIcon(icon));
+
+      expect(cardBookmark(Icons.bookmark_border), findsOneWidget);
+      await tester.tap(cardBookmark(Icons.bookmark_border));
+      await tester.pumpAndSettle();
+
+      expect(cardBookmark(Icons.bookmark), findsOneWidget);
+      expect(auth.watchlist, contains('job-1'));
+
+      // Tapping again unsaves it.
+      await tester.tap(cardBookmark(Icons.bookmark));
+      await tester.pumpAndSettle();
+      expect(cardBookmark(Icons.bookmark_border), findsOneWidget);
+      expect(auth.watchlist, isEmpty);
+    });
+  });
+
+  group('Wallet balance gate on bid acceptance', () {
+    test('AppUser.availableBalanceSen subtracts locked escrow', () {
+      const user = AppUser(
+        uid: 'uid-1',
+        email: 'a@b.com',
+        displayName: 'Test User',
+        role: UserRole.requestor,
+        walletBalanceSen: 50000,
+        escrowLockedSen: 20000,
+      );
+      expect(user.availableBalanceSen, 30000);
+    });
+
+    testWidgets(
+        'accepting a bid over the available balance shows a top-up dialog',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      // RM 100 available, but the sample bid is RM 150 — RM 50 short.
+      final auth = FakeAuthRepository()..walletBalanceSen = 10000;
+      await tester.pumpWidget(
+          buildApp(auth, jobs: [sampleJob()], bids: [sampleBid()]));
+      await tester.pumpAndSettle();
+      await fillField(tester, 'Email', 'a@b.com');
+      await fillField(tester, 'Password', 'secret123');
+      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Fix leaking sink').first);
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(
+          find.widgetWithText(FilledButton, 'Accept Bid'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Accept Bid'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, 'Accept Bid'),
+      ));
+      await tester.pumpAndSettle();
+
+      // The gate blocked the accept and surfaced the shortfall.
+      expect(find.text('Not enough balance'), findsOneWidget);
+      expect(find.textContaining('RM 50.00 more available'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Top up'), findsOneWidget);
+      expect(find.text('In Progress'), findsNothing);
+
+      // Top up routes to the wallet screen.
+      await tester.tap(find.widgetWithText(FilledButton, 'Top up'));
+      await tester.pumpAndSettle();
+      expect(find.text('My Wallet'), findsOneWidget);
+    });
+
+    test(
+        'sequential overdraw guard: locking one bid blocks a second that no '
+        'longer fits', () async {
+      // RM 200 available — enough for either bid alone, not both.
+      final auth = FakeAuthRepository()..walletBalanceSen = 20000;
+      final jobRepo = FakeJobRepository([
+        sampleJob(id: 'job-a', title: 'Job A'),
+        sampleJob(id: 'job-b', title: 'Job B'),
+      ]);
+      final bidRepo = FakeBidRepository(jobRepo, auth);
+      final bidA =
+          sampleBid(jobId: 'job-a', providerId: 'p-a', amountSen: 15000);
+      final bidB =
+          sampleBid(jobId: 'job-b', providerId: 'p-b', amountSen: 15000);
+
+      // Accepting job A locks its amount away.
+      await bidRepo.acceptBid(bidA);
+      expect(auth.escrowLockedSen, 15000);
+
+      // Job B's RM 150 alone fits the raw RM 200 balance, but not the RM 50
+      // left available once job A's commitment is locked.
+      await expectLater(
+        bidRepo.acceptBid(bidB),
+        throwsA(isA<InsufficientBalanceException>()
+            .having((e) => e.shortfallSen, 'shortfallSen', 10000)
+            .having((e) => e.availableSen, 'availableSen', 5000)
+            .having((e) => e.requiredSen, 'requiredSen', 15000)),
+      );
     });
   });
 

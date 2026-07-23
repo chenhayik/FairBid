@@ -12,12 +12,14 @@ import '../../jobs/data/milestone_repository.dart';
 import '../../jobs/domain/milestone.dart';
 import '../../wallet/data/wallet_repository.dart';
 import '../../wallet/domain/ledger_entry.dart';
+import '../../wallet/presentation/toyyibpay_webview_screen.dart';
 import '../../wallet/presentation/wallet_amount_sheet.dart';
 
 /// The wallet screen. Providers see Earnings & Payouts — Available (with
 /// Withdraw), In Escrow and Total Earnings from their milestones, and their
-/// payout method. Requestors see their wallet with the demo Top Up that
-/// stands in for a payment gateway. Both share the transaction history.
+/// payout method. Requestors see their wallet with a real toyyibPay
+/// (sandbox) Top Up — plus a demo top-up kept around for testing without the
+/// gateway. Both share the transaction history.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 
@@ -66,11 +68,54 @@ class _EarningsScreenState extends State<EarningsScreen> {
     }
   }
 
+  /// Real top-up: asks for an amount, creates a toyyibPay (sandbox) bill and
+  /// opens its hosted payment page in a WebView. The wallet balance only
+  /// updates once the server independently confirms the bill was paid — the
+  /// WebView returning is just a UX cue, never trusted on its own — so this
+  /// reconciles with the server immediately after, as a backstop for a
+  /// webhook toyyibPay hasn't delivered yet.
   Future<void> _topUp() async {
     final wallet = context.read<WalletRepository>();
+    String? billCode;
+    String? paymentUrl;
     final ok = await WalletAmountSheet.show(
       context,
       title: 'Top Up Wallet',
+      subtitle: 'Pay by FPX or online banking (toyyibPay sandbox).',
+      actionLabel: 'Continue to Payment',
+      maxSen: PlatformConfig.maxTopUpSen,
+      onSubmit: (amountSen) async {
+        final bill = await wallet.createTopUpBill(amountSen);
+        billCode = bill.billCode;
+        paymentUrl = bill.paymentUrl;
+      },
+    );
+    if (ok != true || !mounted || paymentUrl == null) return;
+
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ToyyibpayWebViewScreen(paymentUrl: paymentUrl!),
+    ));
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Confirming payment…')));
+    final credited = await wallet.reconcileTopUp(billCode!);
+    await _refreshBalance();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(credited
+          ? 'Wallet topped up.'
+          : "Payment not confirmed yet — it'll appear once processed."),
+    ));
+  }
+
+  /// Demo-only top-up standing in for the gateway (kept for testing without
+  /// driving the real toyyibPay flow); untouched by the change above.
+  Future<void> _topUpDemo() async {
+    final wallet = context.read<WalletRepository>();
+    final ok = await WalletAmountSheet.show(
+      context,
+      title: 'Demo Top Up',
       subtitle: 'Demo top-up — this stands in for a payment gateway.',
       actionLabel: 'Top Up',
       maxSen: PlatformConfig.maxTopUpSen,
@@ -106,6 +151,16 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   ? () => _withdraw(user.walletBalanceSen)
                   : _topUp,
             ),
+            if (!isProvider) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _topUpDemo,
+                  child: const Text('Use demo top-up instead'),
+                ),
+              ),
+            ],
             if (isProvider) ...[
               const SizedBox(height: 16),
               _EscrowStats(stream: _milestones),
@@ -154,8 +209,7 @@ class _AvailableCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             formatRm(balanceSen),
-            style: theme.textTheme.headlineMedium?.copyWith(
-              fontSize: 32,
+            style: theme.textTheme.displaySmall?.copyWith(
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -182,6 +236,15 @@ class _EscrowStats extends StatelessWidget {
     return StreamBuilder<List<Milestone>>(
       stream: stream,
       builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const AppCard(
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load earnings",
+              message: 'Please check your connection and try again.',
+            ),
+          );
+        }
         final milestones = snapshot.data ?? [];
         int inEscrowSen = 0, earnedSen = 0;
         for (final m in milestones) {
@@ -285,6 +348,13 @@ class _TransactionHistoryCard extends StatelessWidget {
           StreamBuilder<List<LedgerEntry>>(
             stream: stream,
             builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const EmptyState(
+                  icon: Icons.error_outline,
+                  title: "Couldn't load transactions",
+                  message: 'Please check your connection and try again.',
+                );
+              }
               final entries = snapshot.data ?? [];
               if (entries.isEmpty) {
                 return const EmptyState(

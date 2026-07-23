@@ -13,6 +13,7 @@ import '../../features/jobs/presentation/detail/job_detail_screen.dart';
 import '../../features/jobs/presentation/feed/job_feed_screen.dart';
 import '../../features/jobs/presentation/my_jobs_screen.dart';
 import '../../features/jobs/presentation/post_job/post_job_screen.dart';
+import '../../features/jobs/presentation/saved_jobs_screen.dart';
 import '../../features/messages/presentation/conversation_thread_screen.dart';
 import '../../features/messages/presentation/messages_screen.dart';
 import '../../features/notifications/presentation/notifications_screen.dart';
@@ -59,6 +60,8 @@ GoRouter buildRouter(AuthController auth) {
       // Jobs — pushed full-screen (outside the tab shell) with a back button.
       GoRoute(path: '/post-job', builder: (_, _) => const PostJobScreen()),
       GoRoute(path: '/jobs', builder: (_, _) => const JobFeedScreen()),
+      GoRoute(
+          path: '/jobs/saved', builder: (_, _) => const SavedJobsScreen()),
       GoRoute(
         path: '/jobs/:id',
         builder: (_, state) =>

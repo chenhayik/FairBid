@@ -88,14 +88,21 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
 
         return Scaffold(
           appBar: AppBar(
+            toolbarHeight: 72,
             title: conversation == null || myUid == null
                 ? const Text('Chat')
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(conversation.otherPartyName(myUid)),
+                      Text(
+                        conversation.otherPartyName(myUid),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       Text(
                         conversation.jobTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.labelMedium?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant),
                       ),
@@ -139,6 +146,13 @@ class _MessageList extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return const EmptyState(
+            icon: Icons.error_outline,
+            title: 'Could not load messages',
+            message: 'Please check your connection and try again.',
+          );
         }
         final messages = snapshot.data ?? [];
         if (messages.isEmpty) {
@@ -205,9 +219,8 @@ class _MessageBubble extends StatelessWidget {
             Text(
               timeAgo(message.createdAt),
               style: theme.textTheme.bodySmall?.copyWith(
-                fontSize: 11,
                 color: isMine
-                    ? Colors.white.withValues(alpha: 0.8)
+                    ? Colors.white.withValues(alpha: 0.9)
                     : theme.colorScheme.onSurfaceVariant,
               ),
             ),

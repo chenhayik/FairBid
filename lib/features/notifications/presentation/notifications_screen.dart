@@ -72,6 +72,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
                   }
+                  if (snapshot.hasError) {
+                    return const EmptyState(
+                      icon: Icons.error_outline,
+                      title: "Couldn't load notifications",
+                      message: 'Please check your connection and try again.',
+                    );
+                  }
                   final items = snapshot.data ?? [];
                   if (items.isEmpty) {
                     return const EmptyState(

@@ -18,6 +18,7 @@ import '../../data/bid_repository.dart';
 import '../../data/job_repository.dart';
 import '../../domain/bid.dart';
 import '../../domain/job.dart';
+import '../../domain/job_event.dart';
 import '../bid/submit_bid_sheet.dart';
 import '../widgets/bid_card.dart';
 import 'milestone_section.dart';
@@ -34,20 +35,9 @@ class JobDetailScreen extends StatefulWidget {
 }
 
 class _JobDetailScreenState extends State<JobDetailScreen> {
-  late Future<Job?> _jobFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _jobFuture = context.read<JobRepository>().getById(widget.jobId);
-  }
-
-  /// Re-fetches the job after something changed it (e.g. a bid was accepted).
-  void _reload() {
-    setState(() {
-      _jobFuture = context.read<JobRepository>().getById(widget.jobId);
-    });
-  }
+  // Cached so rebuilds don't resubscribe to Firestore.
+  late final Stream<Job?> _job =
+      context.read<JobRepository>().watchJob(widget.jobId);
 
   @override
   Widget build(BuildContext context) {
@@ -56,8 +46,8 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Job Details')),
       body: SafeArea(
-        child: FutureBuilder<Job?>(
-          future: _jobFuture,
+        child: StreamBuilder<Job?>(
+          stream: _job,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
@@ -71,7 +61,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
               );
             }
             final isOwner = job.requestorId == myUid;
-            return _JobBody(job: job, isOwner: isOwner, onChanged: _reload);
+            return _JobBody(job: job, isOwner: isOwner);
           },
         ),
       ),
@@ -80,11 +70,9 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 }
 
 class _JobBody extends StatelessWidget {
-  const _JobBody(
-      {required this.job, required this.isOwner, required this.onChanged});
+  const _JobBody({required this.job, required this.isOwner});
   final Job job;
   final bool isOwner;
-  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -126,6 +114,11 @@ class _JobBody extends StatelessWidget {
             icon: Icons.location_on_outlined,
             label: 'Location',
             value: job.location.address),
+        if (job.deadline != null)
+          _InfoRow(
+              icon: Icons.timer_outlined,
+              label: 'Bidding',
+              value: deadlineLabel(job.deadline)),
         const SizedBox(height: 16),
         Text('Description', style: theme.textTheme.titleLarge),
         const SizedBox(height: 8),
@@ -142,18 +135,129 @@ class _JobBody extends StatelessWidget {
               separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (_, i) => ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(job.photoUrls[i],
-                    width: 120, height: 120, fit: BoxFit.cover),
+                child: Image.network(
+                  job.photoUrls[i],
+                  width: 120,
+                  height: 120,
+                  fit: BoxFit.cover,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const SizedBox(
+                      width: 120,
+                      height: 120,
+                      child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    width: 120,
+                    height: 120,
+                    color: context.fairbid.borderSubtle,
+                    child: Icon(Icons.broken_image_outlined,
+                        color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
               ),
             ),
           ),
         ],
         const SizedBox(height: 24),
         if (isOwner)
-          _RequestorSection(job: job, onChanged: onChanged)
+          _RequestorSection(job: job)
         else
-          _ProviderSection(job: job, onChanged: onChanged),
+          _ProviderSection(job: job),
+        // An open job has only its lone "posted" event — not worth a card.
+        if (job.status != JobStatus.open) ...[
+          const SizedBox(height: 16),
+          _JobTimeline(jobId: job.id),
+        ],
       ],
+    );
+  }
+}
+
+/// Icon shown against a timeline entry, keyed by [JobEvent.type].
+IconData _timelineIcon(String type) => switch (type) {
+      'posted' => Icons.post_add,
+      'assigned' => Icons.handshake_outlined,
+      'funded' => Icons.lock_outline,
+      'submitted' => Icons.inventory_2_outlined,
+      'released' => Icons.payments_outlined,
+      'disputed' => Icons.gavel_rounded,
+      'refunded' => Icons.undo,
+      'completed' => Icons.check_circle_outline,
+      'cancelled' => Icons.cancel_outlined,
+      _ => Icons.circle,
+    };
+
+/// Colour shown against a timeline entry, keyed by [JobEvent.type], matching
+/// the semantic colours used elsewhere (danger/warning/success/verified).
+Color _timelineColor(BuildContext context, String type) => switch (type) {
+      'cancelled' || 'disputed' => context.fairbid.danger,
+      'refunded' => context.fairbid.warning,
+      'released' || 'completed' => context.fairbid.success,
+      _ => context.fairbid.verified,
+    };
+
+/// The job's server-written activity log (plan §3.x): a simple vertical list
+/// of `posted`/`assigned`/milestone/`completed`/`cancelled` events, oldest
+/// first. Shows nothing while waiting or when there's nothing yet.
+class _JobTimeline extends StatelessWidget {
+  const _JobTimeline({required this.jobId});
+  final String jobId;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return StreamBuilder<List<JobEvent>>(
+      stream: context.read<JobRepository>().watchJobEvents(jobId),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const AppCard(
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load your activity",
+              message: 'Please check your connection and try again.',
+            ),
+          );
+        }
+        final events = snapshot.data ?? [];
+        if (events.isEmpty) return const SizedBox.shrink();
+        return AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Activity', style: theme.textTheme.titleLarge),
+              const SizedBox(height: 12),
+              for (final (i, event) in events.indexed)
+                Padding(
+                  padding:
+                      EdgeInsets.only(bottom: i == events.length - 1 ? 0 : 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(_timelineIcon(event.type),
+                          size: 18, color: _timelineColor(context, event.type)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(event.title, style: theme.textTheme.bodyMedium),
+                            Text(timeAgo(event.at),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -176,9 +280,8 @@ double _compositeScore(Bid bid, int lowestSen) {
 /// Requestor view: the live bid list with a sort toggle and Accept actions
 /// while the job is open; the assigned provider once it's in progress.
 class _RequestorSection extends StatefulWidget {
-  const _RequestorSection({required this.job, required this.onChanged});
+  const _RequestorSection({required this.job});
   final Job job;
-  final VoidCallback onChanged;
 
   @override
   State<_RequestorSection> createState() => _RequestorSectionState();
@@ -188,13 +291,17 @@ class _RequestorSectionState extends State<_RequestorSection> {
   _BidSort _sort = _BidSort.bestValue;
 
   Future<void> _accept(Bid bid) async {
+    final available =
+        context.read<AuthController>().user?.availableBalanceSen;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Accept this bid?'),
         content: Text(
             '${bid.providerName} will be assigned to "${widget.job.title}" '
-            'for ${formatRm(bid.amountSen)}. Other bids will be declined.'),
+            'for ${formatRm(bid.amountSen)}. Other bids will be declined.'
+            '${available != null ? '\n\nYour available balance: '
+                '${formatRm(available)}.' : ''}'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -210,10 +317,32 @@ class _RequestorSectionState extends State<_RequestorSection> {
     if (confirmed != true || !mounted) return;
     try {
       await context.read<BidRepository>().acceptBid(bid);
-      widget.onChanged();
+    } on InsufficientBalanceException catch (e) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Not enough balance'),
+          content: Text('You need ${formatRm(e.shortfallSen)} more available '
+              'to accept this bid (available: ${formatRm(e.availableSen)}, '
+              'required: ${formatRm(e.requiredSen)}).'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                context.push('/profile/earnings');
+              },
+              child: const Text('Top up'),
+            ),
+          ],
+        ),
+      );
     } on BidAcceptRaceException {
       if (!mounted) return;
-      widget.onChanged(); // reload — the job/bid list has moved on
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('This job changed — please review the current bids '
               'and try again.')));
@@ -252,7 +381,6 @@ class _RequestorSectionState extends State<_RequestorSection> {
     if (confirmed != true || !mounted) return;
     try {
       await context.read<JobRepository>().cancelOpenJob(widget.job.id);
-      widget.onChanged();
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -274,10 +402,10 @@ class _RequestorSectionState extends State<_RequestorSection> {
             const SizedBox(height: 16),
             // Funding/releasing milestones is what completes the job now —
             // no manual "mark complete" button.
-            MilestoneSection(job: job, onChanged: widget.onChanged),
+            MilestoneSection(job: job),
             if (job.status == JobStatus.inProgress) ...[
               const SizedBox(height: 16),
-              _CancellationSection(job: job, onChanged: widget.onChanged),
+              _CancellationSection(job: job),
             ],
             if (job.status == JobStatus.completed) ...[
               const SizedBox(height: 16),
@@ -295,6 +423,18 @@ class _RequestorSectionState extends State<_RequestorSection> {
     final bidList = StreamBuilder<List<Bid>>(
       stream: context.read<BidRepository>().watchBids(job.id),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return const AppCard(
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load bids",
+              message: 'Please check your connection and try again.',
+            ),
+          );
+        }
         final bids = (snapshot.data ?? [])
             .where((b) => b.status == BidStatus.pending)
             .toList();
@@ -331,27 +471,23 @@ class _RequestorSectionState extends State<_RequestorSection> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text('Bids (${bids.length})',
-                      style: theme.textTheme.titleLarge),
-                ),
-                SegmentedButton<_BidSort>(
-                  showSelectedIcon: false,
-                  segments: const [
-                    ButtonSegment(
-                        value: _BidSort.bestValue, label: Text('Best')),
-                    ButtonSegment(
-                        value: _BidSort.price, label: Text('Price')),
-                    ButtonSegment(
-                        value: _BidSort.trustScore, label: Text('Trust')),
-                  ],
-                  selected: {_sort},
-                  onSelectionChanged: (s) =>
-                      setState(() => _sort = s.first),
-                ),
-              ],
+            Text('Bids (${bids.length})', style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SegmentedButton<_BidSort>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(
+                      value: _BidSort.bestValue, label: Text('Best')),
+                  ButtonSegment(
+                      value: _BidSort.price, label: Text('Price')),
+                  ButtonSegment(
+                      value: _BidSort.trustScore, label: Text('Trust')),
+                ],
+                selected: {_sort},
+                onSelectionChanged: (s) => setState(() => _sort = s.first),
+              ),
             ),
             const SizedBox(height: 12),
             for (final bid in bids)
@@ -450,8 +586,12 @@ class _AssignedProviderCard extends StatelessWidget {
       context.push('/messages/$id');
     } catch (_) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not open the chat. Please try again.')));
+      // Collapse repeats: a stale snackbar from an earlier failed tap would
+      // otherwise queue behind this one and show the same error twice.
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+            content: Text('Could not open the chat. Please try again.')));
     }
   }
 
@@ -510,9 +650,8 @@ class _AssignedProviderCard extends StatelessWidget {
 /// Provider view: the client card, then — on an open job — the bid action for
 /// their verification state (locked / submit / withdraw).
 class _ProviderSection extends StatelessWidget {
-  const _ProviderSection({required this.job, required this.onChanged});
+  const _ProviderSection({required this.job});
   final Job job;
-  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -546,7 +685,7 @@ class _ProviderSection extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         if (job.status != JobStatus.open)
-          _ProviderAssignedView(job: job, user: user, onChanged: onChanged)
+          _ProviderAssignedView(job: job, user: user)
         else if (user == null || user.verificationStatus != 'approved')
           const InfoBanner(
             icon: Icons.lock_outline,
@@ -555,7 +694,7 @@ class _ProviderSection extends StatelessWidget {
                 'documents.',
           )
         else
-          _BidAction(job: job, user: user, onChanged: onChanged),
+          _BidAction(job: job, user: user),
       ],
     );
   }
@@ -565,11 +704,9 @@ class _ProviderSection extends StatelessWidget {
 /// milestone plan (propose/deliver actions) for the accepted provider, plus —
 /// on a completed job — a prompt to review the requestor.
 class _ProviderAssignedView extends StatelessWidget {
-  const _ProviderAssignedView(
-      {required this.job, required this.user, required this.onChanged});
+  const _ProviderAssignedView({required this.job, required this.user});
   final Job job;
   final AppUser? user;
-  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -581,10 +718,10 @@ class _ProviderAssignedView extends StatelessWidget {
         _AssignedProviderCard(job: job),
         if (isAssigned) ...[
           const SizedBox(height: 16),
-          MilestoneSection(job: job, onChanged: onChanged),
+          MilestoneSection(job: job),
           if (job.status == JobStatus.inProgress) ...[
             const SizedBox(height: 16),
-            _CancellationSection(job: job, onChanged: onChanged),
+            _CancellationSection(job: job),
           ],
         ],
         if (canReview) ...[
@@ -602,11 +739,9 @@ class _ProviderAssignedView extends StatelessWidget {
 
 /// Submit-or-withdraw, driven by whether the provider already has a live bid.
 class _BidAction extends StatelessWidget {
-  const _BidAction(
-      {required this.job, required this.user, required this.onChanged});
+  const _BidAction({required this.job, required this.user});
   final Job job;
   final AppUser user;
-  final VoidCallback onChanged;
 
   Future<void> _withdraw(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -636,7 +771,6 @@ class _BidAction extends StatelessWidget {
           const SnackBar(content: Text('Bid withdrawn.')));
     } on BidNotPendingException {
       if (!context.mounted) return;
-      onChanged(); // reload — this bid was just resolved, not withdrawn
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('This bid was just accepted or resolved.')));
     } catch (_) {
@@ -652,8 +786,30 @@ class _BidAction extends StatelessWidget {
     return StreamBuilder<Bid?>(
       stream: context.read<BidRepository>().watchMyBid(job.id, user.uid),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return const AppCard(
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load your bid",
+              message: 'Please check your connection and try again.',
+            ),
+          );
+        }
         final bid = snapshot.data;
         if (bid == null) {
+          // The server may lag closing the job at its deadline (that's the
+          // closeExpiredJobs sweep's job), so gate the submit button on the
+          // deadline directly rather than trusting job.status alone.
+          if (job.deadline != null && job.deadline!.isBefore(DateTime.now())) {
+            return const InfoBanner(
+              icon: Icons.timer_off_outlined,
+              title: 'Bidding closed',
+              body: 'Bidding for this job has closed.',
+            );
+          }
           return PrimaryButton(
             label: 'Submit a bid',
             onPressed: () =>
@@ -701,9 +857,8 @@ class _BidAction extends StatelessWidget {
 /// refuses while escrow is held, so the message from a blocked attempt is
 /// surfaced verbatim. Shown to participants only.
 class _CancellationSection extends StatefulWidget {
-  const _CancellationSection({required this.job, required this.onChanged});
+  const _CancellationSection({required this.job});
   final Job job;
-  final VoidCallback onChanged;
 
   @override
   State<_CancellationSection> createState() => _CancellationSectionState();
@@ -716,7 +871,6 @@ class _CancellationSectionState extends State<_CancellationSection> {
     setState(() => _busy = true);
     try {
       await action();
-      if (mounted) widget.onChanged();
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

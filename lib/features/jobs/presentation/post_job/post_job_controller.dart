@@ -50,7 +50,9 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
     try {
       return await _assist.suggestDescription(
-          category: selectedCategory, roughText: roughText);
+          category: selectedCategory,
+          roughText: roughText,
+          photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
     } finally {
       assistingDescription = false;
       notifyListeners();
@@ -66,7 +68,9 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
     try {
       priceHint = await _assist.suggestPriceRange(
-          category: selectedCategory, description: description);
+          category: selectedCategory,
+          description: description,
+          photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
     } finally {
       assistingPrice = false;
       notifyListeners();

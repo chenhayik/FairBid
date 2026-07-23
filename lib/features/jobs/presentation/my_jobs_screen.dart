@@ -54,18 +54,53 @@ class MyJobsScreen extends StatelessWidget {
   }
 }
 
-class _RequestorJobs extends StatelessWidget {
+/// The status filters offered on the requestor's job list — one per
+/// [JobStatus], plus "All", so no job is ever hidden.
+enum _JobFilter {
+  all('All'),
+  open('Open'),
+  inProgress('In Progress'),
+  completed('Completed'),
+  cancelled('Cancelled');
+
+  const _JobFilter(this.label);
+  final String label;
+
+  bool matches(JobStatus status) => switch (this) {
+        _JobFilter.all => true,
+        _JobFilter.open => status == JobStatus.open,
+        _JobFilter.inProgress => status == JobStatus.inProgress,
+        _JobFilter.completed => status == JobStatus.completed,
+        _JobFilter.cancelled => status == JobStatus.cancelled,
+      };
+}
+
+class _RequestorJobs extends StatefulWidget {
   const _RequestorJobs({required this.uid});
   final String uid;
+
+  @override
+  State<_RequestorJobs> createState() => _RequestorJobsState();
+}
+
+class _RequestorJobsState extends State<_RequestorJobs> {
+  _JobFilter _filter = _JobFilter.all;
 
   @override
   Widget build(BuildContext context) {
     final repo = context.read<JobRepository>();
     return StreamBuilder<List<Job>>(
-      stream: repo.watchMyJobs(uid),
+      stream: repo.watchMyJobs(widget.uid),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return const EmptyState(
+            icon: Icons.error_outline,
+            title: "Couldn't load your jobs",
+            message: 'Please check your connection and try again.',
+          );
         }
         final jobs = snapshot.data ?? [];
         if (jobs.isEmpty) {
@@ -75,16 +110,63 @@ class _RequestorJobs extends StatelessWidget {
             message: 'Post a job to start receiving bids.',
           );
         }
-        return ListView.separated(
-          padding: const EdgeInsets.all(24),
-          itemCount: jobs.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 12),
-          itemBuilder: (context, i) => JobCard(
-            job: jobs[i],
-            onTap: () => context.push('/jobs/${jobs[i].id}'),
-          ),
+        final filtered =
+            jobs.where((j) => _filter.matches(j.status)).toList();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _JobFilterBar(
+              selected: _filter,
+              onSelected: (f) => setState(() => _filter = f),
+            ),
+            Expanded(
+              child: filtered.isEmpty
+                  ? EmptyState(
+                      icon: Icons.filter_list_off,
+                      title: 'No ${_filter.label.toLowerCase()} jobs',
+                      message: 'Try a different filter to see your other jobs.',
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (context, i) => JobCard(
+                        job: filtered[i],
+                        onTap: () => context.push('/jobs/${filtered[i].id}'),
+                      ),
+                    ),
+            ),
+          ],
         );
       },
+    );
+  }
+}
+
+/// Horizontally-scrollable single-select status filter for the job list.
+class _JobFilterBar extends StatelessWidget {
+  const _JobFilterBar({required this.selected, required this.onSelected});
+  final _JobFilter selected;
+  final ValueChanged<_JobFilter> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+      child: Row(
+        children: [
+          for (final f in _JobFilter.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(f.label),
+                selected: selected == f,
+                onSelected: (_) => onSelected(f),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -109,6 +191,13 @@ class _ProviderJobs extends StatelessWidget {
             if (wonSnapshot.connectionState == ConnectionState.waiting ||
                 bidSnapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
+            }
+            if (wonSnapshot.hasError || bidSnapshot.hasError) {
+              return const EmptyState(
+                icon: Icons.error_outline,
+                title: "Couldn't load your jobs",
+                message: 'Please check your connection and try again.',
+              );
             }
             final won = wonSnapshot.data ?? [];
             final pending = (bidSnapshot.data ?? [])

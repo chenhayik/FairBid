@@ -258,8 +258,6 @@ class _TermsCheckbox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final link = TextStyle(
-        color: context.fairbid.verified, fontWeight: FontWeight.w600);
     return Row(
       children: [
         Checkbox(
@@ -268,17 +266,9 @@ class _TermsCheckbox extends StatelessWidget {
           activeColor: context.fairbid.verified,
         ),
         Expanded(
-          child: Text.rich(
-            TextSpan(
-              text: 'I agree to the ',
-              style: theme.textTheme.bodyMedium,
-              children: [
-                TextSpan(text: 'Terms of Service', style: link),
-                const TextSpan(text: ' and '),
-                TextSpan(text: 'Privacy Policy', style: link),
-                const TextSpan(text: '.'),
-              ],
-            ),
+          child: Text(
+            'I agree to the Terms of Service and Privacy Policy.',
+            style: theme.textTheme.bodyMedium,
           ),
         ),
       ],

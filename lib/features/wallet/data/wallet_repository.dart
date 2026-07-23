@@ -16,6 +16,19 @@ abstract interface class WalletRepository {
   /// overdrafts (the `withdrawFromWallet` Cloud Function).
   Future<void> withdraw(int amountSen);
 
+  /// Starts a real toyyibPay (sandbox) top-up for [amountSen]: creates a bill
+  /// (the `createToyyibpayBill` Cloud Function) and returns its code and
+  /// hosted payment page for the caller to open in a WebView. No money moves
+  /// yet — that only happens once the bill is confirmed paid server-side.
+  Future<({String billCode, String paymentUrl})> createTopUpBill(
+      int amountSen);
+
+  /// Asks the server to re-check [billCode] against toyyibPay and credit the
+  /// wallet if it hasn't been already (the `reconcileToyyibpayTopup` Cloud
+  /// Function) — the safety net for a webhook toyyibPay never delivered.
+  /// Returns whether the bill is credited.
+  Future<bool> reconcileTopUp(String billCode);
+
   /// Streams the user's ledger entries, newest first.
   Stream<List<LedgerEntry>> watchMyTransactions(String uid);
 }
@@ -42,6 +55,27 @@ class FirebaseWalletRepository implements WalletRepository {
   Future<void> withdraw(int amountSen) async {
     await _functions.httpsCallable('withdrawFromWallet').call<void>(
         {'amountSen': amountSen});
+  }
+
+  @override
+  Future<({String billCode, String paymentUrl})> createTopUpBill(
+      int amountSen) async {
+    final result = await _functions
+        .httpsCallable('createToyyibpayBill')
+        .call<Map<Object?, Object?>>({'amountSen': amountSen});
+    final data = result.data;
+    return (
+      billCode: data['billCode'] as String,
+      paymentUrl: data['paymentUrl'] as String,
+    );
+  }
+
+  @override
+  Future<bool> reconcileTopUp(String billCode) async {
+    final result = await _functions
+        .httpsCallable('reconcileToyyibpayTopup')
+        .call<Map<Object?, Object?>>({'billCode': billCode});
+    return result.data['credited'] as bool? ?? false;
   }
 
   @override

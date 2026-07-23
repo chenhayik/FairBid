@@ -9,7 +9,7 @@
     "test": "node check_vectors.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^2.12.0",
     "firebase-admin": "^12.6.0",
     "firebase-functions": "^6.1.0"
   },

@@ -37,13 +37,16 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.auth.uid == userId
                     && !request.resource.data.keys().hasAny(trustFields())
                     && request.resource.data
-                        .get('walletBalanceSen', 0) == 0;
+                        .get('walletBalanceSen', 0) == 0
+                    && request.resource.data
+                        .get('escrowLockedSen', 0) == 0;
       allow update: if isSignedIn() && (
                       (request.auth.uid == userId
                           && !request.resource.data.diff(resource.data)
                               .affectedKeys()
                               .hasAny(trustFields()
-                                  .concat(['walletBalanceSen'])))
+                                  .concat(['walletBalanceSen',
+                                           'escrowLockedSen'])))
                       || (isAdmin()
                           && request.resource.data.diff(resource.data)
                               .affectedKeys()
@@ -72,7 +75,19 @@ service cloud.firestore {
                       && jobData(request.resource.data.jobId).requestorId
                           in [request.auth.uid, userId]
                       && jobData(request.resource.data.jobId).acceptedProviderId
-                          in [request.auth.uid, userId];
+                          in [request.auth.uid, userId]
+                      // Ratings must be a genuine 1–5 star value — otherwise a
+                      // forged rating corrupts the reviewee's Trust Score.
+                      && request.resource.data.rating is int
+                      && request.resource.data.rating >= 1
+                      && request.resource.data.rating <= 5
+                      // One review per reviewer per job: the doc id is bound
+                      // to the job + reviewer, matching the client's
+                      // deterministic id (see review_repository.dart), so a
+                      // reviewer can't spam multiple reviews for one job under
+                      // different doc ids.
+                      && reviewId == request.resource.data.jobId
+                          + '_' + request.auth.uid;
         // One narrow carve-out from immutability: reporting a review for
         // moderation may set the flag fields, once. Hiding/keeping (and the
         // Trust Score reversal) is exclusively the moderateReview Cloud
@@ -113,6 +128,20 @@ service cloud.firestore {
       return user.role == 'provider' && user.verificationStatus == 'approved';
     }
 
+    // The caller's own stored Trust Score snapshot, used to pin a bid's
+    // `providerTrustScore`/`providerScoreVisible` fields to reality — so a
+    // provider can't forge a higher score on their own bid to top the
+    // requestor's Best Value ranking.
+    function callerTrustScore() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid))
+          .data.get('trustScore', 0);
+    }
+
+    function callerScoreVisible() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid))
+          .data.get('trust', {}).get('scoreVisible', false);
+    }
+
     function ownsJob(jobId) {
       return get(/databases/$(database)/documents/jobs/$(jobId))
           .data.requestorId == request.auth.uid;
@@ -123,9 +152,14 @@ service cloud.firestore {
           .data.acceptedProviderId == request.auth.uid;
     }
 
-    function jobIsOpen(jobId) {
-      return get(/databases/$(database)/documents/jobs/$(jobId))
-          .data.status == 'open';
+    // Bidding is open while the job's status is 'open' AND its optional
+    // deadline hasn't passed — even if the closeExpiredJobs sweep hasn't yet
+    // flipped an expired job to 'cancelled', so a late bid can't sneak in
+    // during that lag.
+    function jobBiddingOpen(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return job.status == 'open'
+          && (!('deadline' in job) || request.time < job.deadline);
     }
 
     function jobIsInProgress(jobId) {
@@ -133,15 +167,17 @@ service cloud.firestore {
           .data.status == 'in_progress';
     }
 
-    // The only `status` transitions a client may write: the requestor
-    // accepting a bid (open → in_progress) or cancelling a still-open job
-    // (open → cancelled). Every other transition — completion, mid-flight
-    // cancellation — is owned by a Cloud Function (admin SDK bypasses rules),
-    // so a requestor can't self-complete or strand escrow by a direct write.
+    // The only `status` transition a client may write: cancelling a still-open
+    // job (open → cancelled). Accepting a bid (open → in_progress) now goes
+    // through the acceptBid Cloud Function (it gates on wallet balance), and
+    // every other transition — completion, mid-flight cancellation — is
+    // likewise owned by a Cloud Function (admin SDK bypasses rules), so a
+    // requestor can't self-accept, self-complete or strand escrow by a direct
+    // write.
     function jobStatusWriteOk() {
       return request.resource.data.status == resource.data.status
           || (resource.data.status == 'open'
-              && request.resource.data.status in ['in_progress', 'cancelled']);
+              && request.resource.data.status == 'cancelled');
     }
 
     // Cancellation audit fields are Cloud-Function-owned: a client must never
@@ -151,6 +187,15 @@ service cloud.firestore {
       return !request.resource.data.diff(resource.data).affectedKeys()
           .hasAny(['cancellationRequestedBy', 'cancellationReason',
                    'cancellationRequestedAt', 'cancelledAt', 'cancelledBy']);
+    }
+
+    // Bid-acceptance fields are Cloud-Function-owned (acceptBid): a client
+    // must never write them directly, or a requestor could assign a job
+    // without the server's wallet-balance gate.
+    function noAcceptFieldWrites() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['acceptedProviderId', 'acceptedProviderName',
+                   'acceptedBidAmountSen']);
     }
 
     // Jobs. Readable by any signed-in user (providers browse). Only a
@@ -166,23 +211,40 @@ service cloud.firestore {
       allow update: if isSignedIn()
                     && ((resource.data.requestorId == request.auth.uid
                          && jobStatusWriteOk()
-                         && noCancelFieldWrites())
+                         && noCancelFieldWrites()
+                         && noAcceptFieldWrites())
                         || request.resource.data.diff(resource.data)
                             .affectedKeys().hasOnly(['bidCount']));
       allow delete: if false;
 
       // Bids on a job, keyed by the bidding provider's uid (one bid per
       // provider per job). Only approved providers may place or edit their
-      // own bid; the job's owner may update bids (accept/reject); a provider
-      // may withdraw (delete) their own bid.
+      // own bid. Accepting/rejecting is server-only (the acceptBid Cloud
+      // Function, which gates on wallet balance); a provider may withdraw
+      // (delete) their own bid.
       match /bids/{bidId} {
         allow read: if isSignedIn();
         allow create, update: if isSignedIn()
-                              && ((request.auth.uid == bidId
-                                   && request.resource.data.providerId == bidId
-                                   && isApprovedProvider(request.auth.uid)
-                                   && jobIsOpen(jobId))
-                                  || ownsJob(jobId));
+                              && request.auth.uid == bidId
+                              && request.resource.data.providerId == bidId
+                              && isApprovedProvider(request.auth.uid)
+                              && jobBiddingOpen(jobId)
+                              // A negative or absurd amount must never reach
+                              // acceptBid, which trusts this stored value
+                              // when debiting the requestor's wallet. RM
+                              // 1,000,000 is a generous upper cap against
+                              // overflow abuse.
+                              && request.resource.data.amountSen is int
+                              && request.resource.data.amountSen > 0
+                              && request.resource.data.amountSen <= 100000000
+                              // The Trust Score snapshot must match the
+                              // caller's own stored profile — never a value
+                              // the client made up.
+                              && request.resource.data.providerTrustScore
+                                  == callerTrustScore()
+                              && request.resource.data
+                                  .get('providerScoreVisible', false)
+                                  == callerScoreVisible();
         // Withdraw own bid — but only while it's still pending, so a provider
         // can't delete a bid the requestor just accepted and orphan the job's
         // winner fields.
@@ -208,6 +270,18 @@ service cloud.firestore {
                           .affectedKeys()
                           .hasOnly(['status', 'submissionNote']);
         allow delete: if false;
+      }
+
+      // Per-job activity timeline: a server-written event log (job posted,
+      // status transitions, milestone transitions). Written only by Cloud
+      // Functions (admin SDK bypasses rules) — like `transactions` and
+      // `disputes`, this keeps the log from being forged by a client write.
+      // Readable by the job's two participants and admins, mirroring the
+      // milestones sub-block above.
+      match /events/{eventId} {
+        allow read: if isSignedIn()
+                    && (ownsJob(jobId) || isAcceptedProvider(jobId) || isAdmin());
+        allow write: if false;
       }
     }
 
@@ -237,17 +311,31 @@ service cloud.firestore {
     // message write. The participant list itself is immutable.
     match /conversations/{conversationId} {
       // Admins may read (not write) so they can review the job's chat
-      // history when ruling on a dispute.
+      // history when ruling on a dispute. `resource == null` permits a `get`
+      // on a not-yet-created conversation — the client checks existence
+      // (openConversation) before lazily creating it, and a non-existent doc
+      // exposes no data. Without this, that existence check is denied
+      // (null `resource.data`) and the very first chat-open always fails.
       allow read: if isSignedIn()
-                  && (request.auth.uid in resource.data.participantIds
+                  && (resource == null
+                      || request.auth.uid in resource.data.participantIds
                       || isAdmin());
       allow create: if isSignedIn()
                     && request.auth.uid in request.resource.data.participantIds
                     && request.resource.data.participantIds.size() == 2;
+      // Only the message-preview and unread-counter fields are legitimately
+      // client-written (see chat_repository.dart's sendMessage/markRead);
+      // `chatClosesAt` (Cloud-Function-owned, gates chatIsOpen()) and
+      // `participantIds` must never move through this rule, or a participant
+      // could reopen a server-closed chat.
       allow update: if isSignedIn()
                     && request.auth.uid in resource.data.participantIds
                     && request.resource.data.participantIds
-                        == resource.data.participantIds;
+                        == resource.data.participantIds
+                    && request.resource.data.diff(resource.data)
+                        .affectedKeys()
+                        .hasOnly(['lastMessageText', 'lastMessageSenderId',
+                                  'lastMessageAt', 'unreadCount']);
       allow delete: if false;
 
       // Messages are append-only: participants write as themselves; nobody
@@ -294,6 +382,14 @@ service cloud.firestore {
       allow read: if isSignedIn()
                   && (request.auth.uid in resource.data.participantIds
                       || isAdmin());
+      allow write: if false;
+    }
+
+    // toyyibPay top-up bills. Written only by createToyyibpayBill /
+    // creditToyyibpayTopup (admin SDK bypasses rules); the owner may read
+    // their own bill's status (e.g. to poll after the WebView returns).
+    match /topups/{billCode} {
+      allow read: if isSignedIn() && request.auth.uid == resource.data.uid;
       allow write: if false;
     }
 

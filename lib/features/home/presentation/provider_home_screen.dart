@@ -5,12 +5,15 @@ import 'package:provider/provider.dart';
 
 import '../../../core/location/geo.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../jobs/data/bid_repository.dart';
 import '../../jobs/data/job_repository.dart';
+import '../../jobs/data/milestone_repository.dart';
 import '../../jobs/domain/bid.dart';
 import '../../jobs/domain/job.dart';
+import '../../jobs/domain/milestone.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
 import 'home_app_bar.dart';
 
@@ -36,9 +39,9 @@ class ProviderHomeScreen extends StatelessWidget {
             _VerificationBadge(status: status),
             const SizedBox(height: 16),
             if (status == 'rejected') ...[
-              const InfoBanner(
+              InfoBanner(
                 icon: Icons.warning_amber_rounded,
-                color: Color(0xFFB07B00),
+                color: context.fairbid.warningText,
                 leftAccent: true,
                 title: 'Action Required',
                 body:
@@ -81,8 +84,7 @@ class ProviderHomeScreen extends StatelessWidget {
               children: [
                 Expanded(child: _PendingBidsStat(uid: user?.uid)),
                 const SizedBox(width: 12),
-                const Expanded(
-                    child: StatCard(label: 'Earnings (MTD)', value: 'RM 0')),
+                Expanded(child: _TotalEarningsStat(uid: user?.uid)),
               ],
             ),
             const SizedBox(height: 32),
@@ -120,6 +122,10 @@ class _ActiveJobsStat extends StatelessWidget {
     return StreamBuilder<List<Job>>(
       stream: context.read<JobRepository>().watchAssignedJobs(uid!),
       builder: (context, snapshot) {
+        if (snapshot.hasError ||
+            snapshot.connectionState == ConnectionState.waiting) {
+          return const StatCard(label: 'Active Jobs', value: '—');
+        }
         final active = (snapshot.data ?? [])
             .where((j) => j.status == JobStatus.inProgress)
             .length;
@@ -142,10 +148,44 @@ class _PendingBidsStat extends StatelessWidget {
     return StreamBuilder<List<Bid>>(
       stream: context.read<BidRepository>().watchMyBids(uid!),
       builder: (context, snapshot) {
+        if (snapshot.hasError ||
+            snapshot.connectionState == ConnectionState.waiting) {
+          return const StatCard(label: 'Pending Bids', value: '—');
+        }
         final pending = (snapshot.data ?? [])
             .where((b) => b.status == BidStatus.pending)
             .length;
         return StatCard(label: 'Pending Bids', value: '$pending');
+      },
+    );
+  }
+}
+
+/// Live total of the provider's released milestone payments across every job
+/// (relabelled from "Earnings (MTD)": month-to-date filtering isn't tracked).
+class _TotalEarningsStat extends StatelessWidget {
+  const _TotalEarningsStat({required this.uid});
+  final String? uid;
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null) {
+      return const StatCard(label: 'Total Earnings', value: '—');
+    }
+    return StreamBuilder<List<Milestone>>(
+      stream:
+          context.read<MilestoneRepository>().watchProviderMilestones(uid!),
+      builder: (context, snapshot) {
+        if (snapshot.hasError ||
+            snapshot.connectionState == ConnectionState.waiting) {
+          return const StatCard(label: 'Total Earnings', value: '—');
+        }
+        final earnedSen = (snapshot.data ?? [])
+            .where((m) =>
+                m.status == MilestoneStatus.released ||
+                m.status == MilestoneStatus.resolved)
+            .fold<int>(0, (sum, m) => sum + m.amountSen);
+        return StatCard(label: 'Total Earnings', value: formatRm(earnedSen));
       },
     );
   }
@@ -198,6 +238,9 @@ class _NearbyJobs extends StatelessWidget {
                   job: job,
                   distanceLabel: formatDistance(km),
                   onTap: () => context.push('/jobs/${job.id}'),
+                  saved: user.isSaved(job.id),
+                  onToggleSave: () =>
+                      context.read<AuthController>().toggleSaved(job.id),
                 ),
               ),
           ],

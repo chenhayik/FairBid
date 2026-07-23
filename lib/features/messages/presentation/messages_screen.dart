@@ -52,6 +52,13 @@ class _ConversationList extends StatelessWidget {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
+        if (snapshot.hasError) {
+          return const EmptyState(
+            icon: Icons.error_outline,
+            title: 'Could not load messages',
+            message: 'Please check your connection and try again.',
+          );
+        }
         final conversations = snapshot.data ?? [];
         if (conversations.isEmpty) return const _NoConversations();
         return ListView.separated(
