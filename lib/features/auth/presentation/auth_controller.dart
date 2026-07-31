@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../../core/location/region.dart';
 import '../data/auth_exception.dart';
 import '../data/auth_repository.dart';
 import '../domain/app_user.dart';
@@ -104,11 +105,17 @@ class AuthController extends ChangeNotifier {
   }
 
   /// Saves the provider's "Jobs near you" reference point, then refreshes.
-  Future<void> setBaseLocation(double lat, double lng, String address) async {
+  Future<void> setBaseLocation(PickedLocation picked) async {
     final uid = _user?.uid;
     if (uid == null) return;
     await _repository.updateBaseLocation(
-        uid: uid, lat: lat, lng: lng, address: address);
+      uid: uid,
+      lat: picked.lat,
+      lng: picked.lng,
+      address: picked.address,
+      districtCode: picked.region.districtCode,
+      town: picked.region.town,
+    );
     await refreshUser();
   }
 

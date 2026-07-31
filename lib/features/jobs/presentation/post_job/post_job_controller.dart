@@ -1,11 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../../../core/location/location_picker_screen.dart';
+import '../../../../core/location/region.dart';
 import '../../../onboarding/data/document_storage_repository.dart';
 import '../../data/assist_repository.dart';
 import '../../data/job_repository.dart';
 import '../../domain/job.dart';
+import '../../domain/service_address.dart';
 
 /// ViewModel for the Post-a-Job form: holds the category, picked location and
 /// uploaded photo URLs, creates the job, and runs the optional Gemini
@@ -25,6 +26,10 @@ class PostJobController extends ChangeNotifier {
 
   String? category;
   PickedLocation? location;
+
+  /// The precise service address to attach once the job is created, if the
+  /// requestor added one — entirely optional (see `setAddress`).
+  ServiceAddress? pendingAddress;
   final List<String> photoUrls = [];
   bool _busy = false;
   String? _errorMessage;
@@ -87,6 +92,11 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setAddress(ServiceAddress? a) {
+    pendingAddress = a;
+    notifyListeners();
+  }
+
   Future<void> addPhoto(String uid) async {
     final XFile? file;
     try {
@@ -117,12 +127,23 @@ class PostJobController extends ChangeNotifier {
     _storage.deleteByUrl(url).catchError((_) {});
   }
 
-  /// Creates the job and returns its new id, or null on failure.
+  /// Creates the job and returns its new id, or null on failure. When an
+  /// optional [pendingAddress] was set, best-effort attaches it after the
+  /// job is created — a failed address write never loses the created job.
   Future<String?> submit(Job job) async {
     _setBusy(true);
     _errorMessage = null;
     try {
-      return await _jobs.create(job);
+      final id = await _jobs.create(job);
+      final address = pendingAddress;
+      if (address != null) {
+        try {
+          await _jobs.setJobAddress(id, address);
+        } catch (_) {
+          // Best-effort only — the job itself was created successfully.
+        }
+      }
+      return id;
     } catch (_) {
       _errorMessage = 'Could not post the job. Please try again.';
       return null;

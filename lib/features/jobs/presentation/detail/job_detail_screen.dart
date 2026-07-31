@@ -21,6 +21,7 @@ import '../../domain/job.dart';
 import '../../domain/job_event.dart';
 import '../bid/submit_bid_sheet.dart';
 import '../widgets/bid_card.dart';
+import 'job_address_card.dart';
 import 'milestone_section.dart';
 
 /// Full job detail. The requestor compares and accepts bids; a verified
@@ -290,6 +291,11 @@ class _RequestorSection extends StatefulWidget {
 class _RequestorSectionState extends State<_RequestorSection> {
   _BidSort _sort = _BidSort.bestValue;
 
+  // Cached so changing the sort (a setState) re-orders the already-loaded bids
+  // client-side instead of resubscribing to Firestore and flashing the spinner.
+  late final Stream<List<Bid>> _bids =
+      context.read<BidRepository>().watchBids(widget.job.id);
+
   Future<void> _accept(Bid bid) async {
     final available =
         context.read<AuthController>().user?.availableBalanceSen;
@@ -400,6 +406,8 @@ class _RequestorSectionState extends State<_RequestorSection> {
           _AssignedProviderCard(job: job),
           if (job.acceptedProviderId != null) ...[
             const SizedBox(height: 16),
+            JobAddressCard(job: job, isOwner: true),
+            const SizedBox(height: 16),
             // Funding/releasing milestones is what completes the job now —
             // no manual "mark complete" button.
             MilestoneSection(job: job),
@@ -421,7 +429,7 @@ class _RequestorSectionState extends State<_RequestorSection> {
     }
 
     final bidList = StreamBuilder<List<Bid>>(
-      stream: context.read<BidRepository>().watchBids(job.id),
+      stream: _bids,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -717,6 +725,8 @@ class _ProviderAssignedView extends StatelessWidget {
       children: [
         _AssignedProviderCard(job: job),
         if (isAssigned) ...[
+          const SizedBox(height: 16),
+          JobAddressCard(job: job, isOwner: false),
           const SizedBox(height: 16),
           MilestoneSection(job: job),
           if (job.status == JobStatus.inProgress) ...[

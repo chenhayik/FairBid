@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'core/app.dart';
 import 'features/admin/data/moderation_repository.dart';
 import 'features/admin/data/stats_repository.dart';
+import 'features/admin/data/user_admin_repository.dart';
 import 'features/admin/data/verification_repository.dart';
 import 'features/auth/data/auth_repository.dart';
 import 'features/disputes/data/dispute_repository.dart';
@@ -48,6 +49,7 @@ Future<void> main() async {
     bidRepository: FirestoreBidRepository(),
     reviewRepository: FirebaseReviewRepository(),
     verificationRepository: FirestoreVerificationRepository(),
+    userAdminRepository: FirestoreUserAdminRepository(),
     chatRepository: FirestoreChatRepository(),
     milestoneRepository: FirestoreMilestoneRepository(),
     walletRepository: FirebaseWalletRepository(),

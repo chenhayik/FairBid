@@ -32,11 +32,18 @@ class RequestorOnboardingData {
   // Stage 1 — account type.
   RequestorType? type;
 
-  // Stage 2 — details.
+  // Stage 2 — details. `location` mirrors `Region.label` (kept as a plain
+  // string for backward-compatible display); `districtCode`/`town`/`lat`/
+  // `lng` are the structured pick behind it, from the Penang-scoped location
+  // picker.
   String fullName = '';
   String? profilePhotoUrl;
   String phone = '';
   String location = '';
+  String? districtCode;
+  String? town;
+  double? lat;
+  double? lng;
   String companyName = ''; // business only
   String ssmNumber = ''; // business only
 
@@ -54,6 +61,10 @@ class RequestorOnboardingData {
         'profilePhotoUrl': profilePhotoUrl,
         'phone': phone,
         'location': location,
+        'districtCode': districtCode,
+        'town': town,
+        'lat': lat,
+        'lng': lng,
         'companyName': companyName,
         'ssmNumber': ssmNumber,
       };
@@ -79,6 +90,10 @@ class RequestorOnboardingData {
       ..profilePhotoUrl = map['profilePhotoUrl'] as String?
       ..phone = map['phone'] as String? ?? ''
       ..location = map['location'] as String? ?? ''
+      ..districtCode = map['districtCode'] as String?
+      ..town = map['town'] as String?
+      ..lat = (map['lat'] as num?)?.toDouble()
+      ..lng = (map['lng'] as num?)?.toDouble()
       ..companyName = map['companyName'] as String? ?? ''
       ..ssmNumber = map['ssmNumber'] as String? ?? ''
       ..clientDocumentUrl = map['clientDocumentUrl'] as String?;

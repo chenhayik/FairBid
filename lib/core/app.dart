@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../features/admin/data/moderation_repository.dart';
 import '../features/admin/data/stats_repository.dart';
+import '../features/admin/data/user_admin_repository.dart';
 import '../features/admin/data/verification_repository.dart';
 import '../features/auth/data/auth_repository.dart';
 import '../features/auth/presentation/auth_controller.dart';
@@ -38,6 +39,7 @@ class FairBidApp extends StatelessWidget {
     required this.bidRepository,
     required this.reviewRepository,
     required this.verificationRepository,
+    required this.userAdminRepository,
     required this.chatRepository,
     required this.milestoneRepository,
     required this.walletRepository,
@@ -57,6 +59,7 @@ class FairBidApp extends StatelessWidget {
   final BidRepository bidRepository;
   final ReviewRepository reviewRepository;
   final VerificationRepository verificationRepository;
+  final UserAdminRepository userAdminRepository;
   final ChatRepository chatRepository;
   final MilestoneRepository milestoneRepository;
   final WalletRepository walletRepository;
@@ -77,6 +80,7 @@ class FairBidApp extends StatelessWidget {
         Provider<ReviewRepository>.value(value: reviewRepository),
         Provider<VerificationRepository>.value(
             value: verificationRepository),
+        Provider<UserAdminRepository>.value(value: userAdminRepository),
         Provider<DocumentStorageRepository>.value(
             value: documentStorageRepository),
         Provider<ChatRepository>.value(value: chatRepository),

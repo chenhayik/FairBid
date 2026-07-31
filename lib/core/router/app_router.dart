@@ -4,8 +4,10 @@ import 'package:go_router/go_router.dart';
 import '../../features/admin/domain/pending_verification.dart';
 import '../../features/admin/presentation/verification_detail_screen.dart';
 import '../../features/auth/presentation/auth_controller.dart';
+import '../../features/auth/domain/user_role.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/register_screen.dart';
+import '../../features/auth/presentation/suspended_screen.dart';
 import '../../features/disputes/domain/dispute.dart';
 import '../../features/disputes/presentation/dispute_detail_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
@@ -39,6 +41,14 @@ GoRouter buildRouter(AuthController auth) {
 
       // Signed out → only the auth screens are reachable.
       if (user == null) return onAuthScreen ? null : '/login';
+
+      // Suspended users (never admins) are locked to the suspended notice —
+      // above onboarding so a mid-onboarding suspension still applies.
+      if (user.suspended && user.role != UserRole.admin) {
+        return location == '/suspended' ? null : '/suspended';
+      }
+      // A reinstated user must never linger on the suspended screen.
+      if (location == '/suspended') return '/home';
 
       // Providers who haven't submitted onboarding are locked into it.
       if (user.needsOnboarding) {
@@ -97,6 +107,11 @@ GoRouter buildRouter(AuthController auth) {
       GoRoute(
           path: '/notifications',
           builder: (_, _) => const NotificationsScreen()),
+
+      // Shown when an admin has suspended the account (router redirects every
+      // other route here for a suspended non-admin user).
+      GoRoute(
+          path: '/suspended', builder: (_, _) => const SuspendedScreen()),
 
       // Profile — pushed full-screen (outside the tab shell) with a back button.
       GoRoute(

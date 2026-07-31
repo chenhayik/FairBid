@@ -18,6 +18,17 @@ service cloud.firestore {
       return isSignedIn() && roleOf(request.auth.uid) == 'admin';
     }
 
+    // A suspended account keeps read access but is frozen out of every write
+    // (posting, bidding, reviewing, chatting, editing its profile). The
+    // `suspended` flag is server-owned — set only by the setUserSuspended
+    // Cloud Function; the users write rules below forbid any client from
+    // setting or clearing it, so a suspended user can't lift their own ban.
+    function isSuspended() {
+      return isSignedIn()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid))
+              .data.get('suspended', false) == true;
+    }
+
     // User profiles. Any signed-in user may read a profile (needed to show
     // names/ratings on jobs, bids and chats). A user may create/edit their own
     // document, except for the Trust Score fields (score, breakdown and its
@@ -35,18 +46,23 @@ service cloud.firestore {
 
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userId
-                    && !request.resource.data.keys().hasAny(trustFields())
+                    && !request.resource.data.keys().hasAny(
+                        trustFields().concat(['suspended', 'suspensionReason',
+                                              'suspendedAt', 'suspendedBy']))
                     && request.resource.data
                         .get('walletBalanceSen', 0) == 0
                     && request.resource.data
                         .get('escrowLockedSen', 0) == 0;
       allow update: if isSignedIn() && (
                       (request.auth.uid == userId
+                          && !isSuspended()
                           && !request.resource.data.diff(resource.data)
                               .affectedKeys()
                               .hasAny(trustFields()
                                   .concat(['walletBalanceSen',
-                                           'escrowLockedSen'])))
+                                           'escrowLockedSen', 'suspended',
+                                           'suspensionReason', 'suspendedAt',
+                                           'suspendedBy'])))
                       || (isAdmin()
                           && request.resource.data.diff(resource.data)
                               .affectedKeys()
@@ -69,6 +85,7 @@ service cloud.firestore {
 
         allow read: if isSignedIn();
         allow create: if isSignedIn()
+                      && !isSuspended()
                       && request.resource.data.reviewerId == request.auth.uid
                       && request.auth.uid != userId
                       && jobData(request.resource.data.jobId).status == 'completed'
@@ -206,6 +223,7 @@ service cloud.firestore {
     match /jobs/{jobId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn()
+                    && !isSuspended()
                     && request.resource.data.requestorId == request.auth.uid
                     && roleOf(request.auth.uid) == 'requestor';
       allow update: if isSignedIn()
@@ -225,6 +243,7 @@ service cloud.firestore {
       match /bids/{bidId} {
         allow read: if isSignedIn();
         allow create, update: if isSignedIn()
+                              && !isSuspended()
                               && request.auth.uid == bidId
                               && request.resource.data.providerId == bidId
                               && isApprovedProvider(request.auth.uid)
@@ -263,7 +282,8 @@ service cloud.firestore {
         allow read: if isSignedIn()
                     && (ownsJob(jobId) || isAcceptedProvider(jobId));
         allow create: if false;
-        allow update: if isSignedIn() && isAcceptedProvider(jobId)
+        allow update: if isSignedIn() && !isSuspended()
+                      && isAcceptedProvider(jobId)
                       && resource.data.status == 'funded'
                       && request.resource.data.status == 'submitted'
                       && request.resource.data.diff(resource.data)
@@ -282,6 +302,17 @@ service cloud.firestore {
         allow read: if isSignedIn()
                     && (ownsJob(jobId) || isAcceptedProvider(jobId) || isAdmin());
         allow write: if false;
+      }
+
+      // The requestor's precise service address (street, postcode, access
+      // notes), kept private: readable only by the job's owner, its
+      // accepted provider and admins — never by other bidders. Written by
+      // the owner.
+      match /private/{docId} {
+        allow read: if isSignedIn()
+                    && (ownsJob(jobId) || isAcceptedProvider(jobId) || isAdmin());
+        allow create, update: if isSignedIn() && !isSuspended() && ownsJob(jobId);
+        allow delete: if false;
       }
     }
 
@@ -321,6 +352,7 @@ service cloud.firestore {
                       || request.auth.uid in resource.data.participantIds
                       || isAdmin());
       allow create: if isSignedIn()
+                    && !isSuspended()
                     && request.auth.uid in request.resource.data.participantIds
                     && request.resource.data.participantIds.size() == 2;
       // Only the message-preview and unread-counter fields are legitimately
@@ -357,6 +389,7 @@ service cloud.firestore {
                     && (request.auth.uid in conversation().participantIds
                         || isAdmin());
         allow create: if isSignedIn()
+                      && !isSuspended()
                       && request.auth.uid in conversation().participantIds
                       && request.resource.data.senderId == request.auth.uid
                       && chatIsOpen(conversation());

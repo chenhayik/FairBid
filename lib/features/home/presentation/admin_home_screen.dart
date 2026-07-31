@@ -1,28 +1,29 @@
 import 'package:flutter/material.dart';
 
+import '../../admin/presentation/manage_users_screen.dart';
 import '../../admin/presentation/moderation_queue_screen.dart';
 import '../../admin/presentation/platform_stats_screen.dart';
 import '../../admin/presentation/verification_queue_screen.dart';
 import '../../disputes/presentation/dispute_queue_screen.dart';
 import 'home_app_bar.dart';
 
-/// Admin Home: the four admin surfaces from the technical plan §9 —
-/// verification queue, dispute queue, review moderation and platform
-/// statistics — as Material tabs under the shared app bar.
+/// Admin Home: the admin surfaces from the technical plan §9 — verification
+/// queue, dispute queue, review moderation and platform statistics — plus user
+/// management, as Material tabs under the shared app bar.
 class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: const HomeAppBar(),
         body: SafeArea(
           child: Column(
             children: [
               const TabBar(
-                // Scrollable so four labels fit a phone width.
+                // Scrollable so the labels fit a phone width.
                 isScrollable: true,
                 tabAlignment: TabAlignment.start,
                 tabs: [
@@ -30,6 +31,7 @@ class AdminHomeScreen extends StatelessWidget {
                   Tab(text: 'Disputes'),
                   Tab(text: 'Reviews'),
                   Tab(text: 'Stats'),
+                  Tab(text: 'Users'),
                 ],
               ),
               const Expanded(
@@ -39,6 +41,7 @@ class AdminHomeScreen extends StatelessWidget {
                     DisputeQueueScreen(),
                     ModerationQueueScreen(),
                     PlatformStatsScreen(),
+                    ManageUsersScreen(),
                   ],
                 ),
               ),

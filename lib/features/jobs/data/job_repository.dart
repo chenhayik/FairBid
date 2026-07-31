@@ -3,6 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/job.dart';
 import '../domain/job_event.dart';
+import '../domain/service_address.dart';
 
 /// Reads and writes jobs. UI/controllers depend on this interface so tests can
 /// use a fake without Firestore.
@@ -53,6 +54,15 @@ abstract interface class JobRepository {
   /// bookmarked ids in [jobIds]. Yields an empty list without querying when
   /// [jobIds] is empty.
   Stream<List<Job>> watchSavedJobs(List<String> jobIds);
+
+  /// Saves (or overwrites) [jobId]'s private service address. Only the
+  /// job's owner may write it (see `firestore.rules`).
+  Future<void> setJobAddress(String jobId, ServiceAddress address);
+
+  /// Streams [jobId]'s private service address, emitting `null` when none
+  /// has been set. Readable only by the job's owner, its accepted provider
+  /// and admins.
+  Stream<ServiceAddress?> watchJobAddress(String jobId);
 }
 
 /// Firestore-backed [JobRepository]. Jobs live in a top-level `jobs` collection.
@@ -173,6 +183,25 @@ class FirestoreJobRepository implements JobRepository {
         .where(FieldPath.documentId, whereIn: jobIds.take(30).toList())
         .snapshots()
         .map(_toJobs);
+  }
+
+  @override
+  Future<void> setJobAddress(String jobId, ServiceAddress address) {
+    return _jobs
+        .doc(jobId)
+        .collection('private')
+        .doc('address')
+        .set(address.toMap());
+  }
+
+  @override
+  Stream<ServiceAddress?> watchJobAddress(String jobId) {
+    return _jobs
+        .doc(jobId)
+        .collection('private')
+        .doc('address')
+        .snapshots()
+        .map((doc) => ServiceAddress.fromMap(doc.data()));
   }
 
   List<Job> _toJobs(QuerySnapshot<Map<String, dynamic>> snapshot) =>

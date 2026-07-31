@@ -46,7 +46,7 @@ class FirebasePushService implements PushService {
     // Local-notifications setup, used to display foreground messages (FCM
     // shows nothing on its own while the app is open).
     await _local.initialize(
-      const InitializationSettings(
+      settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
       onDidReceiveNotificationResponse: (response) {
@@ -64,10 +64,10 @@ class FirebasePushService implements PushService {
       final notification = message.notification;
       if (notification == null) return;
       _local.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        NotificationDetails(
+        id: notification.hashCode,
+        title: notification.title,
+        body: notification.body,
+        notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _channel.id,
             _channel.name,

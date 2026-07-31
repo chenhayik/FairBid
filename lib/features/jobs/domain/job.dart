@@ -29,25 +29,44 @@ enum JobStatus {
       };
 }
 
-/// A map-picked location: coordinates plus a human-readable label.
+/// A map-picked location: coordinates plus a human-readable label. [address]
+/// is the composed `Region.label` for locations picked with the structured
+/// picker, or a raw legacy string for older jobs that predate it — either way
+/// it's always safe to display as-is. [districtCode]/[districtName]/[town]
+/// are null on that legacy data.
 class JobLocation {
   const JobLocation({
     required this.lat,
     required this.lng,
     required this.address,
+    this.districtCode,
+    this.districtName,
+    this.town,
   });
 
   final double lat;
   final double lng;
   final String address;
+  final String? districtCode;
+  final String? districtName;
+  final String? town;
 
-  Map<String, dynamic> toMap() =>
-      {'lat': lat, 'lng': lng, 'address': address};
+  Map<String, dynamic> toMap() => {
+        'lat': lat,
+        'lng': lng,
+        'address': address,
+        'districtCode': districtCode,
+        'districtName': districtName,
+        'town': town,
+      };
 
   static JobLocation fromMap(Map<String, dynamic>? m) => JobLocation(
         lat: (m?['lat'] as num?)?.toDouble() ?? 0,
         lng: (m?['lng'] as num?)?.toDouble() ?? 0,
         address: m?['address'] as String? ?? '',
+        districtCode: m?['districtCode'] as String?,
+        districtName: m?['districtName'] as String?,
+        town: m?['town'] as String?,
       );
 }
 

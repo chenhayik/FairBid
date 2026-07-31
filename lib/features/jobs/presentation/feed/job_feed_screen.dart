@@ -4,7 +4,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/location/geo.dart';
-import '../../../../core/location/location_picker_screen.dart';
+import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
@@ -37,11 +37,9 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   }
 
   Future<void> _setBaseLocation() async {
-    final picked = await LocationPickerScreen.show(context);
+    final picked = await RegionPickerScreen.show(context);
     if (picked == null || !mounted) return;
-    await context
-        .read<AuthController>()
-        .setBaseLocation(picked.lat, picked.lng, picked.address);
+    await context.read<AuthController>().setBaseLocation(picked);
   }
 
   /// Applies the category, search, budget and radius filters and sorts by

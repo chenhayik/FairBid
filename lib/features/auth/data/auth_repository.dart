@@ -40,12 +40,15 @@ abstract interface class AuthRepository {
   /// using [roleIfNew]; existing accounts keep their stored role.
   Future<void> signInWithGoogle({required UserRole roleIfNew});
 
-  /// Saves a provider's reference point for "Jobs near you".
+  /// Saves a provider's reference point for "Jobs near you". [districtCode]
+  /// is one of Penang's 5 districts (see `Region`); [town] is optional.
   Future<void> updateBaseLocation({
     required String uid,
     required double lat,
     required double lng,
     required String address,
+    required String districtCode,
+    String? town,
   });
 
   /// Saves the editable profile fields (Edit Profile screen). Only the passed
@@ -217,11 +220,15 @@ class FirebaseAuthRepository implements AuthRepository {
     required double lat,
     required double lng,
     required String address,
+    required String districtCode,
+    String? town,
   }) {
     return _users.doc(uid).set({
       'baseLat': lat,
       'baseLng': lng,
       'baseAddress': address,
+      'baseDistrictCode': districtCode,
+      'baseTown': town,
     }, SetOptions(merge: true));
   }
 
@@ -364,6 +371,12 @@ class FirebaseAuthRepository implements AuthRepository {
       baseLat: (data?['baseLat'] as num?)?.toDouble(),
       baseLng: (data?['baseLng'] as num?)?.toDouble(),
       baseAddress: data?['baseAddress'] as String?,
+      baseDistrictCode: data?['baseDistrictCode'] as String?,
+      baseTown: data?['baseTown'] as String?,
+      defaultLat: (data?['lat'] as num?)?.toDouble(),
+      defaultLng: (data?['lng'] as num?)?.toDouble(),
+      defaultDistrictCode: data?['districtCode'] as String?,
+      defaultTown: data?['town'] as String?,
       bio: data?['bio'] as String?,
       walletBalanceSen: (data?['walletBalanceSen'] as num?)?.toInt() ?? 0,
       escrowLockedSen: (data?['escrowLockedSen'] as num?)?.toInt() ?? 0,
@@ -383,6 +396,8 @@ class FirebaseAuthRepository implements AuthRepository {
       watchlist:
           (data?['watchlist'] as List?)?.whereType<String>().toList() ??
               const [],
+      suspended: data?['suspended'] as bool? ?? false,
+      suspensionReason: data?['suspensionReason'] as String?,
     );
   }
 

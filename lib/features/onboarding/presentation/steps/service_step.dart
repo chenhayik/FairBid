@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/location/region.dart';
+import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
-import '../../../auth/presentation/validators.dart';
+import '../../../../core/widgets/location_field.dart';
 import '../onboarding_controller.dart';
 
 /// Service categories offered on FairBid (Malaysian market).
@@ -32,30 +35,58 @@ class ServiceStep extends StatefulWidget {
 
 class _ServiceStepState extends State<ServiceStep> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _coverage;
   late final TextEditingController _rate;
 
   @override
   void initState() {
     super.initState();
     final data = context.read<OnboardingController>().data;
-    _coverage = TextEditingController(text: data.coverageArea);
     _rate = TextEditingController(text: data.hourlyRate);
   }
 
   @override
   void dispose() {
-    _coverage.dispose();
     _rate.dispose();
     super.dispose();
+  }
+
+  /// Opens the Penang-scoped picker and stores both the composed label
+  /// ([OnboardingData.coverageArea]) and the structured pick behind it.
+  Future<void> _pickLocation() async {
+    final onboarding = context.read<OnboardingController>();
+    final data = onboarding.data;
+    final picked = await RegionPickerScreen.show(
+      context,
+      initialCenter: data.lat == null || data.lng == null
+          ? null
+          : LatLng(data.lat!, data.lng!),
+      initialRegion: data.districtCode == null
+          ? null
+          : Region(
+              districtCode: data.districtCode!,
+              districtName: Region.districtNameFor(data.districtCode!),
+              town: data.town,
+            ),
+    );
+    if (picked == null) return;
+    setState(() {
+      data.coverageArea = picked.address;
+      data.districtCode = picked.region.districtCode;
+      data.town = picked.region.town;
+      data.lat = picked.lat;
+      data.lng = picked.lng;
+    });
   }
 
   void _saveAndContinue() {
     if (!_formKey.currentState!.validate()) return;
     final onboarding = context.read<OnboardingController>();
-    onboarding.data
-      ..coverageArea = _coverage.text.trim()
-      ..hourlyRate = _rate.text.trim();
+    if (onboarding.data.districtCode == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please pick a coverage area.')));
+      return;
+    }
+    onboarding.data.hourlyRate = _rate.text.trim();
     onboarding.saveAndContinue();
   }
 
@@ -91,13 +122,14 @@ class _ServiceStepState extends State<ServiceStep> {
                     v == null ? 'Please select a category.' : null,
               ),
               const SizedBox(height: 16),
-              AppTextField(
-                controller: _coverage,
-                label: 'Coverage Area',
-                hint: 'e.g., Kuala Lumpur + 20km',
-                prefixIcon: Icons.location_on_outlined,
-                validator: (v) => Validators.required(v, 'Coverage area'),
+              Text('Coverage Area', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 6),
+              LocationField(
+                label: data.coverageArea,
+                placeholder: 'Pick your coverage area in Penang',
+                onTap: _pickLocation,
               ),
+              const SizedBox(height: 16),
               AppTextField(
                 controller: _rate,
                 label: 'Indicative Hourly Rate (RM)',

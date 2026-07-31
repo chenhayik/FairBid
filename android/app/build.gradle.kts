@@ -16,7 +16,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         // flutter_local_notifications uses java.time APIs that need backporting
-        // on our minSdk (23).
+        // on our minSdk (24).
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -29,8 +29,10 @@ android {
         applicationId = "com.FYP.fairbid"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // firebase_auth 6.x requires a minimum of API 23.
-        minSdk = maxOf(flutter.minSdkVersion, 23)
+        // firebase_auth 6.x needs API 23; flutter_local_notifications 21+ needs
+        // API 24 (Android 7.0) — the binding floor. Raising this drops Android
+        // 6.0 (API 23) devices.
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -47,7 +49,7 @@ android {
 
 dependencies {
     // Required by the desugaring enabled in compileOptions above.
-    // flutter_local_notifications 19.x needs 2.1.4 or newer.
+    // flutter_local_notifications 22.x needs 2.1.4 or newer.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
 

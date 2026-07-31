@@ -5,12 +5,19 @@ import 'dart:io';
 import 'package:fairbid/core/app.dart';
 import 'package:fairbid/core/config/platform_config.dart';
 import 'package:fairbid/core/location/geo.dart';
+import 'package:fairbid/core/location/penang.dart';
+import 'package:fairbid/core/location/penang_districts.dart';
+import 'package:fairbid/core/location/region.dart';
+import 'package:fairbid/core/location/region_picker_screen.dart';
+import 'package:fairbid/core/theme/app_theme.dart';
 import 'package:fairbid/core/util/money.dart';
 import 'package:fairbid/core/widgets/app_widgets.dart';
 import 'package:fairbid/features/admin/data/moderation_repository.dart';
 import 'package:fairbid/features/admin/data/stats_repository.dart';
+import 'package:fairbid/features/admin/data/user_admin_repository.dart';
 import 'package:fairbid/features/admin/data/verification_repository.dart';
 import 'package:fairbid/features/admin/domain/flagged_review.dart';
+import 'package:fairbid/features/admin/domain/managed_user.dart';
 import 'package:fairbid/features/admin/domain/pending_verification.dart';
 import 'package:fairbid/features/admin/domain/platform_stats.dart';
 import 'package:fairbid/features/auth/data/auth_exception.dart';
@@ -28,6 +35,7 @@ import 'package:fairbid/features/jobs/domain/bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
+import 'package:fairbid/features/jobs/domain/service_address.dart';
 import 'package:fairbid/features/jobs/presentation/widgets/bid_card.dart';
 import 'package:fairbid/features/messages/data/chat_repository.dart';
 import 'package:fairbid/features/messages/domain/conversation.dart';
@@ -40,6 +48,8 @@ import 'package:fairbid/features/onboarding/data/onboarding_repository.dart';
 import 'package:fairbid/features/onboarding/data/requestor_onboarding_repository.dart';
 import 'package:fairbid/features/onboarding/domain/onboarding_data.dart';
 import 'package:fairbid/features/onboarding/domain/requestor_onboarding_data.dart';
+import 'package:fairbid/features/onboarding/presentation/onboarding_controller.dart';
+import 'package:fairbid/features/onboarding/presentation/steps/service_step.dart';
 import 'package:fairbid/features/profile/data/review_repository.dart';
 import 'package:fairbid/features/profile/domain/review.dart';
 import 'package:fairbid/features/profile/presentation/edit_profile_screen.dart';
@@ -49,6 +59,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart';
 
 /// In-memory [AuthRepository] used to drive the UI in tests without Firebase.
 ///
@@ -65,6 +76,8 @@ class FakeAuthRepository implements AuthRepository {
   bool onboardingComplete = true;
   double? baseLat;
   double? baseLng;
+  String? baseDistrictCode;
+  String? baseTown;
   String displayName = 'Test User';
   String? phone;
   String? location;
@@ -82,6 +95,11 @@ class FakeAuthRepository implements AuthRepository {
   int ratingSum = 0;
   int jobsCompleted = 0;
   int disputesLost = 0;
+
+  /// Mirrors the server-owned `suspended` flag; set before [seedSignedIn] to
+  /// boot the app as a suspended user.
+  bool suspended = false;
+  String? suspensionReason;
 
   /// Mirrors the `watchlist` array Firestore field; seed a job id here (or
   /// mutate it via [setJobSaved]) so tests can assert the watchlist toggle.
@@ -117,6 +135,8 @@ class FakeAuthRepository implements AuthRepository {
       onboardingComplete: onboardingComplete,
       baseLat: baseLat,
       baseLng: baseLng,
+      baseDistrictCode: baseDistrictCode,
+      baseTown: baseTown,
       phone: phone,
       location: location,
       bio: bio,
@@ -131,6 +151,8 @@ class FakeAuthRepository implements AuthRepository {
       disputesLost: disputesLost,
       trustScore: trust.composite,
       trustBreakdown: trust,
+      suspended: suspended,
+      suspensionReason: suspensionReason,
       watchlist: List.of(watchlist),
     );
   }
@@ -155,9 +177,13 @@ class FakeAuthRepository implements AuthRepository {
     required double lat,
     required double lng,
     required String address,
+    required String districtCode,
+    String? town,
   }) async {
     baseLat = lat;
     baseLng = lng;
+    baseDistrictCode = districtCode;
+    baseTown = town;
   }
 
   @override
@@ -178,8 +204,7 @@ class FakeAuthRepository implements AuthRepository {
   Future<void> signInWithEmail({
     required String email,
     required String password,
-  }) async =>
-      _signIn(UserRole.requestor);
+  }) async => _signIn(UserRole.requestor);
 
   /// Emails for which [sendPasswordReset] was called, for tests to assert.
   final passwordResetsSent = <String>[];
@@ -196,8 +221,7 @@ class FakeAuthRepository implements AuthRepository {
     required String password,
     required String displayName,
     required UserRole role,
-  }) async =>
-      _signIn(role);
+  }) async => _signIn(role);
 
   @override
   Future<void> signInWithGoogle({required UserRole roleIfNew}) async =>
@@ -289,22 +313,19 @@ class FakeDocumentStorageRepository implements DocumentStorageRepository {
     required String uid,
     required String purpose,
     required XFile file,
-  }) async =>
-      'https://fake.storage/$uid/$purpose';
+  }) async => 'https://fake.storage/$uid/$purpose';
 
   @override
   Future<String> uploadJobPhoto({
     required String uid,
     required XFile file,
-  }) async =>
-      'https://fake.storage/jobs/$uid';
+  }) async => 'https://fake.storage/jobs/$uid';
 
   @override
   Future<String> uploadDisputeEvidence({
     required String uid,
     required XFile file,
-  }) async =>
-      'https://fake.storage/disputes/$uid';
+  }) async => 'https://fake.storage/disputes/$uid';
 
   @override
   Future<void> deleteByUrl(String url) async {}
@@ -315,6 +336,7 @@ class FakeJobRepository implements JobRepository {
   FakeJobRepository([List<Job> jobs = const []]) : _jobs = [...jobs];
 
   final List<Job> _jobs;
+  final _addresses = <String, ServiceAddress>{};
   final _changes = StreamController<void>.broadcast();
 
   void _notify() => _changes.add(null);
@@ -366,19 +388,26 @@ class FakeJobRepository implements JobRepository {
   Future<void> requestCancellation(String jobId, {String? reason}) async {
     final i = _jobs.indexWhere((j) => j.id == jobId);
     if (i == -1) return;
-    _jobs[i] = _rebuild(_jobs[i],
-        cancellationRequestedBy: 'requestor', cancellationReason: reason);
+    _jobs[i] = _rebuild(
+      _jobs[i],
+      cancellationRequestedBy: 'requestor',
+      cancellationReason: reason,
+    );
     _notify();
   }
 
   @override
-  Future<void> respondToCancellation(String jobId,
-      {required bool accept}) async {
+  Future<void> respondToCancellation(
+    String jobId, {
+    required bool accept,
+  }) async {
     final i = _jobs.indexWhere((j) => j.id == jobId);
     if (i == -1) return;
-    _jobs[i] = _rebuild(_jobs[i],
-        status: accept ? JobStatus.cancelled : null,
-        clearCancellationRequest: true);
+    _jobs[i] = _rebuild(
+      _jobs[i],
+      status: accept ? JobStatus.cancelled : null,
+      clearCancellationRequest: true,
+    );
     _notify();
   }
 
@@ -402,6 +431,20 @@ class FakeJobRepository implements JobRepository {
     yield mine();
     await for (final _ in _changes.stream) {
       yield mine();
+    }
+  }
+
+  @override
+  Future<void> setJobAddress(String jobId, ServiceAddress address) async {
+    _addresses[jobId] = address;
+    _notify();
+  }
+
+  @override
+  Stream<ServiceAddress?> watchJobAddress(String jobId) async* {
+    yield _addresses[jobId];
+    await for (final _ in _changes.stream) {
+      yield _addresses[jobId];
     }
   }
 
@@ -438,31 +481,30 @@ class FakeJobRepository implements JobRepository {
     String? cancellationRequestedBy,
     String? cancellationReason,
     bool clearCancellationRequest = false,
-  }) =>
-      Job(
-        id: j.id,
-        requestorId: j.requestorId,
-        requestorName: j.requestorName,
-        title: j.title,
-        description: j.description,
-        category: j.category,
-        location: j.location,
-        budget: j.budget,
-        photoUrls: j.photoUrls,
-        status: status ?? j.status,
-        bidCount: j.bidCount,
-        createdAt: j.createdAt,
-        deadline: j.deadline,
-        acceptedProviderId: acceptedProviderId ?? j.acceptedProviderId,
-        acceptedProviderName: acceptedProviderName ?? j.acceptedProviderName,
-        acceptedBidAmountSen: acceptedBidAmountSen ?? j.acceptedBidAmountSen,
-        cancellationRequestedBy: clearCancellationRequest
-            ? null
-            : (cancellationRequestedBy ?? j.cancellationRequestedBy),
-        cancellationReason: clearCancellationRequest
-            ? null
-            : (cancellationReason ?? j.cancellationReason),
-      );
+  }) => Job(
+    id: j.id,
+    requestorId: j.requestorId,
+    requestorName: j.requestorName,
+    title: j.title,
+    description: j.description,
+    category: j.category,
+    location: j.location,
+    budget: j.budget,
+    photoUrls: j.photoUrls,
+    status: status ?? j.status,
+    bidCount: j.bidCount,
+    createdAt: j.createdAt,
+    deadline: j.deadline,
+    acceptedProviderId: acceptedProviderId ?? j.acceptedProviderId,
+    acceptedProviderName: acceptedProviderName ?? j.acceptedProviderName,
+    acceptedBidAmountSen: acceptedBidAmountSen ?? j.acceptedBidAmountSen,
+    cancellationRequestedBy: clearCancellationRequest
+        ? null
+        : (cancellationRequestedBy ?? j.cancellationRequestedBy),
+    cancellationReason: clearCancellationRequest
+        ? null
+        : (cancellationReason ?? j.cancellationReason),
+  );
 }
 
 /// In-memory [BidRepository]. Streams re-emit whenever a bid changes so the
@@ -473,7 +515,7 @@ class FakeJobRepository implements JobRepository {
 /// mirroring the `acceptBid` Cloud Function.
 class FakeBidRepository implements BidRepository {
   FakeBidRepository(this.jobs, this.auth, [List<Bid> bids = const []])
-      : _bids = [...bids];
+    : _bids = [...bids];
 
   final FakeJobRepository jobs;
   final FakeAuthRepository auth;
@@ -483,29 +525,29 @@ class FakeBidRepository implements BidRepository {
   void _notify() => _changes.add(null);
 
   Bid _withStatus(Bid b, BidStatus status) => Bid(
-        jobId: b.jobId,
-        providerId: b.providerId,
-        providerName: b.providerName,
-        providerTrustScore: b.providerTrustScore,
-        amountSen: b.amountSen,
-        estimatedDuration: b.estimatedDuration,
-        message: b.message,
-        status: status,
-        createdAt: b.createdAt,
-      );
+    jobId: b.jobId,
+    providerId: b.providerId,
+    providerName: b.providerName,
+    providerTrustScore: b.providerTrustScore,
+    amountSen: b.amountSen,
+    estimatedDuration: b.estimatedDuration,
+    message: b.message,
+    status: status,
+    createdAt: b.createdAt,
+  );
 
   @override
   Future<void> submitBid(Bid bid) async {
     _bids.removeWhere(
-        (b) => b.jobId == bid.jobId && b.providerId == bid.providerId);
+      (b) => b.jobId == bid.jobId && b.providerId == bid.providerId,
+    );
     _bids.add(bid);
     _notify();
   }
 
   @override
   Future<void> withdrawBid(String jobId, String providerId) async {
-    _bids.removeWhere(
-        (b) => b.jobId == jobId && b.providerId == providerId);
+    _bids.removeWhere((b) => b.jobId == jobId && b.providerId == providerId);
     _notify();
   }
 
@@ -527,10 +569,10 @@ class FakeBidRepository implements BidRepository {
 
   @override
   Stream<Bid?> watchMyBid(String jobId, String providerId) async* {
-    Bid? mine() => _bids
-        .cast<Bid?>()
-        .firstWhere((b) => b!.jobId == jobId && b.providerId == providerId,
-            orElse: () => null);
+    Bid? mine() => _bids.cast<Bid?>().firstWhere(
+      (b) => b!.jobId == jobId && b.providerId == providerId,
+      orElse: () => null,
+    );
     yield mine();
     await for (final _ in _changes.stream) {
       yield mine();
@@ -553,10 +595,11 @@ class FakeBidRepository implements BidRepository {
       final b = _bids[i];
       if (b.jobId != bid.jobId || b.status != BidStatus.pending) continue;
       _bids[i] = _withStatus(
-          b,
-          b.providerId == bid.providerId
-              ? BidStatus.accepted
-              : BidStatus.rejected);
+        b,
+        b.providerId == bid.providerId
+            ? BidStatus.accepted
+            : BidStatus.rejected,
+      );
     }
     auth.escrowLockedSen += bid.amountSen;
     jobs.assign(bid);
@@ -569,7 +612,7 @@ class FakeBidRepository implements BidRepository {
 /// job repo. No wallet money moves in widget tests.
 class FakeMilestoneRepository implements MilestoneRepository {
   FakeMilestoneRepository(this.jobs, [List<Milestone> seed = const []])
-      : _milestones = [...seed];
+    : _milestones = [...seed];
 
   final FakeJobRepository jobs;
   final List<Milestone> _milestones;
@@ -577,21 +620,25 @@ class FakeMilestoneRepository implements MilestoneRepository {
 
   void _notify() => _changes.add(null);
 
-  Milestone _withStatus(Milestone m, MilestoneStatus status,
-          {String? note, String? reworkNote, int? reworkCount}) =>
-      Milestone(
-        id: m.id,
-        jobId: m.jobId,
-        providerId: m.providerId,
-        description: m.description,
-        amountSen: m.amountSen,
-        order: m.order,
-        status: status,
-        submissionNote: note ?? m.submissionNote,
-        reworkNote: reworkNote ?? m.reworkNote,
-        reworkCount: reworkCount ?? m.reworkCount,
-        createdAt: m.createdAt,
-      );
+  Milestone _withStatus(
+    Milestone m,
+    MilestoneStatus status, {
+    String? note,
+    String? reworkNote,
+    int? reworkCount,
+  }) => Milestone(
+    id: m.id,
+    jobId: m.jobId,
+    providerId: m.providerId,
+    description: m.description,
+    amountSen: m.amountSen,
+    order: m.order,
+    status: status,
+    submissionNote: note ?? m.submissionNote,
+    reworkNote: reworkNote ?? m.reworkNote,
+    reworkCount: reworkCount ?? m.reworkCount,
+    createdAt: m.createdAt,
+  );
 
   void _update(String milestoneId, Milestone Function(Milestone) change) {
     final i = _milestones.indexWhere((m) => m.id == milestoneId);
@@ -602,24 +649,30 @@ class FakeMilestoneRepository implements MilestoneRepository {
 
   @override
   Future<void> proposeMilestones(
-      String jobId, List<Milestone> milestones) async {
+    String jobId,
+    List<Milestone> milestones,
+  ) async {
     // Mimics the `proposeMilestonePlan` Cloud Function: replaces any un-locked
     // plan and writes each milestone `proposed` (awaiting client approval).
-    _milestones.removeWhere((m) =>
-        m.jobId == jobId &&
-        (m.status == MilestoneStatus.proposed ||
-            m.status == MilestoneStatus.pending));
+    _milestones.removeWhere(
+      (m) =>
+          m.jobId == jobId &&
+          (m.status == MilestoneStatus.proposed ||
+              m.status == MilestoneStatus.pending),
+    );
     for (final (i, m) in milestones.indexed) {
-      _milestones.add(Milestone(
-        id: 'm$i',
-        jobId: jobId,
-        providerId: m.providerId,
-        description: m.description,
-        amountSen: m.amountSen,
-        order: i,
-        status: MilestoneStatus.proposed,
-        createdAt: DateTime.now(),
-      ));
+      _milestones.add(
+        Milestone(
+          id: 'm$i',
+          jobId: jobId,
+          providerId: m.providerId,
+          description: m.description,
+          amountSen: m.amountSen,
+          order: i,
+          status: MilestoneStatus.proposed,
+          createdAt: DateTime.now(),
+        ),
+      );
     }
     _notify();
   }
@@ -638,7 +691,8 @@ class FakeMilestoneRepository implements MilestoneRepository {
   @override
   Future<void> rejectMilestonePlan(String jobId, {String? note}) async {
     _milestones.removeWhere(
-        (m) => m.jobId == jobId && m.status == MilestoneStatus.proposed);
+      (m) => m.jobId == jobId && m.status == MilestoneStatus.proposed,
+    );
     _notify();
   }
 
@@ -653,9 +707,14 @@ class FakeMilestoneRepository implements MilestoneRepository {
   /// leaves the job in progress (the issue-#1 fix).
   void resolveRefund(String jobId, String milestoneId, {String? note}) {
     _update(
-        milestoneId,
-        (m) => _withStatus(m, MilestoneStatus.pending,
-            reworkNote: note, reworkCount: m.reworkCount + 1));
+      milestoneId,
+      (m) => _withStatus(
+        m,
+        MilestoneStatus.pending,
+        reworkNote: note,
+        reworkCount: m.reworkCount + 1,
+      ),
+    );
   }
 
   @override
@@ -680,10 +739,15 @@ class FakeMilestoneRepository implements MilestoneRepository {
   }
 
   @override
-  Future<void> submitMilestone(String jobId, String milestoneId,
-      {String? note}) async {
-    _update(milestoneId,
-        (m) => _withStatus(m, MilestoneStatus.submitted, note: note));
+  Future<void> submitMilestone(
+    String jobId,
+    String milestoneId, {
+    String? note,
+  }) async {
+    _update(
+      milestoneId,
+      (m) => _withStatus(m, MilestoneStatus.submitted, note: note),
+    );
   }
 
   @override
@@ -691,8 +755,9 @@ class FakeMilestoneRepository implements MilestoneRepository {
     // Only a client-approved (pending) milestone is fundable, mirroring the
     // Cloud Function's precondition.
     final m = _milestones.cast<Milestone?>().firstWhere(
-        (m) => m!.id == milestoneId,
-        orElse: () => null);
+      (m) => m!.id == milestoneId,
+      orElse: () => null,
+    );
     if (m == null || m.status != MilestoneStatus.pending) return;
     _update(milestoneId, (m) => _withStatus(m, MilestoneStatus.funded));
   }
@@ -706,9 +771,13 @@ class FakeMilestoneRepository implements MilestoneRepository {
   /// Completes the job when every milestone is terminal — `released`, or a
   /// legacy `resolved`, matching the production `isTerminal`.
   void _maybeComplete(String jobId) {
-    final allTerminal = _milestones.where((m) => m.jobId == jobId).every((m) =>
-        m.status == MilestoneStatus.released ||
-        m.status == MilestoneStatus.resolved);
+    final allTerminal = _milestones
+        .where((m) => m.jobId == jobId)
+        .every(
+          (m) =>
+              m.status == MilestoneStatus.released ||
+              m.status == MilestoneStatus.resolved,
+        );
     if (allTerminal) jobs.complete(jobId);
   }
 }
@@ -729,8 +798,8 @@ class FakeWalletRepository implements WalletRepository {
 
   @override
   Future<({String billCode, String paymentUrl})> createTopUpBill(
-          int amountSen) async =>
-      (billCode: 'test', paymentUrl: 'https://example.com');
+    int amountSen,
+  ) async => (billCode: 'test', paymentUrl: 'https://example.com');
 
   @override
   Future<bool> reconcileTopUp(String billCode) async => true;
@@ -765,27 +834,28 @@ class FakeDisputeRepository implements DisputeRepository {
     required String statement,
     List<String> evidenceUrls = const [],
   }) async {
-    raised.add(
-        (jobId: jobId, milestoneId: milestoneId, statement: statement));
+    raised.add((jobId: jobId, milestoneId: milestoneId, statement: statement));
     milestones?._update(
-        milestoneId,
-        (m) =>
-            milestones!._withStatus(m, MilestoneStatus.disputed));
-    _open.add(Dispute(
-      id: 'disp-${_open.length + 1}',
-      jobId: jobId,
-      jobTitle: 'Job $jobId',
-      milestoneId: milestoneId,
-      milestoneDescription: 'Milestone $milestoneId',
-      amountSen: 0,
-      raisedByUid: 'uid-1',
-      raisedByRole: 'requestor',
-      requestorId: 'uid-1',
-      providerId: 'prov-1',
-      statement: statement,
-      evidenceUrls: evidenceUrls,
-      createdAt: DateTime.now(),
-    ));
+      milestoneId,
+      (m) => milestones!._withStatus(m, MilestoneStatus.disputed),
+    );
+    _open.add(
+      Dispute(
+        id: 'disp-${_open.length + 1}',
+        jobId: jobId,
+        jobTitle: 'Job $jobId',
+        milestoneId: milestoneId,
+        milestoneDescription: 'Milestone $milestoneId',
+        amountSen: 0,
+        raisedByUid: 'uid-1',
+        raisedByRole: 'requestor',
+        requestorId: 'uid-1',
+        providerId: 'prov-1',
+        statement: statement,
+        evidenceUrls: evidenceUrls,
+        createdAt: DateTime.now(),
+      ),
+    );
     _changes.add(null);
   }
 
@@ -799,8 +869,10 @@ class FakeDisputeRepository implements DisputeRepository {
     lastRulingNote = rulingNote;
     // Mirror the Cloud Function's milestone effect: release closes it,
     // refund reopens it for rework (job stays in progress).
-    final d = _open.cast<Dispute?>().firstWhere((d) => d!.id == disputeId,
-        orElse: () => null);
+    final d = _open.cast<Dispute?>().firstWhere(
+      (d) => d!.id == disputeId,
+      orElse: () => null,
+    );
     if (d != null && milestones != null) {
       if (resolution == DisputeResolution.release) {
         milestones!.resolveRelease(d.jobId, d.milestoneId);
@@ -825,7 +897,7 @@ class FakeDisputeRepository implements DisputeRepository {
 /// decisions so tests can assert an approve/reject removed the item.
 class FakeVerificationRepository implements VerificationRepository {
   FakeVerificationRepository([List<PendingVerification> pending = const []])
-      : _pending = [...pending];
+    : _pending = [...pending];
 
   final List<PendingVerification> _pending;
   final _changes = StreamController<void>.broadcast();
@@ -845,7 +917,9 @@ class FakeVerificationRepository implements VerificationRepository {
   Future<List<VerificationDocument>> loadIdentityDocuments(String uid) async =>
       const [
         VerificationDocument(
-            label: 'Identity Document', url: 'https://fake.storage/id.jpg'),
+          label: 'Identity Document',
+          url: 'https://fake.storage/id.jpg',
+        ),
       ];
 
   @override
@@ -861,13 +935,59 @@ class FakeVerificationRepository implements VerificationRepository {
   }
 }
 
+/// In-memory [UserAdminRepository]; seeded with a fixed user list. Records the
+/// suspend/reinstate calls and reflects them back into the stream so the list
+/// re-renders (Suspended pill / Reinstate button), mirroring the live doc.
+class FakeUserAdminRepository implements UserAdminRepository {
+  FakeUserAdminRepository([List<ManagedUser> seed = const []])
+    : _users = [...seed];
+
+  final List<ManagedUser> _users;
+  final _changes = StreamController<void>.broadcast();
+
+  /// Every setSuspended call, for tests to assert.
+  final calls = <({String uid, bool suspended, String? reason})>[];
+
+  @override
+  Stream<List<ManagedUser>> watchUsers() async* {
+    yield List.of(_users);
+    await for (final _ in _changes.stream) {
+      yield List.of(_users);
+    }
+  }
+
+  @override
+  Future<void> setSuspended({
+    required String uid,
+    required bool suspended,
+    String? reason,
+  }) async {
+    calls.add((uid: uid, suspended: suspended, reason: reason));
+    final i = _users.indexWhere((u) => u.uid == uid);
+    if (i != -1) {
+      final u = _users[i];
+      _users[i] = ManagedUser(
+        uid: u.uid,
+        displayName: u.displayName,
+        email: u.email,
+        role: u.role,
+        suspended: suspended,
+        suspensionReason: reason,
+        verificationStatus: u.verificationStatus,
+        photoUrl: u.photoUrl,
+      );
+    }
+    _changes.add(null);
+  }
+}
+
 /// In-memory [ReviewRepository]; seeded with a fixed list of reviews. Records
 /// left reviews and the aggregates the Cloud Function producer would maintain
 /// (dedupe + ratingSum/ratingCount); the review sub-score mirrors what the
 /// server-side trust recompute derives from those aggregates.
 class FakeReviewRepository implements ReviewRepository {
   FakeReviewRepository([List<Review> reviews = const []])
-      : _reviews = [...reviews];
+    : _reviews = [...reviews];
 
   final List<Review> _reviews;
   final _ids = <String>{};
@@ -926,7 +1046,7 @@ class FakeReviewRepository implements ReviewRepository {
 /// rulings so tests can assert hide/keep cleared the queue.
 class FakeModerationRepository implements ModerationRepository {
   FakeModerationRepository([List<FlaggedReview> seed = const []])
-      : _flagged = [...seed];
+    : _flagged = [...seed];
 
   final List<FlaggedReview> _flagged;
   final _changes = StreamController<void>.broadcast();
@@ -958,7 +1078,7 @@ class FakeModerationRepository implements ModerationRepository {
 /// token registration so tests can assert the sign-in/out lifecycle.
 class FakeNotificationRepository implements NotificationRepository {
   FakeNotificationRepository([List<AppNotification> seed = const []])
-      : _items = [...seed];
+    : _items = [...seed];
 
   final List<AppNotification> _items;
   final _changes = StreamController<void>.broadcast();
@@ -1032,16 +1152,14 @@ class FakeAssistRepository implements AssistRepository {
     required String category,
     required String roughText,
     String? photoUrl,
-  }) async =>
-      description;
+  }) async => description;
 
   @override
   Future<({int minSen, int maxSen})?> suggestPriceRange({
     required String category,
     required String description,
     String? photoUrl,
-  }) async =>
-      priceRange;
+  }) async => priceRange;
 }
 
 /// No-op [PushService] — tests exercise the in-app surfaces only.
@@ -1063,17 +1181,18 @@ class FakePushService implements PushService {
 /// In-memory [StatsRepository] returning fixed numbers.
 class FakeStatsRepository implements StatsRepository {
   FakeStatsRepository([PlatformStats? stats])
-      : _stats = stats ??
-            const PlatformStats(
-              requestors: 11,
-              providers: 12,
-              openJobs: 13,
-              inProgressJobs: 14,
-              completedJobs: 15,
-              pendingVerifications: 16,
-              openDisputes: 17,
-              releasedVolumeSen: 1234500,
-            );
+    : _stats =
+          stats ??
+          const PlatformStats(
+            requestors: 11,
+            providers: 12,
+            openJobs: 13,
+            inProgressJobs: 14,
+            completedJobs: 15,
+            pendingVerifications: 16,
+            openDisputes: 17,
+            releasedVolumeSen: 1234500,
+          );
 
   final PlatformStats _stats;
 
@@ -1094,7 +1213,7 @@ class FakeStatsRepository implements StatsRepository {
 /// the conversation list, thread and unread badge update live.
 class FakeChatRepository implements ChatRepository {
   FakeChatRepository([List<Conversation> seed = const []])
-      : _conversations = [...seed];
+    : _conversations = [...seed];
 
   final List<Conversation> _conversations;
   final _messages = <String, List<Message>>{};
@@ -1114,35 +1233,36 @@ class FakeChatRepository implements ChatRepository {
     String? lastMessageSenderId,
     DateTime? lastMessageAt,
     Map<String, int>? unreadCounts,
-  }) =>
-      Conversation(
-        id: c.id,
-        jobId: c.jobId,
-        jobTitle: c.jobTitle,
-        requestorId: c.requestorId,
-        requestorName: c.requestorName,
-        providerId: c.providerId,
-        providerName: c.providerName,
-        lastMessageText: lastMessageText ?? c.lastMessageText,
-        lastMessageSenderId: lastMessageSenderId ?? c.lastMessageSenderId,
-        lastMessageAt: lastMessageAt ?? c.lastMessageAt,
-        unreadCounts: unreadCounts ?? c.unreadCounts,
-      );
+  }) => Conversation(
+    id: c.id,
+    jobId: c.jobId,
+    jobTitle: c.jobTitle,
+    requestorId: c.requestorId,
+    requestorName: c.requestorName,
+    providerId: c.providerId,
+    providerName: c.providerName,
+    lastMessageText: lastMessageText ?? c.lastMessageText,
+    lastMessageSenderId: lastMessageSenderId ?? c.lastMessageSenderId,
+    lastMessageAt: lastMessageAt ?? c.lastMessageAt,
+    unreadCounts: unreadCounts ?? c.unreadCounts,
+  );
 
   @override
   Future<String> openConversation(Job job) async {
     final id = '${job.id}_${job.acceptedProviderId}';
     if (_byId(id) == null) {
-      _conversations.add(Conversation(
-        id: id,
-        jobId: job.id,
-        jobTitle: job.title,
-        requestorId: job.requestorId,
-        requestorName: job.requestorName,
-        providerId: job.acceptedProviderId!,
-        providerName: job.acceptedProviderName ?? 'Provider',
-        lastMessageAt: DateTime.now(),
-      ));
+      _conversations.add(
+        Conversation(
+          id: id,
+          jobId: job.id,
+          jobTitle: job.title,
+          requestorId: job.requestorId,
+          requestorName: job.requestorName,
+          providerId: job.acceptedProviderId!,
+          providerName: job.acceptedProviderName ?? 'Provider',
+          lastMessageAt: DateTime.now(),
+        ),
+      );
       _notify();
     }
     return id;
@@ -1183,17 +1303,21 @@ class FakeChatRepository implements ChatRepository {
     required String text,
   }) async {
     final list = _messages.putIfAbsent(conversation.id, () => []);
-    list.add(Message(
-      id: 'm-${list.length + 1}',
-      senderId: senderId,
-      text: text.trim(),
-      createdAt: DateTime.now(),
-    ));
+    list.add(
+      Message(
+        id: 'm-${list.length + 1}',
+        senderId: senderId,
+        text: text.trim(),
+        createdAt: DateTime.now(),
+      ),
+    );
     final i = _conversations.indexWhere((c) => c.id == conversation.id);
     if (i != -1) {
       final c = _conversations[i];
-      final recipient =
-          c.participantIds.firstWhere((id) => id != senderId, orElse: () => '');
+      final recipient = c.participantIds.firstWhere(
+        (id) => id != senderId,
+        orElse: () => '',
+      );
       _conversations[i] = _rebuild(
         c,
         lastMessageText: text.trim(),
@@ -1213,8 +1337,7 @@ class FakeChatRepository implements ChatRepository {
     final i = _conversations.indexWhere((c) => c.id == conversationId);
     if (i == -1) return;
     final c = _conversations[i];
-    _conversations[i] =
-        _rebuild(c, unreadCounts: {...c.unreadCounts, uid: 0});
+    _conversations[i] = _rebuild(c, unreadCounts: {...c.unreadCounts, uid: 0});
     _notify();
   }
 
@@ -1245,23 +1368,22 @@ Job sampleJob({
   String? acceptedProviderName,
   int? acceptedBidAmountSen,
   DateTime? deadline,
-}) =>
-    Job(
-      id: id,
-      requestorId: requestorId,
-      requestorName: requestorName,
-      title: title,
-      description: 'Kitchen sink is leaking under the cabinet.',
-      category: category,
-      location: JobLocation(lat: lat, lng: lng, address: 'Bangsar, KL'),
-      budget: const JobBudget(minSen: 10000, maxSen: 25000),
-      createdAt: DateTime.now(),
-      status: status,
-      acceptedProviderId: acceptedProviderId,
-      acceptedProviderName: acceptedProviderName,
-      acceptedBidAmountSen: acceptedBidAmountSen,
-      deadline: deadline,
-    );
+}) => Job(
+  id: id,
+  requestorId: requestorId,
+  requestorName: requestorName,
+  title: title,
+  description: 'Kitchen sink is leaking under the cabinet.',
+  category: category,
+  location: JobLocation(lat: lat, lng: lng, address: 'Bangsar, KL'),
+  budget: const JobBudget(minSen: 10000, maxSen: 25000),
+  createdAt: DateTime.now(),
+  status: status,
+  acceptedProviderId: acceptedProviderId,
+  acceptedProviderName: acceptedProviderName,
+  acceptedBidAmountSen: acceptedBidAmountSen,
+  deadline: deadline,
+);
 
 /// Builds a sample pending bid on [jobId] for tests. Defaults to an
 /// established provider (visible score); pass `scoreVisible: false` for the
@@ -1273,32 +1395,34 @@ Bid sampleBid({
   int trustScore = 800,
   bool scoreVisible = true,
   int amountSen = 15000,
-}) =>
-    Bid(
-      jobId: jobId,
-      providerId: providerId,
-      providerName: providerName,
-      providerTrustScore: trustScore,
-      providerScoreVisible: scoreVisible,
-      amountSen: amountSen,
-      estimatedDuration: 'Less than 1 week',
-      message: 'I can fix this quickly with quality parts.',
-      createdAt: DateTime.now(),
-    );
+}) => Bid(
+  jobId: jobId,
+  providerId: providerId,
+  providerName: providerName,
+  providerTrustScore: trustScore,
+  providerScoreVisible: scoreVisible,
+  amountSen: amountSen,
+  estimatedDuration: 'Less than 1 week',
+  message: 'I can fix this quickly with quality parts.',
+  createdAt: DateTime.now(),
+);
 
-Widget buildApp(FakeAuthRepository auth,
-    {List<Job> jobs = const [],
-    List<Bid> bids = const [],
-    List<Review> reviews = const [],
-    List<Milestone> milestones = const [],
-    FakeReviewRepository? review,
-    FakeVerificationRepository? verification,
-    FakeChatRepository? chat,
-    FakeDisputeRepository? dispute,
-    FakeModerationRepository? moderation,
-    FakeStatsRepository? stats,
-    FakeNotificationRepository? notifications,
-    FakeAssistRepository? assist}) {
+Widget buildApp(
+  FakeAuthRepository auth, {
+  List<Job> jobs = const [],
+  List<Bid> bids = const [],
+  List<Review> reviews = const [],
+  List<Milestone> milestones = const [],
+  FakeReviewRepository? review,
+  FakeVerificationRepository? verification,
+  FakeChatRepository? chat,
+  FakeDisputeRepository? dispute,
+  FakeModerationRepository? moderation,
+  FakeStatsRepository? stats,
+  FakeNotificationRepository? notifications,
+  FakeUserAdminRepository? userAdmin,
+  FakeAssistRepository? assist,
+}) {
   final jobRepo = FakeJobRepository(jobs);
   final milestoneRepo = FakeMilestoneRepository(jobRepo, milestones);
   final disputeRepo = dispute ?? FakeDisputeRepository();
@@ -1312,6 +1436,7 @@ Widget buildApp(FakeAuthRepository auth,
     bidRepository: FakeBidRepository(jobRepo, auth, bids),
     reviewRepository: review ?? FakeReviewRepository(reviews),
     verificationRepository: verification ?? FakeVerificationRepository(),
+    userAdminRepository: userAdmin ?? FakeUserAdminRepository(),
     chatRepository: chat ?? FakeChatRepository(),
     milestoneRepository: milestoneRepo,
     walletRepository: FakeWalletRepository(),
@@ -1327,8 +1452,9 @@ Widget buildApp(FakeAuthRepository auth,
 Future<void> fillField(WidgetTester tester, String label, String text) async {
   // Field labels are external; find the TextFormField below the label text.
   final direct = find.widgetWithText(TextFormField, label);
-  final field =
-      direct.evaluate().isEmpty ? _fieldBelowLabel(tester, label) : direct;
+  final field = direct.evaluate().isEmpty
+      ? _fieldBelowLabel(tester, label)
+      : direct;
   await tester.ensureVisible(field); // scroll into view on tall forms
   await tester.pumpAndSettle();
   await tester.enterText(field, text);
@@ -1345,7 +1471,71 @@ Finder _fieldBelowLabel(WidgetTester tester, String label) {
       .first;
 }
 
+/// Drives a `LocationField` showing [placeholder]: opens the Penang-scoped
+/// picker, selects [districtLabel] from the District dropdown and confirms.
+///
+/// Deliberately avoids `pumpAndSettle` while the picker (and its map's
+/// network-fetched tiles) is on screen — that would otherwise wait
+/// indefinitely on the tile layer. Bounded `pump`s are enough to carry the
+/// route transition, the dropdown menu and `PenangDistricts.ensureLoaded()`
+/// (a local asset read) forward.
+Future<void> pickPenangLocation(
+  WidgetTester tester, {
+  required String placeholder,
+  String districtLabel = 'Barat Daya',
+}) async {
+  await tester.tap(find.text(placeholder));
+  await tester.pump(const Duration(milliseconds: 400)); // push transition
+  await tester.pump(const Duration(milliseconds: 200)); // ensureLoaded()
+
+  // The default map centre (George Town) already auto-classifies into a
+  // district by this point, so the field may show its name instead of the
+  // "Select a district..." hint — and when the picker is pushed on top of a
+  // screen that has its own dropdown (e.g. ServiceStep's category picker),
+  // that earlier dropdown is still mounted (just behind the new route), so
+  // `.first` in tree order can't be trusted either. Target the District
+  // dropdown via its label instead.
+  await tester.tap(_districtDropdown());
+  await tester.pump(const Duration(milliseconds: 400)); // menu opens
+  await tester.tap(find.text(districtLabel).last);
+  await tester.pump(
+    const Duration(milliseconds: 400),
+  ); // menu closes + recentre
+
+  await tester.tap(find.widgetWithText(FilledButton, 'Use this location'));
+  await tester.pump(const Duration(milliseconds: 400)); // pop transition
+  await tester.pumpAndSettle();
+}
+
+/// Finds `RegionPickerScreen`'s District dropdown specifically — its nearest
+/// enclosing [Column] (shared with the "District" label) disambiguates it
+/// from any other `DropdownButtonFormField` in the tree.
+Finder _districtDropdown() {
+  final column = find.ancestor(
+    of: find.text('District'),
+    matching: find.byType(Column),
+  );
+  return find
+      .descendant(
+        of: column.first,
+        matching: find.byType(DropdownButtonFormField<String>),
+      )
+      .first;
+}
+
 void main() {
+  // Pre-warm the Penang districts GeoJSON asset load once, before any test
+  // builds a real FlutterMap/TileLayer (RegionPickerScreen). Doing that first
+  // `rootBundle` read while a tile layer's concurrent network fetches are in
+  // flight can leave the read hanging indefinitely (a flutter_test quirk) —
+  // which would then wedge every later PenangDistricts.ensureLoaded() call,
+  // including the classifier's own unit test, since they all await the same
+  // cached (never-completing) Future.
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    await PenangDistricts.instance.ensureLoaded();
+  });
+
   group('Validators', () {
     test('email rejects malformed and accepts valid', () {
       expect(Validators.email(''), isNotNull);
@@ -1381,8 +1571,9 @@ void main() {
       await tester.pumpWidget(buildApp(FakeAuthRepository()));
       await tester.pumpAndSettle();
 
-      final editable =
-          tester.widget<EditableText>(find.byType(EditableText).first);
+      final editable = tester.widget<EditableText>(
+        find.byType(EditableText).first,
+      );
       expect(editable.style.color, isNotNull);
       expect(editable.style.color, isNot(Colors.white));
     });
@@ -1412,8 +1603,9 @@ void main() {
       expect(find.text('Hello, Test'), findsOneWidget);
     });
 
-    testWidgets('Forgot password with no email prompts for one',
-        (tester) async {
+    testWidgets('Forgot password with no email prompts for one', (
+      tester,
+    ) async {
       final repo = FakeAuthRepository();
       await tester.pumpWidget(buildApp(repo));
       await tester.pumpAndSettle();
@@ -1425,8 +1617,9 @@ void main() {
       expect(repo.passwordResetsSent, isEmpty);
     });
 
-    testWidgets('Forgot password sends a reset email for the typed address',
-        (tester) async {
+    testWidgets('Forgot password sends a reset email for the typed address', (
+      tester,
+    ) async {
       final repo = FakeAuthRepository();
       await tester.pumpWidget(buildApp(repo));
       await tester.pumpAndSettle();
@@ -1436,8 +1629,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repo.passwordResetsSent, ['test@fairbid.app']);
-      expect(find.text('Password reset email sent to test@fairbid.app'),
-          findsOneWidget);
+      expect(
+        find.text('Password reset email sent to test@fairbid.app'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('failed sign-in shows an error banner', (tester) async {
@@ -1481,11 +1676,13 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('as requestor (Hire) is redirected into onboarding',
-        (tester) async {
+    testWidgets('as requestor (Hire) is redirected into onboarding', (
+      tester,
+    ) async {
       // A brand-new requestor has not completed onboarding yet.
       await tester.pumpWidget(
-          buildApp(FakeAuthRepository()..onboardingComplete = false));
+        buildApp(FakeAuthRepository()..onboardingComplete = false),
+      );
       await tester.pumpAndSettle();
       await openRegister(tester);
 
@@ -1501,10 +1698,12 @@ void main() {
       expect(find.text('You are signed in'), findsNothing);
     });
 
-    testWidgets('requestor completes onboarding and lands on home',
-        (tester) async {
+    testWidgets('requestor completes onboarding and lands on home', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-          buildApp(FakeAuthRepository()..onboardingComplete = false));
+        buildApp(FakeAuthRepository()..onboardingComplete = false),
+      );
       await tester.pumpAndSettle();
       await openRegister(tester);
       await tester.tap(find.text('Hire'));
@@ -1523,7 +1722,10 @@ void main() {
       // Stage 2 → fill required details → Continue.
       await fillField(tester, 'Full Name', 'Jane Client');
       await fillField(tester, 'Phone Number', '0123456789');
-      await fillField(tester, 'Default Location', 'Kuala Lumpur');
+      await pickPenangLocation(
+        tester,
+        placeholder: 'Pick your default location in Penang',
+      );
       final continueBtn = find.widgetWithText(FilledButton, 'Continue');
       await tester.ensureVisible(continueBtn);
       await tester.tap(continueBtn);
@@ -1539,8 +1741,9 @@ void main() {
       expect(find.byType(NavigationBar), findsOneWidget);
     });
 
-    testWidgets('as provider (Work) is redirected into onboarding',
-        (tester) async {
+    testWidgets('as provider (Work) is redirected into onboarding', (
+      tester,
+    ) async {
       await tester.pumpWidget(buildApp(FakeAuthRepository()));
       await tester.pumpAndSettle();
       await openRegister(tester);
@@ -1556,8 +1759,9 @@ void main() {
       expect(find.text('Registered Business'), findsOneWidget);
     });
 
-    testWidgets('onboarding continue unlocks after picking a provider type',
-        (tester) async {
+    testWidgets('onboarding continue unlocks after picking a provider type', (
+      tester,
+    ) async {
       await tester.pumpWidget(buildApp(FakeAuthRepository()));
       await tester.pumpAndSettle();
       await openRegister(tester);
@@ -1568,8 +1772,7 @@ void main() {
 
       // Continue starts disabled.
       final continueButton = find.widgetWithText(FilledButton, 'Continue');
-      expect(
-          tester.widget<FilledButton>(continueButton).onPressed, isNull);
+      expect(tester.widget<FilledButton>(continueButton).onPressed, isNull);
 
       // Selecting a type enables it; tapping moves to identity verification.
       await tester.tap(find.text('Individual / Freelancer'));
@@ -1590,8 +1793,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('shows the four bottom-nav tabs after sign-in',
-        (tester) async {
+    testWidgets('shows the four bottom-nav tabs after sign-in', (tester) async {
       await tester.pumpWidget(buildApp(FakeAuthRepository()));
       await tester.pumpAndSettle();
       await login(tester);
@@ -1611,10 +1813,12 @@ void main() {
       await tester.pumpAndSettle();
       await login(tester);
 
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('Profile'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Test User'), findsWidgets);
@@ -1687,10 +1891,12 @@ void main() {
     }
 
     Future<void> openProfileTab(WidgetTester tester) async {
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('Profile'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
       await tester.pumpAndSettle();
     }
 
@@ -1746,8 +1952,9 @@ void main() {
       expect(find.text('A fresh bio about my work.'), findsOneWidget);
     });
 
-    testWidgets('reviews section shows the empty state with no reviews',
-        (tester) async {
+    testWidgets('reviews section shows the empty state with no reviews', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1771,8 +1978,9 @@ void main() {
         comment: 'Communications were clear.',
         createdAt: DateTime.now(),
       );
-      await tester
-          .pumpWidget(buildApp(FakeAuthRepository(), reviews: [review]));
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository(), reviews: [review]),
+      );
       await tester.pumpAndSettle();
       await loginRequestor(tester);
       await openProfileTab(tester);
@@ -1781,8 +1989,9 @@ void main() {
       expect(find.text('"Communications were clear."'), findsOneWidget);
     });
 
-    testWidgets('Trust Score card shows the New User state until earned',
-        (tester) async {
+    testWidgets('Trust Score card shows the New User state until earned', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1802,8 +2011,9 @@ void main() {
       expect(find.textContaining('/100'), findsNothing); // no headline number
     });
 
-    testWidgets('Trust Score card shows the number once earned',
-        (tester) async {
+    testWidgets('Trust Score card shows the number once earned', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1821,8 +2031,9 @@ void main() {
       expect(find.textContaining('/100'), findsOneWidget);
     });
 
-    testWidgets('earnings screen shows the balance and Withdraw',
-        (tester) async {
+    testWidgets('earnings screen shows the balance and Withdraw', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1841,8 +2052,9 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Withdraw'), findsOneWidget);
     });
 
-    testWidgets('delete account cancel keeps the user signed in',
-        (tester) async {
+    testWidgets('delete account cancel keeps the user signed in', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1863,9 +2075,9 @@ void main() {
       expect(find.text('Delete Account'), findsOneWidget);
     });
 
-    testWidgets(
-        'delete account confirmed with password signs the user out',
-        (tester) async {
+    testWidgets('delete account confirmed with password signs the user out', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1878,8 +2090,9 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(
-          find.widgetWithText(TextField, 'Confirm your password'),
-          'secret123');
+        find.widgetWithText(TextField, 'Confirm your password'),
+        'secret123',
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await tester.pumpAndSettle();
 
@@ -1888,8 +2101,9 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Log In'), findsOneWidget);
     });
 
-    testWidgets('delete account failure shows an error and stays signed in',
-        (tester) async {
+    testWidgets('delete account failure shows an error and stays signed in', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1903,7 +2117,9 @@ void main() {
       await tester.tap(find.text('Delete Account'));
       await tester.pumpAndSettle();
       await tester.enterText(
-          find.widgetWithText(TextField, 'Confirm your password'), 'wrong');
+        find.widgetWithText(TextField, 'Confirm your password'),
+        'wrong',
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await tester.pumpAndSettle();
 
@@ -1922,8 +2138,10 @@ void main() {
     test('formatBudget handles fixed, range and hourly', () {
       expect(formatBudget(), isNull);
       expect(formatBudget(minSen: 10000), 'RM 100.00');
-      expect(formatBudget(minSen: 10000, maxSen: 25000),
-          'RM 100.00 – RM 250.00');
+      expect(
+        formatBudget(minSen: 10000, maxSen: 25000),
+        'RM 100.00 – RM 250.00',
+      );
       expect(formatBudget(minSen: 5000, hourly: true), 'RM 50.00/hr');
     });
 
@@ -1938,6 +2156,154 @@ void main() {
       expect(distanceKm(kl, kl), lessThan(0.001));
       expect(distanceKm(kl, const LatLng(3.2, 101.75)), greaterThan(1));
     });
+  });
+
+  group('Penang location scoping', () {
+    test('Region.label composes town/district/state and tolerates legacy '
+        'data', () {
+      const withTown = Region(
+        districtCode: 'TL',
+        districtName: 'Timur Laut',
+        town: 'George Town',
+      );
+      expect(withTown.label, 'George Town, Timur Laut, Penang');
+
+      const withoutTown = Region(
+        districtCode: 'BD',
+        districtName: 'Barat Daya',
+      );
+      expect(withoutTown.label, 'Barat Daya, Penang');
+
+      expect(Region.fromMap(null), isNull);
+      expect(
+        Region.fromMap(const {'address': 'Some legacy free text'}),
+        isNull,
+      );
+
+      final rebuilt = Region.fromMap(withTown.toMap());
+      expect(rebuilt?.label, withTown.label);
+    });
+
+    test(
+      'PenangDistricts classifies known points and rejects the sea',
+      () async {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        final districts = PenangDistricts.instance;
+        await districts.ensureLoaded();
+
+        expect(districts.districtCodeAt(kGeorgeTown), 'TL');
+        expect(districts.districtCodeAt(const LatLng(5.2945, 100.2640)), 'BD');
+        expect(districts.districtCodeAt(const LatLng(5.3991, 100.3638)), 'SPU');
+        expect(districts.districtCodeAt(const LatLng(5.3630, 100.4667)), 'SPT');
+        expect(districts.districtCodeAt(const LatLng(5.1656, 100.4790)), 'SPS');
+
+        // A point out in the sea belongs to none of the 5 districts.
+        expect(districts.districtCodeAt(const LatLng(5.30, 100.10)), isNull);
+        expect(districts.isInPenang(const LatLng(5.30, 100.10)), isFalse);
+      },
+    );
+
+    testWidgets('confirm is disabled when the centre is outside Penang', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: const RegionPickerScreen(initialCenter: LatLng(5.30, 100.10)),
+        ),
+      );
+      // No pumpAndSettle: the map's tile layer fetches over the network and
+      // would otherwise stall the "settle" wait indefinitely. A couple of
+      // pumps is enough for PenangDistricts.ensureLoaded() (a local asset
+      // read) to resolve.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Use this location'),
+      );
+      expect(button.onPressed, isNull);
+      expect(find.text('Choose a spot within Penang.'), findsOneWidget);
+    });
+
+    testWidgets('picking a district updates the dropdown and unlocks confirm', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: const RegionPickerScreen(initialCenter: kGeorgeTown),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // George Town auto-classifies to Timur Laut by this point, so the
+      // field already shows a value rather than the hint — target the
+      // District dropdown by its label instead of assuming tree order.
+      await tester.tap(_districtDropdown());
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.text('Barat Daya').last);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.text('Barat Daya'), findsOneWidget);
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Use this location'),
+      );
+      expect(button.onPressed, isNotNull);
+    });
+
+    testWidgets(
+      'provider onboarding Coverage Area drives the Penang picker',
+      (tester) async {
+        // The smallest host that exercises ServiceStep's real picker wiring:
+        // an OnboardingController (backed by the fake repo) provided directly
+        // to the widget, rather than driving the full multi-stage flow.
+        final auth = FakeAuthRepository();
+        final controller = OnboardingController(
+          FakeOnboardingRepository(auth),
+          FakeDocumentStorageRepository(),
+        );
+        await controller.loadFor('uid-1');
+
+        // Tall surface: ServiceStep's card (category, coverage area, rate,
+        // portfolio) is taller than the default test viewport, and the
+        // picker's dropdown row needs the default width to avoid overflow.
+        await tester.binding.setSurfaceSize(const Size(800, 1400));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light,
+            home: ChangeNotifierProvider<OnboardingController>.value(
+              value: controller,
+              child: const Scaffold(
+                body: SingleChildScrollView(child: ServiceStep()),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(controller.data.districtCode, isNull);
+        expect(find.text('Pick your coverage area in Penang'), findsOneWidget);
+
+        await pickPenangLocation(
+          tester,
+          placeholder: 'Pick your coverage area in Penang',
+        );
+
+        // The structured pick landed on the provider's OnboardingData, not
+        // just a display string.
+        expect(controller.data.districtCode, 'BD');
+        expect(controller.data.town, isNull);
+        expect(controller.data.lat, isNotNull);
+        expect(controller.data.lng, isNotNull);
+        expect(controller.data.coverageArea, 'Barat Daya, Penang');
+        expect(find.text('Barat Daya, Penang'), findsOneWidget);
+      },
+    );
   });
 
   group('Jobs', () {
@@ -1968,16 +2334,18 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester
-          .pumpWidget(buildApp(FakeAuthRepository(), jobs: [sampleJob()]));
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository(), jobs: [sampleJob()]),
+      );
       await tester.pumpAndSettle();
       await login(tester);
 
       expect(find.text('Fix leaking sink'), findsWidgets);
     });
 
-    testWidgets('provider home shows nearby jobs with a base location',
-        (tester) async {
+    testWidgets('provider home shows nearby jobs with a base location', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -2013,8 +2381,9 @@ void main() {
       expect(find.text('Job Details'), findsOneWidget);
     }
 
-    testWidgets('approved provider submits a bid (with form validation)',
-        (tester) async {
+    testWidgets('approved provider submits a bid (with form validation)', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -2024,7 +2393,8 @@ void main() {
         ..baseLng = 101.6869;
       // Someone else's job, so the provider section (not bids) is shown.
       await tester.pumpWidget(
-          buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]));
+        buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]),
+      );
       await tester.pumpAndSettle();
       await openJobAsProvider(tester);
 
@@ -2053,7 +2423,9 @@ void main() {
       expect(find.text('Your bid'), findsOneWidget);
       expect(find.text('RM 150.00'), findsOneWidget);
       expect(
-          find.widgetWithText(OutlinedButton, 'Withdraw bid'), findsOneWidget);
+        find.widgetWithText(OutlinedButton, 'Withdraw bid'),
+        findsOneWidget,
+      );
 
       // Withdrawing (after confirming the dialog) returns to the submit state.
       await tester.tap(find.widgetWithText(OutlinedButton, 'Withdraw bid'));
@@ -2072,7 +2444,8 @@ void main() {
         ..baseLat = 3.139
         ..baseLng = 101.6869;
       await tester.pumpWidget(
-          buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]));
+        buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]),
+      );
       await tester.pumpAndSettle();
       await openJobAsProvider(tester);
 
@@ -2080,8 +2453,7 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsNothing);
     });
 
-    testWidgets(
-        'approved provider sees "Bidding closed" once the deadline has '
+    testWidgets('approved provider sees "Bidding closed" once the deadline has '
         'passed', (tester) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2112,8 +2484,9 @@ void main() {
       // Enough available balance to cover the RM 150 bid (see FakeBidRepository
       // .acceptBid's balance gate, mirroring the acceptBid Cloud Function).
       final auth = FakeAuthRepository()..walletBalanceSen = 20000;
-      await tester.pumpWidget(buildApp(auth,
-          jobs: [sampleJob()], bids: [sampleBid()]));
+      await tester.pumpWidget(
+        buildApp(auth, jobs: [sampleJob()], bids: [sampleBid()]),
+      );
       await tester.pumpAndSettle();
       await fillField(tester, 'Email', 'a@b.com');
       await fillField(tester, 'Password', 'secret123');
@@ -2128,14 +2501,17 @@ void main() {
 
       // Accept → confirm in the dialog.
       await tester.ensureVisible(
-          find.widgetWithText(FilledButton, 'Accept Bid'));
+        find.widgetWithText(FilledButton, 'Accept Bid'),
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Accept Bid'));
       await tester.pumpAndSettle();
       expect(find.text('Accept this bid?'), findsOneWidget);
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Accept Bid'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Accept Bid'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       // The job is now in progress with the winner shown.
@@ -2146,14 +2522,16 @@ void main() {
   });
 
   group('Watchlist', () {
-    testWidgets('bookmarking a job on the feed toggles its saved state',
-        (tester) async {
+    testWidgets('bookmarking a job on the feed toggles its saved state', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final auth = FakeAuthRepository()..verificationStatus = 'approved';
       await tester.pumpWidget(
-          buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]));
+        buildApp(auth, jobs: [sampleJob(requestorId: 'req-9')]),
+      );
       await tester.pumpAndSettle();
       await openRegisterAs(tester, 'Work');
 
@@ -2196,48 +2574,52 @@ void main() {
     });
 
     testWidgets(
-        'accepting a bid over the available balance shows a top-up dialog',
-        (tester) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+      'accepting a bid over the available balance shows a top-up dialog',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      // RM 100 available, but the sample bid is RM 150 — RM 50 short.
-      final auth = FakeAuthRepository()..walletBalanceSen = 10000;
-      await tester.pumpWidget(
-          buildApp(auth, jobs: [sampleJob()], bids: [sampleBid()]));
-      await tester.pumpAndSettle();
-      await fillField(tester, 'Email', 'a@b.com');
-      await fillField(tester, 'Password', 'secret123');
-      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
-      await tester.pumpAndSettle();
+        // RM 100 available, but the sample bid is RM 150 — RM 50 short.
+        final auth = FakeAuthRepository()..walletBalanceSen = 10000;
+        await tester.pumpWidget(
+          buildApp(auth, jobs: [sampleJob()], bids: [sampleBid()]),
+        );
+        await tester.pumpAndSettle();
+        await fillField(tester, 'Email', 'a@b.com');
+        await fillField(tester, 'Password', 'secret123');
+        await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Fix leaking sink').first);
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
 
-      await tester.ensureVisible(
-          find.widgetWithText(FilledButton, 'Accept Bid'));
-      await tester.tap(find.widgetWithText(FilledButton, 'Accept Bid'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Accept Bid'),
-      ));
-      await tester.pumpAndSettle();
+        await tester.ensureVisible(
+          find.widgetWithText(FilledButton, 'Accept Bid'),
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Accept Bid'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.widgetWithText(FilledButton, 'Accept Bid'),
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      // The gate blocked the accept and surfaced the shortfall.
-      expect(find.text('Not enough balance'), findsOneWidget);
-      expect(find.textContaining('RM 50.00 more available'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Top up'), findsOneWidget);
-      expect(find.text('In Progress'), findsNothing);
+        // The gate blocked the accept and surfaced the shortfall.
+        expect(find.text('Not enough balance'), findsOneWidget);
+        expect(find.textContaining('RM 50.00 more available'), findsOneWidget);
+        expect(find.widgetWithText(FilledButton, 'Top up'), findsOneWidget);
+        expect(find.text('In Progress'), findsNothing);
 
-      // Top up routes to the wallet screen.
-      await tester.tap(find.widgetWithText(FilledButton, 'Top up'));
-      await tester.pumpAndSettle();
-      expect(find.text('My Wallet'), findsOneWidget);
-    });
+        // Top up routes to the wallet screen.
+        await tester.tap(find.widgetWithText(FilledButton, 'Top up'));
+        await tester.pumpAndSettle();
+        expect(find.text('My Wallet'), findsOneWidget);
+      },
+    );
 
-    test(
-        'sequential overdraw guard: locking one bid blocks a second that no '
+    test('sequential overdraw guard: locking one bid blocks a second that no '
         'longer fits', () async {
       // RM 200 available — enough for either bid alone, not both.
       final auth = FakeAuthRepository()..walletBalanceSen = 20000;
@@ -2246,10 +2628,16 @@ void main() {
         sampleJob(id: 'job-b', title: 'Job B'),
       ]);
       final bidRepo = FakeBidRepository(jobRepo, auth);
-      final bidA =
-          sampleBid(jobId: 'job-a', providerId: 'p-a', amountSen: 15000);
-      final bidB =
-          sampleBid(jobId: 'job-b', providerId: 'p-b', amountSen: 15000);
+      final bidA = sampleBid(
+        jobId: 'job-a',
+        providerId: 'p-a',
+        amountSen: 15000,
+      );
+      final bidB = sampleBid(
+        jobId: 'job-b',
+        providerId: 'p-b',
+        amountSen: 15000,
+      );
 
       // Accepting job A locks its amount away.
       await bidRepo.acceptBid(bidA);
@@ -2259,33 +2647,40 @@ void main() {
       // left available once job A's commitment is locked.
       await expectLater(
         bidRepo.acceptBid(bidB),
-        throwsA(isA<InsufficientBalanceException>()
-            .having((e) => e.shortfallSen, 'shortfallSen', 10000)
-            .having((e) => e.availableSen, 'availableSen', 5000)
-            .having((e) => e.requiredSen, 'requiredSen', 15000)),
+        throwsA(
+          isA<InsufficientBalanceException>()
+              .having((e) => e.shortfallSen, 'shortfallSen', 10000)
+              .having((e) => e.availableSen, 'availableSen', 5000)
+              .having((e) => e.requiredSen, 'requiredSen', 15000),
+        ),
       );
     });
   });
 
   group('Trust Score', () {
-    test('Bayesian review score starts at the prior and moves with reviews',
-        () {
-      // No reviews → the platform prior (3.5/5 → 700).
-      expect(PlatformConfig.trustScoreFor(ratingSum: 0, ratingCount: 0), 700);
-      // One 5★ on a fresh provider is smoothed toward the prior, not 1000.
-      expect(PlatformConfig.trustScoreFor(ratingSum: 5, ratingCount: 1), 727);
-      // A long run of 5★ approaches but never exceeds the cap.
-      final many =
-          PlatformConfig.trustScoreFor(ratingSum: 500, ratingCount: 100);
-      expect(many, greaterThan(900));
-      expect(many, lessThanOrEqualTo(1000));
-    });
+    test(
+      'Bayesian review score starts at the prior and moves with reviews',
+      () {
+        // No reviews → the platform prior (3.5/5 → 700).
+        expect(PlatformConfig.trustScoreFor(ratingSum: 0, ratingCount: 0), 700);
+        // One 5★ on a fresh provider is smoothed toward the prior, not 1000.
+        expect(PlatformConfig.trustScoreFor(ratingSum: 5, ratingCount: 1), 727);
+        // A long run of 5★ approaches but never exceeds the cap.
+        final many = PlatformConfig.trustScoreFor(
+          ratingSum: 500,
+          ratingCount: 100,
+        );
+        expect(many, greaterThan(900));
+        expect(many, lessThanOrEqualTo(1000));
+      },
+    );
 
     // The shared vectors that also pin functions/index.js (`npm test`): if the
     // Dart and JS formulas ever drift, one of the two suites fails.
-    final vectors = (jsonDecode(
-                File('test/fixtures/trust_vectors.json').readAsStringSync())
-            as Map<String, dynamic>)['vectors'] as List;
+    final vectors =
+        (jsonDecode(File('test/fixtures/trust_vectors.json').readAsStringSync())
+                as Map<String, dynamic>)['vectors']
+            as List;
     for (final raw in vectors) {
       final v = raw as Map<String, dynamic>;
       test('v2 breakdown vector: ${v['name']}', () {
@@ -2336,17 +2731,19 @@ void main() {
     //   Cheap Charlie: 0.6*(100/100) + 0.4*0.30 = 0.72
     //   Trusty Tina:   0.6*(100/120) + 0.4*0.95 = 0.88  → Best Value
     List<Bid> valueBids() => [
-          sampleBid(
-              providerId: 'p-cheap',
-              providerName: 'Cheap Charlie',
-              amountSen: 10000,
-              trustScore: 300),
-          sampleBid(
-              providerId: 'p-trust',
-              providerName: 'Trusty Tina',
-              amountSen: 12000,
-              trustScore: 950),
-        ];
+      sampleBid(
+        providerId: 'p-cheap',
+        providerName: 'Cheap Charlie',
+        amountSen: 10000,
+        trustScore: 300,
+      ),
+      sampleBid(
+        providerId: 'p-trust',
+        providerName: 'Trusty Tina',
+        amountSen: 12000,
+        trustScore: 950,
+      ),
+    ];
 
     Future<void> openOwnJob(WidgetTester tester) async {
       await fillField(tester, 'Email', 'a@b.com');
@@ -2357,13 +2754,15 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('defaults to composite order and badges the top bid',
-        (tester) async {
+    testWidgets('defaults to composite order and badges the top bid', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester.pumpWidget(buildApp(FakeAuthRepository(),
-          jobs: [sampleJob()], bids: valueBids()));
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository(), jobs: [sampleJob()], bids: valueBids()),
+      );
       await tester.pumpAndSettle();
       await openOwnJob(tester);
 
@@ -2376,20 +2775,24 @@ void main() {
       expect(find.text('BEST VALUE'), findsOneWidget);
       final firstCard = find.byType(BidCard).first;
       expect(
-          find.descendant(of: firstCard, matching: find.text('Trusty Tina')),
-          findsOneWidget);
+        find.descendant(of: firstCard, matching: find.text('Trusty Tina')),
+        findsOneWidget,
+      );
       expect(
-          find.descendant(of: firstCard, matching: find.text('BEST VALUE')),
-          findsOneWidget);
+        find.descendant(of: firstCard, matching: find.text('BEST VALUE')),
+        findsOneWidget,
+      );
     });
 
-    testWidgets('re-sorting by Price reorders but keeps the badge fixed',
-        (tester) async {
+    testWidgets('re-sorting by Price reorders but keeps the badge fixed', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester.pumpWidget(buildApp(FakeAuthRepository(),
-          jobs: [sampleJob()], bids: valueBids()));
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository(), jobs: [sampleJob()], bids: valueBids()),
+      );
       await tester.pumpAndSettle();
       await openOwnJob(tester);
 
@@ -2398,26 +2801,35 @@ void main() {
 
       // Cheapest sorts first now, but the badge stays on the value winner.
       expect(
-          find.descendant(
-              of: find.byType(BidCard).first,
-              matching: find.text('Cheap Charlie')),
-          findsOneWidget);
+        find.descendant(
+          of: find.byType(BidCard).first,
+          matching: find.text('Cheap Charlie'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('BEST VALUE'), findsOneWidget);
       expect(
-          find.descendant(
-              of: find.byType(BidCard).last,
-              matching: find.text('BEST VALUE')),
-          findsOneWidget);
+        find.descendant(
+          of: find.byType(BidCard).last,
+          matching: find.text('BEST VALUE'),
+        ),
+        findsOneWidget,
+      );
     });
 
-    testWidgets('a bid from a new provider shows a New badge, not a score',
-        (tester) async {
+    testWidgets('a bid from a new provider shows a New badge, not a score', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester.pumpWidget(buildApp(FakeAuthRepository(),
+      await tester.pumpWidget(
+        buildApp(
+          FakeAuthRepository(),
           jobs: [sampleJob()],
-          bids: [sampleBid(scoreVisible: false)]));
+          bids: [sampleBid(scoreVisible: false)],
+        ),
+      );
       await tester.pumpAndSettle();
       await openOwnJob(tester);
 
@@ -2444,66 +2856,77 @@ void main() {
     }
 
     testWidgets(
-        'releasing the last milestone completes the job and the requestor '
-        'reviews the provider', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+      'releasing the last milestone completes the job and the requestor '
+      'reviews the provider',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      final review = FakeReviewRepository();
-      final job = sampleJob(
-        status: JobStatus.inProgress,
-        acceptedProviderId: 'prov-1',
-        acceptedProviderName: 'Pro Fixer',
-        acceptedBidAmountSen: 15000,
-      );
-      // The provider already delivered the (only) milestone.
-      final milestone = Milestone(
-        id: 'ms-1',
-        jobId: 'job-1',
-        providerId: 'prov-1',
-        description: 'Full repair',
-        amountSen: 15000,
-        status: MilestoneStatus.submitted,
-        createdAt: DateTime.now(),
-      );
-      await tester.pumpWidget(buildApp(FakeAuthRepository(),
-          jobs: [job], milestones: [milestone], review: review));
-      await tester.pumpAndSettle();
-      await loginRequestor(tester);
+        final review = FakeReviewRepository();
+        final job = sampleJob(
+          status: JobStatus.inProgress,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+        );
+        // The provider already delivered the (only) milestone.
+        final milestone = Milestone(
+          id: 'ms-1',
+          jobId: 'job-1',
+          providerId: 'prov-1',
+          description: 'Full repair',
+          amountSen: 15000,
+          status: MilestoneStatus.submitted,
+          createdAt: DateTime.now(),
+        );
+        await tester.pumpWidget(
+          buildApp(
+            FakeAuthRepository(),
+            jobs: [job],
+            milestones: [milestone],
+            review: review,
+          ),
+        );
+        await tester.pumpAndSettle();
+        await loginRequestor(tester);
 
-      await tester.tap(find.text('Fix leaking sink').first);
-      await tester.pumpAndSettle();
-      expect(find.text('Assigned Provider'), findsOneWidget);
-      expect(find.text('1. Full repair'), findsOneWidget);
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        expect(find.text('Assigned Provider'), findsOneWidget);
+        expect(find.text('1. Full repair'), findsOneWidget);
 
-      // Release the delivered milestone (with confirmation) — the last one,
-      // so the job completes.
-      final releaseBtn = find.widgetWithText(FilledButton, 'Release Payment');
-      await tester.ensureVisible(releaseBtn);
-      await tester.tap(releaseBtn);
-      await tester.pumpAndSettle();
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Release'),
-      ));
-      await tester.pumpAndSettle();
+        // Release the delivered milestone (with confirmation) — the last one,
+        // so the job completes.
+        final releaseBtn = find.widgetWithText(FilledButton, 'Release Payment');
+        await tester.ensureVisible(releaseBtn);
+        await tester.tap(releaseBtn);
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.widgetWithText(FilledButton, 'Release'),
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      // Completed → review the provider with 5★.
-      final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
-      await tester.ensureVisible(reviewBtn);
-      await tester.tap(reviewBtn);
-      await tester.pumpAndSettle();
-      expect(find.text('Leave a Review'), findsOneWidget);
-      await giveStarsAndSubmit(tester, 5);
+        // Completed → review the provider with 5★.
+        final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
+        await tester.ensureVisible(reviewBtn);
+        await tester.tap(reviewBtn);
+        await tester.pumpAndSettle();
+        expect(find.text('Leave a Review'), findsOneWidget);
+        await giveStarsAndSubmit(tester, 5);
 
-      // The provider's aggregates and Bayesian review score were recomputed.
-      expect(review.ratingCounts['prov-1'], 1);
-      expect(review.reviewScores['prov-1'], 73); // (10·3.5+5)/11 /5 ·100
-      expect(find.text('Review submitted'), findsOneWidget);
-    });
+        // The provider's aggregates and Bayesian review score were recomputed.
+        expect(review.ratingCounts['prov-1'], 1);
+        expect(review.reviewScores['prov-1'], 73); // (10·3.5+5)/11 /5 ·100
+        expect(find.text('Review submitted'), findsOneWidget);
+      },
+    );
 
-    testWidgets('accepted provider reviews the requestor on a completed job',
-        (tester) async {
+    testWidgets('accepted provider reviews the requestor on a completed job', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -2525,10 +2948,12 @@ void main() {
       await openRegisterAs(tester, 'Work');
 
       // The provider reaches their won job via the My Jobs tab.
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('My Jobs'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('My Jobs'),
+        ),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
@@ -2566,16 +2991,19 @@ void main() {
         acceptedProviderName: 'Pro Fixer',
         acceptedBidAmountSen: 15000,
       );
-      await tester
-          .pumpWidget(buildApp(FakeAuthRepository(), jobs: [job], review: review));
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository(), jobs: [job], review: review),
+      );
       await tester.pumpAndSettle();
       await loginRequestor(tester);
 
       // Completed jobs are hidden from Active Jobs, so open it via My Jobs.
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('My Jobs'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('My Jobs'),
+        ),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
@@ -2586,22 +3014,21 @@ void main() {
       await tester.pumpAndSettle();
       await giveStarsAndSubmit(tester, 5);
 
-      expect(
-          find.text('You have already reviewed this job.'), findsOneWidget);
+      expect(find.text('You have already reviewed this job.'), findsOneWidget);
     });
   });
 
   group('Chat', () {
     Conversation sampleConversation() => Conversation(
-          id: 'job-1_prov-1',
-          jobId: 'job-1',
-          jobTitle: 'Fix leaking sink',
-          requestorId: 'uid-1',
-          requestorName: 'Test User',
-          providerId: 'prov-1',
-          providerName: 'Pro Fixer',
-          lastMessageAt: DateTime.now(),
-        );
+      id: 'job-1_prov-1',
+      jobId: 'job-1',
+      jobTitle: 'Fix leaking sink',
+      requestorId: 'uid-1',
+      requestorName: 'Test User',
+      providerId: 'prov-1',
+      providerName: 'Pro Fixer',
+      lastMessageAt: DateTime.now(),
+    );
 
     Future<void> login(WidgetTester tester) async {
       await fillField(tester, 'Email', 'a@b.com');
@@ -2624,8 +3051,7 @@ void main() {
       expect(c.lastMessageText, 'Hello!');
     });
 
-    testWidgets(
-        'unread badge shows, opening the thread clears it, and a reply '
+    testWidgets('unread badge shows, opening the thread clears it, and a reply '
         'sends', (tester) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2633,9 +3059,10 @@ void main() {
       final chat = FakeChatRepository([sampleConversation()]);
       // An incoming message from the provider → 1 unread for the requestor.
       await chat.sendMessage(
-          conversation: sampleConversation(),
-          senderId: 'prov-1',
-          text: 'Hello! I can come by tomorrow.');
+        conversation: sampleConversation(),
+        senderId: 'prov-1',
+        text: 'Hello! I can come by tomorrow.',
+      );
 
       await tester.pumpWidget(buildApp(FakeAuthRepository(), chat: chat));
       await tester.pumpAndSettle();
@@ -2643,15 +3070,20 @@ void main() {
 
       // The Messages tab shows the unread badge.
       expect(
-          find.descendant(
-              of: find.byType(NavigationBar), matching: find.text('1')),
-          findsOneWidget);
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
 
       // The conversation list shows the counterparty, job and preview.
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('Messages'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Messages'),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(find.text('Pro Fixer'), findsOneWidget);
       expect(find.text('Fix leaking sink'), findsOneWidget);
@@ -2662,9 +3094,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Hello! I can come by tomorrow.'), findsOneWidget);
       expect(
-          find.descendant(
-              of: find.byType(NavigationBar), matching: find.text('1')),
-          findsNothing);
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('1'),
+        ),
+        findsNothing,
+      );
 
       // Send a reply.
       await tester.enterText(find.byType(TextField), 'Great, see you then!');
@@ -2673,8 +3108,9 @@ void main() {
       expect(find.text('Great, see you then!'), findsOneWidget);
     });
 
-    testWidgets('requestor opens the chat from the assigned-provider card',
-        (tester) async {
+    testWidgets('requestor opens the chat from the assigned-provider card', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -2686,7 +3122,8 @@ void main() {
         acceptedBidAmountSen: 15000,
       );
       await tester.pumpWidget(
-          buildApp(FakeAuthRepository(), jobs: [job], chat: chat));
+        buildApp(FakeAuthRepository(), jobs: [job], chat: chat),
+      );
       await tester.pumpAndSettle();
       await login(tester);
 
@@ -2707,31 +3144,35 @@ void main() {
       String uid = 'prov-9',
       String name = 'Alex Rivera',
       UserRole role = UserRole.provider,
-    }) =>
-        PendingVerification(
-          uid: uid,
-          displayName: name,
-          role: role,
-          email: 'alex@fairbid.app',
-          providerType: 'individual',
-          submittedAt: DateTime.now().subtract(const Duration(hours: 2)),
-          phone: '0123456789',
-          location: 'Kuala Lumpur',
-          category: 'Plumbing',
-          skills: const ['Pipe fitting', 'Leak repair'],
-          // Identity docs now come from the private-only loadIdentityDocuments;
-          // the public `documents` list holds certificates/portfolio only.
-          documents: const [],
-        );
+    }) => PendingVerification(
+      uid: uid,
+      displayName: name,
+      role: role,
+      email: 'alex@fairbid.app',
+      providerType: 'individual',
+      submittedAt: DateTime.now().subtract(const Duration(hours: 2)),
+      phone: '0123456789',
+      location: 'Kuala Lumpur',
+      category: 'Plumbing',
+      skills: const ['Pipe fitting', 'Leak repair'],
+      // Identity docs now come from the private-only loadIdentityDocuments;
+      // the public `documents` list holds certificates/portfolio only.
+      documents: const [],
+    );
 
-    testWidgets('admin lands on the queue and sees pending applicants',
-        (tester) async {
+    testWidgets('admin lands on the queue and sees pending applicants', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
-      await tester.pumpWidget(buildApp(auth,
-          verification: FakeVerificationRepository([samplePending()])));
+      await tester.pumpWidget(
+        buildApp(
+          auth,
+          verification: FakeVerificationRepository([samplePending()]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Verification Queue'), findsOneWidget);
@@ -2748,8 +3189,9 @@ void main() {
       expect(find.text('All caught up'), findsOneWidget);
     });
 
-    testWidgets('approving an applicant records the decision and clears it',
-        (tester) async {
+    testWidgets('approving an applicant records the decision and clears it', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -2769,10 +3211,12 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Approve'));
       await tester.pumpAndSettle();
       expect(find.text('Approve verification?'), findsOneWidget);
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Approve'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Approve'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       // Decision recorded; back on the queue, now empty.
@@ -2780,20 +3224,27 @@ void main() {
       expect(find.text('All caught up'), findsOneWidget);
     });
 
-    testWidgets('admin profile shows admin info, not marketplace fields',
-        (tester) async {
+    testWidgets('admin profile shows admin info, not marketplace fields', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
-      await tester.pumpWidget(buildApp(auth,
-          verification: FakeVerificationRepository([samplePending()])));
+      await tester.pumpWidget(
+        buildApp(
+          auth,
+          verification: FakeVerificationRepository([samplePending()]),
+        ),
+      );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('Profile'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       // Admin-appropriate content.
@@ -2822,10 +3273,12 @@ void main() {
       await tester.tap(find.widgetWithText(OutlinedButton, 'Reject'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Blurry document.');
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Reject'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Reject'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(verification.decisions['prov-9'], isFalse);
@@ -2878,29 +3331,34 @@ void main() {
     });
 
     test('dispute ledger types parse from storage', () {
-      expect(LedgerType.fromStorage('dispute_release'),
-          LedgerType.disputeRelease);
       expect(
-          LedgerType.fromStorage('dispute_refund'), LedgerType.disputeRefund);
+        LedgerType.fromStorage('dispute_release'),
+        LedgerType.disputeRelease,
+      );
+      expect(
+        LedgerType.fromStorage('dispute_refund'),
+        LedgerType.disputeRefund,
+      );
     });
 
     Dispute sampleDispute({String id = 'disp-1'}) => Dispute(
-          id: id,
-          jobId: 'job-1',
-          jobTitle: 'Fix leaking sink',
-          milestoneId: 'ms-1',
-          milestoneDescription: 'Full repair',
-          amountSen: 15000,
-          raisedByUid: 'uid-1',
-          raisedByRole: 'requestor',
-          requestorId: 'uid-1',
-          providerId: 'prov-1',
-          statement: 'The pipe still leaks after the repair.',
-          createdAt: DateTime.now(),
-        );
+      id: id,
+      jobId: 'job-1',
+      jobTitle: 'Fix leaking sink',
+      milestoneId: 'ms-1',
+      milestoneDescription: 'Full repair',
+      amountSen: 15000,
+      raisedByUid: 'uid-1',
+      raisedByRole: 'requestor',
+      requestorId: 'uid-1',
+      providerId: 'prov-1',
+      statement: 'The pipe still leaks after the repair.',
+      createdAt: DateTime.now(),
+    );
 
-    testWidgets('requestor raises a dispute on a funded milestone',
-        (tester) async {
+    testWidgets('requestor raises a dispute on a funded milestone', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -2920,8 +3378,14 @@ void main() {
         status: MilestoneStatus.funded,
         createdAt: DateTime.now(),
       );
-      await tester.pumpWidget(buildApp(FakeAuthRepository(),
-          jobs: [job], milestones: [milestone], dispute: dispute));
+      await tester.pumpWidget(
+        buildApp(
+          FakeAuthRepository(),
+          jobs: [job],
+          milestones: [milestone],
+          dispute: dispute,
+        ),
+      );
       await tester.pumpAndSettle();
       await fillField(tester, 'Email', 'a@b.com');
       await fillField(tester, 'Password', 'secret123');
@@ -2944,7 +3408,10 @@ void main() {
 
       // Statement in → submitted; milestone freezes to Disputed.
       await fillField(
-          tester, 'What went wrong?', 'The pipe still leaks after repair.');
+        tester,
+        'What went wrong?',
+        'The pipe still leaks after repair.',
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Submit Dispute'));
       await tester.pumpAndSettle();
 
@@ -2973,8 +3440,10 @@ void main() {
       await tester.tap(find.text('Fix leaking sink'));
       await tester.pumpAndSettle();
       expect(find.text('Dispute Review'), findsOneWidget);
-      expect(find.text('The pipe still leaks after the repair.'),
-          findsOneWidget);
+      expect(
+        find.text('The pipe still leaks after the repair.'),
+        findsOneWidget,
+      );
 
       // Release → the ruling note is required before confirming.
       await tester.tap(find.widgetWithText(FilledButton, 'Release'));
@@ -2985,7 +3454,9 @@ void main() {
       );
       expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
       await tester.enterText(
-          find.byType(TextField).last, 'Work matches the milestone scope.');
+        find.byType(TextField).last,
+        'Work matches the milestone scope.',
+      );
       await tester.pumpAndSettle();
       await tester.tap(confirm);
       await tester.pumpAndSettle();
@@ -3038,10 +3509,12 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
-        matching: find.text('Profile'),
-      ));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       // Report via the flag icon on the review.
@@ -3055,19 +3528,21 @@ void main() {
       final report = find.widgetWithText(FilledButton, 'Report');
       expect(tester.widget<FilledButton>(report).onPressed, isNull);
       await tester.enterText(
-          find.byType(TextField).last, 'This reviewer was never my client.');
+        find.byType(TextField).last,
+        'This reviewer was never my client.',
+      );
       await tester.pumpAndSettle();
       await tester.tap(report);
       await tester.pumpAndSettle();
 
       expect(review.flags, hasLength(1));
       expect(review.flags.single.$2, 'r1');
-      expect(
-          review.flags.single.$3, 'This reviewer was never my client.');
+      expect(review.flags.single.$3, 'This reviewer was never my client.');
     });
 
-    testWidgets('admin hides a flagged review from the Reviews tab',
-        (tester) async {
+    testWidgets('admin hides a flagged review from the Reviews tab', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -3103,8 +3578,9 @@ void main() {
       expect(find.text('Nothing to moderate'), findsOneWidget);
     });
 
-    testWidgets('stats tab shows the aggregated platform numbers',
-        (tester) async {
+    testWidgets('stats tab shows the aggregated platform numbers', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -3127,8 +3603,9 @@ void main() {
       expect(find.text('23'), findsOneWidget); // total users
     });
 
-    testWidgets('stats tab can trigger the Trust Score recompute',
-        (tester) async {
+    testWidgets('stats tab can trigger the Trust Score recompute', (
+      tester,
+    ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -3142,8 +3619,7 @@ void main() {
       await tester.tap(find.text('Stats'));
       await tester.pumpAndSettle();
 
-      final btn =
-          find.widgetWithText(OutlinedButton, 'Recompute Trust Scores');
+      final btn = find.widgetWithText(OutlinedButton, 'Recompute Trust Scores');
       await tester.ensureVisible(btn);
       await tester.tap(btn);
       await tester.pumpAndSettle();
@@ -3155,22 +3631,23 @@ void main() {
 
   group('Milestone plan approval and dispute rework', () {
     Dispute disputeFor(String milestoneId) => Dispute(
-          id: 'disp-1',
-          jobId: 'job-1',
-          jobTitle: 'Fix leaking sink',
-          milestoneId: milestoneId,
-          milestoneDescription: 'Full repair',
-          amountSen: 15000,
-          raisedByUid: 'uid-1',
-          raisedByRole: 'requestor',
-          requestorId: 'uid-1',
-          providerId: 'prov-1',
-          statement: 'The pipe still leaks after the repair.',
-          createdAt: DateTime.now(),
-        );
+      id: 'disp-1',
+      jobId: 'job-1',
+      jobTitle: 'Fix leaking sink',
+      milestoneId: milestoneId,
+      milestoneDescription: 'Full repair',
+      amountSen: 15000,
+      raisedByUid: 'uid-1',
+      raisedByRole: 'requestor',
+      requestorId: 'uid-1',
+      providerId: 'prov-1',
+      statement: 'The pipe still leaks after the repair.',
+      createdAt: DateTime.now(),
+    );
 
     FakeMilestoneRepository repoWithDisputedLastMilestone(
-        FakeJobRepository jobs) {
+      FakeJobRepository jobs,
+    ) {
       return FakeMilestoneRepository(jobs, [
         Milestone(
           id: 'ms-1',
@@ -3185,34 +3662,36 @@ void main() {
     }
 
     FakeJobRepository inProgressJob() => FakeJobRepository([
-          sampleJob(
-            status: JobStatus.inProgress,
-            acceptedProviderId: 'prov-1',
-            acceptedProviderName: 'Pro Fixer',
-            acceptedBidAmountSen: 15000,
-          ),
-        ]);
+      sampleJob(
+        status: JobStatus.inProgress,
+        acceptedProviderId: 'prov-1',
+        acceptedProviderName: 'Pro Fixer',
+        acceptedBidAmountSen: 15000,
+      ),
+    ]);
 
-    test('refunding the last milestone reopens it, job stays in progress',
-        () async {
-      final jobs = inProgressJob();
-      final milestones = repoWithDisputedLastMilestone(jobs);
-      final disputes = FakeDisputeRepository([disputeFor('ms-1')])
-        ..milestones = milestones;
+    test(
+      'refunding the last milestone reopens it, job stays in progress',
+      () async {
+        final jobs = inProgressJob();
+        final milestones = repoWithDisputedLastMilestone(jobs);
+        final disputes = FakeDisputeRepository([disputeFor('ms-1')])
+          ..milestones = milestones;
 
-      await disputes.resolveDispute(
-        disputeId: 'disp-1',
-        resolution: DisputeResolution.refund,
-        rulingNote: 'Work was not delivered.',
-      );
+        await disputes.resolveDispute(
+          disputeId: 'disp-1',
+          resolution: DisputeResolution.refund,
+          rulingNote: 'Work was not delivered.',
+        );
 
-      final m = (await milestones.watchMilestones('job-1').first).single;
-      expect(m.status, MilestoneStatus.pending); // reopened, not terminal
-      expect(m.reworkCount, 1);
-      expect(m.reworkNote, 'Work was not delivered.');
-      final job = await jobs.getById('job-1');
-      expect(job!.status, JobStatus.inProgress); // NOT completed
-    });
+        final m = (await milestones.watchMilestones('job-1').first).single;
+        expect(m.status, MilestoneStatus.pending); // reopened, not terminal
+        expect(m.reworkCount, 1);
+        expect(m.reworkNote, 'Work was not delivered.');
+        final job = await jobs.getById('job-1');
+        expect(job!.status, JobStatus.inProgress); // NOT completed
+      },
+    );
 
     test('releasing the last disputed milestone completes the job', () async {
       final jobs = inProgressJob();
@@ -3232,36 +3711,102 @@ void main() {
       expect(job!.status, JobStatus.completed);
     });
 
-    test('a proposed plan is not fundable until the client approves it',
-        () async {
-      final jobs = inProgressJob();
-      final milestones = FakeMilestoneRepository(jobs);
-      await milestones.proposeMilestones('job-1', [
-        Milestone(
-          id: '',
-          jobId: 'job-1',
-          providerId: 'prov-1',
-          description: 'All work',
-          amountSen: 15000,
-          order: 0,
+    test(
+      'a proposed plan is not fundable until the client approves it',
+      () async {
+        final jobs = inProgressJob();
+        final milestones = FakeMilestoneRepository(jobs);
+        await milestones.proposeMilestones('job-1', [
+          Milestone(
+            id: '',
+            jobId: 'job-1',
+            providerId: 'prov-1',
+            description: 'All work',
+            amountSen: 15000,
+            order: 0,
+          ),
+        ]);
+
+        var m = (await milestones.watchMilestones('job-1').first).single;
+        expect(m.status, MilestoneStatus.proposed);
+
+        // Funding a merely-proposed milestone is refused (a no-op in the fake).
+        await milestones.fundMilestone('job-1', m.id);
+        m = (await milestones.watchMilestones('job-1').first).single;
+        expect(m.status, MilestoneStatus.proposed);
+
+        // Approval makes it pending → fundable.
+        await milestones.approveMilestonePlan('job-1');
+        m = (await milestones.watchMilestones('job-1').first).single;
+        expect(m.status, MilestoneStatus.pending);
+        await milestones.fundMilestone('job-1', m.id);
+        m = (await milestones.watchMilestones('job-1').first).single;
+        expect(m.status, MilestoneStatus.funded);
+      },
+    );
+  });
+
+  group('Admin user suspension', () {
+    testWidgets('admin suspends a user from the Users tab', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
+      final users = FakeUserAdminRepository([
+        const ManagedUser(
+          uid: 'u-2',
+          displayName: 'Bob Provider',
+          email: 'bob@fairbid.app',
+          role: 'provider',
+          suspended: false,
         ),
       ]);
+      await tester.pumpWidget(buildApp(auth, userAdmin: users));
+      await tester.pumpAndSettle();
 
-      var m = (await milestones.watchMilestones('job-1').first).single;
-      expect(m.status, MilestoneStatus.proposed);
+      // The Users tab is the last, scrollable-off-screen one in the wide test
+      // font — bring it on-screen first (same as the Stats tab test).
+      await tester.ensureVisible(find.text('Users'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Users'));
+      await tester.pumpAndSettle();
 
-      // Funding a merely-proposed milestone is refused (a no-op in the fake).
-      await milestones.fundMilestone('job-1', m.id);
-      m = (await milestones.watchMilestones('job-1').first).single;
-      expect(m.status, MilestoneStatus.proposed);
+      expect(find.text('Bob Provider'), findsOneWidget);
 
-      // Approval makes it pending → fundable.
-      await milestones.approveMilestonePlan('job-1');
-      m = (await milestones.watchMilestones('job-1').first).single;
-      expect(m.status, MilestoneStatus.pending);
-      await milestones.fundMilestone('job-1', m.id);
-      m = (await milestones.watchMilestones('job-1').first).single;
-      expect(m.status, MilestoneStatus.funded);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Suspend'));
+      await tester.pumpAndSettle();
+
+      // Confirm sheet: enter a reason and confirm.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Reason (optional)'),
+        'Spam bids',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Suspend'));
+      await tester.pumpAndSettle();
+
+      expect(users.calls, hasLength(1));
+      expect(users.calls.first.uid, 'u-2');
+      expect(users.calls.first.suspended, isTrue);
+      expect(users.calls.first.reason, 'Spam bids');
+      // The list re-renders: the user now shows the Suspended pill and the
+      // action flips to Reinstate.
+      expect(find.text('Suspended'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Reinstate'), findsOneWidget);
+    });
+
+    testWidgets('a suspended user is locked to the suspended screen', (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()
+        ..suspended = true
+        ..suspensionReason = 'Repeated policy violations'
+        ..seedSignedIn(UserRole.requestor);
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Account suspended'), findsOneWidget);
+      expect(find.textContaining('Repeated policy violations'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Sign Out'), findsOneWidget);
     });
   });
 }

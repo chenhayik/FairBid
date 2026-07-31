@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/location/region.dart';
+import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
+import '../../../../core/widgets/location_field.dart';
 import '../../../auth/presentation/validators.dart';
 import '../requestor_onboarding_controller.dart';
 
@@ -18,7 +22,6 @@ class _DetailsStepState extends State<DetailsStep> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _fullName;
   late final TextEditingController _phone;
-  late final TextEditingController _location;
   late final TextEditingController _companyName;
   late final TextEditingController _ssmNumber;
 
@@ -28,7 +31,6 @@ class _DetailsStepState extends State<DetailsStep> {
     final data = context.read<RequestorOnboardingController>().data;
     _fullName = TextEditingController(text: data.fullName);
     _phone = TextEditingController(text: data.phone);
-    _location = TextEditingController(text: data.location);
     _companyName = TextEditingController(text: data.companyName);
     _ssmNumber = TextEditingController(text: data.ssmNumber);
   }
@@ -37,19 +39,50 @@ class _DetailsStepState extends State<DetailsStep> {
   void dispose() {
     _fullName.dispose();
     _phone.dispose();
-    _location.dispose();
     _companyName.dispose();
     _ssmNumber.dispose();
     super.dispose();
   }
 
+  /// Opens the Penang-scoped picker and stores both the composed label
+  /// ([RequestorOnboardingData.location]) and the structured pick behind it.
+  Future<void> _pickLocation() async {
+    final onboarding = context.read<RequestorOnboardingController>();
+    final data = onboarding.data;
+    final picked = await RegionPickerScreen.show(
+      context,
+      initialCenter: data.lat == null || data.lng == null
+          ? null
+          : LatLng(data.lat!, data.lng!),
+      initialRegion: data.districtCode == null
+          ? null
+          : Region(
+              districtCode: data.districtCode!,
+              districtName: Region.districtNameFor(data.districtCode!),
+              town: data.town,
+            ),
+    );
+    if (picked == null) return;
+    setState(() {
+      data.location = picked.address;
+      data.districtCode = picked.region.districtCode;
+      data.town = picked.region.town;
+      data.lat = picked.lat;
+      data.lng = picked.lng;
+    });
+  }
+
   void _saveAndContinue() {
     if (!_formKey.currentState!.validate()) return;
     final onboarding = context.read<RequestorOnboardingController>();
+    if (onboarding.data.districtCode == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Please pick a location.')));
+      return;
+    }
     onboarding.data
       ..fullName = _fullName.text.trim()
       ..phone = _phone.text.trim()
-      ..location = _location.text.trim()
       ..companyName = _companyName.text.trim()
       ..ssmNumber = _ssmNumber.text.trim();
     onboarding.saveAndContinue();
@@ -107,14 +140,24 @@ class _DetailsStepState extends State<DetailsStep> {
                 helperText: 'Used to connect you with providers.',
                 validator: (v) => Validators.required(v, 'Phone number'),
               ),
-              AppTextField(
-                controller: _location,
-                label: 'Default Location',
-                hint: 'e.g. Kuala Lumpur',
-                prefixIcon: Icons.location_on_outlined,
-                textInputAction: TextInputAction.next,
-                helperText: 'New jobs will default to this area.',
-                validator: (v) => Validators.required(v, 'Location'),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Default Location', style: theme.textTheme.labelLarge),
+                    const SizedBox(height: 6),
+                    LocationField(
+                      label: data.location,
+                      placeholder: 'Pick your default location in Penang',
+                      onTap: _pickLocation,
+                    ),
+                    const SizedBox(height: 4),
+                    Text('New jobs will default to this area.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant)),
+                  ],
+                ),
               ),
               if (data.isBusiness) ...[
                 AppTextField(

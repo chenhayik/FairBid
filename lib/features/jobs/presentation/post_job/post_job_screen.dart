@@ -4,11 +4,13 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
-import '../../../../core/location/location_picker_screen.dart';
+import '../../../../core/location/region.dart';
+import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
+import '../../../../core/widgets/location_field.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../../../auth/presentation/validators.dart';
 import '../../../onboarding/data/document_storage_repository.dart';
@@ -16,6 +18,8 @@ import '../../../onboarding/presentation/steps/service_step.dart';
 import '../../data/assist_repository.dart';
 import '../../data/job_repository.dart';
 import '../../domain/job.dart';
+import '../../domain/service_address.dart';
+import '../detail/service_address_sheet.dart';
 import 'post_job_controller.dart';
 
 /// Requestor form for posting a new job. Owns a scoped [PostJobController] so
@@ -54,6 +58,31 @@ class _PostJobViewState extends State<_PostJobView> {
   bool _showOptional = false;
   DateTime? _deadline;
 
+  /// True while the location shown is still the requestor's saved default
+  /// (from onboarding) and hasn't been overridden by picking a new one.
+  bool _locationDefaulted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = context.read<AuthController>().user;
+    if (user == null || !user.hasDefaultLocation) return;
+    final region = Region(
+      districtCode: user.defaultDistrictCode!,
+      districtName: Region.districtNameFor(user.defaultDistrictCode!),
+      town: user.defaultTown,
+    );
+    final controller = context.read<PostJobController>();
+    controller.setLocation(PickedLocation(
+      lat: user.defaultLat!,
+      lng: user.defaultLng!,
+      address: region.label,
+      region: region,
+    ));
+    _address.text = region.label;
+    _locationDefaulted = true;
+  }
+
   @override
   void dispose() {
     _title.dispose();
@@ -67,15 +96,29 @@ class _PostJobViewState extends State<_PostJobView> {
   Future<void> _pickLocation() async {
     final controller = context.read<PostJobController>();
     final existing = controller.location;
-    final picked = await LocationPickerScreen.show(
+    final picked = await RegionPickerScreen.show(
       context,
-      initial: existing == null
-          ? null
-          : LatLng(existing.lat, existing.lng),
+      initialCenter:
+          existing == null ? null : LatLng(existing.lat, existing.lng),
+      initialRegion: existing?.region,
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     controller.setLocation(picked);
     _address.text = picked.address;
+    setState(() => _locationDefaulted = false);
+  }
+
+  /// Opens the address sheet, pre-filling the town from the picked map
+  /// location if any. Fully optional — posting still works without one.
+  Future<void> _pickAddress() async {
+    final controller = context.read<PostJobController>();
+    final result = await ServiceAddressSheet.show(
+      context,
+      initial: controller.pendingAddress,
+      defaultCity: controller.location?.region.town,
+    );
+    if (result == null) return;
+    controller.setAddress(result);
   }
 
   /// Opens a date picker for the optional bidding deadline (tomorrow through
@@ -120,6 +163,9 @@ class _PostJobViewState extends State<_PostJobView> {
         address: _address.text.trim().isEmpty
             ? controller.location!.address
             : _address.text.trim(),
+        districtCode: controller.location!.region.districtCode,
+        districtName: controller.location!.region.districtName,
+        town: controller.location!.region.town,
       ),
       budget: JobBudget(
         minSen: parseRmToSen(_budgetMin.text),
@@ -248,10 +294,23 @@ class _PostJobViewState extends State<_PostJobView> {
                   hasPhoto: controller.photoUrls.isNotEmpty,
                   onAddPhoto: () => setState(() => _showOptional = true),
                 ),
-                _LocationField(
-                  address: controller.location == null ? null : _address.text,
-                  onTap: _pickLocation,
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: LocationField(
+                    label: controller.location == null ? null : _address.text,
+                    placeholder: 'Pick location on map',
+                    onTap: _pickLocation,
+                  ),
                 ),
+                if (_locationDefaulted && controller.location != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, left: 4),
+                    child: Text(
+                      'Defaulted to your saved area — tap the map to change.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
                 if (controller.location != null) ...[
                   const SizedBox(height: 12),
                   AppTextField(
@@ -260,6 +319,11 @@ class _PostJobViewState extends State<_PostJobView> {
                     hint: 'e.g. Bangsar, Kuala Lumpur',
                   ),
                 ],
+                const SizedBox(height: 8),
+                _AddressField(
+                  address: controller.pendingAddress,
+                  onTap: _pickAddress,
+                ),
                 const SizedBox(height: 8),
                 _DeadlineField(
                   deadline: _deadline,
@@ -297,49 +361,7 @@ class _PostJobViewState extends State<_PostJobView> {
   }
 }
 
-class _LocationField extends StatelessWidget {
-  const _LocationField({required this.address, required this.onTap});
-  final String? address;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: context.fairbid.borderSubtle),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.location_on_outlined,
-                  color: context.fairbid.verified),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  address == null || address!.isEmpty
-                      ? 'Pick location on map'
-                      : address!,
-                  style: theme.textTheme.bodyLarge,
-                ),
-              ),
-              const Icon(Icons.chevron_right),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Optional bidding-deadline picker, modelled on [_LocationField]'s tappable
+/// Optional bidding-deadline picker, modelled on [LocationField]'s tappable
 /// row: shows "Set a bidding deadline" or the chosen date, with a clear (×)
 /// affordance once one is set.
 class _DeadlineField extends StatelessWidget {
@@ -386,6 +408,50 @@ class _DeadlineField extends StatelessWidget {
               )
             else
               const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Optional precise service-address affordance, modelled on
+/// [_DeadlineField]'s tappable row: shows a prompt or the entered address's
+/// one-line summary. Fully optional — posting works without one.
+class _AddressField extends StatelessWidget {
+  const _AddressField({required this.address, required this.onTap});
+
+  final ServiceAddress? address;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: context.fairbid.borderSubtle),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.home_outlined, color: context.fairbid.verified),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                address == null
+                    ? 'Add address (only your hired provider sees it)'
+                    : address!.summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodyLarge,
+              ),
+            ),
+            Icon(address == null ? Icons.chevron_right : Icons.edit_outlined),
           ],
         ),
       ),

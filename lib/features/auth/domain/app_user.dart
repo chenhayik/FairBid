@@ -20,6 +20,12 @@ class AppUser {
     this.baseLat,
     this.baseLng,
     this.baseAddress,
+    this.baseDistrictCode,
+    this.baseTown,
+    this.defaultLat,
+    this.defaultLng,
+    this.defaultDistrictCode,
+    this.defaultTown,
     this.bio,
     this.walletBalanceSen = 0,
     this.escrowLockedSen = 0,
@@ -34,6 +40,8 @@ class AppUser {
     this.payoutAccountLast4,
     this.isPasswordAccount = true,
     this.watchlist = const [],
+    this.suspended = false,
+    this.suspensionReason,
   });
 
   final String uid;
@@ -88,7 +96,24 @@ class AppUser {
   final double? baseLng;
   final String? baseAddress;
 
+  /// The Penang district/town behind [baseAddress] (see `Region`), when set
+  /// through the structured location picker. Null on legacy free-text data.
+  final String? baseDistrictCode;
+  final String? baseTown;
+
   bool get hasBaseLocation => baseLat != null && baseLng != null;
+
+  /// A requestor's saved default location (set during onboarding, stage 2),
+  /// used to pre-fill the Post-a-Job form. Stored at the **top level** of the
+  /// `users/{uid}` document — see `RequestorOnboardingData.toMap`. Null for
+  /// providers, and for requestors who onboarded before this existed.
+  final double? defaultLat;
+  final double? defaultLng;
+  final String? defaultDistrictCode;
+  final String? defaultTown;
+
+  bool get hasDefaultLocation =>
+      defaultLat != null && defaultLng != null && defaultDistrictCode != null;
 
   /// Reputation score 0–1000 (see the technical plan): a server-computed
   /// composite of reviews, track record, verification and profile
@@ -137,4 +162,14 @@ class AppUser {
 
   /// Whether [jobId] is on the user's watchlist.
   bool isSaved(String jobId) => watchlist.contains(jobId);
+
+  /// Whether an admin has suspended this account. A suspended user is frozen
+  /// out of every action (posting, bidding, paying, chatting, reviewing) and
+  /// the router locks them to the "account suspended" screen. Server-owned —
+  /// set only by the `setUserSuspended` Cloud Function.
+  final bool suspended;
+
+  /// The admin's optional note explaining the suspension, shown on the
+  /// suspended screen. Null when not suspended or no reason was given.
+  final String? suspensionReason;
 }

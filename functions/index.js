@@ -184,6 +184,24 @@ async function assertAdmin(tx, db, uid) {
 }
 
 /**
+ * Throws if `users/{uid}` is suspended. Read inside [tx], before any writes.
+ * The soft-suspension gate for state-changing callables: a suspended account
+ * keeps read access (so it can still see the "account suspended" screen and
+ * its reason) but can take no marketplace or money action. Firestore rules
+ * block the direct client writes (jobs, bids, reviews, chat, profile); this
+ * covers the money/work callables the admin SDK would otherwise let through.
+ */
+async function assertNotSuspended(tx, db, uid) {
+  const snap = await tx.get(db.doc(`users/${uid}`));
+  if (snap.data()?.suspended === true) {
+    throw new functions.https.HttpsError(
+        "permission-denied",
+        "Your account is suspended. Contact support if you think this is " +
+        "a mistake.");
+  }
+}
+
+/**
  * Statuses that end a milestone's lifecycle. A job completes only when every
  * milestone is `released` (paid to the provider). A refunded dispute now
  * returns its milestone to `pending` for rework rather than ending it, so a
@@ -247,6 +265,7 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
       .filter((ref) => ref.id !== providerId);
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
     // All reads before any writes.
     const [jobSnap, winnerSnap, walletSnap, ...otherSnaps] =
         await Promise.all([
@@ -531,6 +550,7 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
   const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
     const [jobSnap, milestoneSnap, walletSnap] = await Promise.all(
         [tx.get(jobRef), tx.get(milestoneRef), tx.get(walletRef)]);
     if (jobSnap.data()?.requestorId !== uid) {
@@ -595,6 +615,7 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
   const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
     const [jobSnap, milestoneSnap, allMilestones] = await Promise.all([
       tx.get(jobRef),
       tx.get(milestoneRef),
@@ -677,6 +698,7 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
   const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
     const walletSnap = await tx.get(walletRef);
     const balance = walletSnap.data()?.walletBalanceSen || 0;
     if (balance + amountSen > MAX_WALLET_BALANCE_SEN) {
@@ -704,6 +726,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
   const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
     const walletSnap = await tx.get(walletRef);
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
@@ -771,6 +794,12 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
       const db = admin.firestore();
       const userSnap = await db.doc(`users/${uid}`).get();
       const user = userSnap.data() || {};
+      if (user.suspended === true) {
+        throw new functions.https.HttpsError(
+            "permission-denied",
+            "Your account is suspended. Contact support if you think this " +
+            "is a mistake.");
+      }
       if ((user.walletBalanceSen || 0) + amountSen > MAX_WALLET_BALANCE_SEN) {
         throw new functions.https.HttpsError(
             "failed-precondition", "Wallet balance is capped at RM 50,000.");
@@ -1009,6 +1038,75 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
 });
 
 // ---------------------------------------------------------------------------
+// Account suspension (admin moderation).
+//
+// A soft ban: `setUserSuspended` flips the `suspended` flag on the target's
+// profile (an admin can suspend neither themselves nor another admin). The
+// flag is server-owned — Firestore rules deny every client write to it, so a
+// suspended user can't lift their own ban — and it gates both the client (the
+// router sends a suspended user to the "account suspended" screen) and the
+// money/work callables (`assertNotSuspended`). Reversible at any time.
+// ---------------------------------------------------------------------------
+
+/**
+ * Admin suspends or reinstates a user. `data.suspended` is the target state
+ * (true = suspend, false = reinstate); `data.reason` is an optional note shown
+ * to the user. Notifies the user either way.
+ */
+exports.setUserSuspended = functions.https.onCall(async (data, context) => {
+  const callerId = callerUid(context);
+  const targetUid = checkId(data.uid, "uid");
+  const suspend = data.suspended === true;
+  const reason = typeof data.reason === "string" ? data.reason.trim() : "";
+  const db = admin.firestore();
+  const targetRef = db.doc(`users/${targetUid}`);
+
+  await db.runTransaction(async (tx) => {
+    await assertAdmin(tx, db, callerId);
+    const targetSnap = await tx.get(targetRef);
+    if (!targetSnap.exists) {
+      throw new functions.https.HttpsError("not-found", "User not found.");
+    }
+    if (targetUid === callerId) {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "You can't suspend your own account.");
+    }
+    if (targetSnap.data().role === "admin") {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "An admin account can't be suspended.");
+    }
+
+    tx.update(targetRef, suspend ? {
+      suspended: true,
+      suspensionReason: reason || null,
+      suspendedAt: admin.firestore.FieldValue.serverTimestamp(),
+      suspendedBy: callerId,
+    } : {
+      suspended: false,
+      suspensionReason: null,
+      suspendedAt: null,
+      suspendedBy: null,
+    });
+    notify(tx, targetUid, suspend ? {
+      type: "account",
+      title: "Your account has been suspended",
+      body: reason ?
+          `An administrator suspended your account: "${reason}". Contact ` +
+          "support if you think this is a mistake." :
+          "An administrator suspended your account. Contact support if you " +
+          "think this is a mistake.",
+      route: "/suspended",
+    } : {
+      type: "account",
+      title: "Your account has been reinstated",
+      body: "An administrator lifted the suspension on your account. " +
+          "Welcome back to FairBid.",
+      route: "/home",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Dispute resolution (plan §3.3.3). Raising a dispute freezes the milestone;
 // an admin ruling pays the escrowed amount out. Both live here so the
 // milestone flip and the dispute record (and later the money) move in one
@@ -1039,6 +1137,7 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
   const disputeRef = db.collection("disputes").doc();
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
     const [jobSnap, milestoneSnap] =
         await Promise.all([tx.get(jobRef), tx.get(milestoneRef)]);
     const job = jobSnap.data();

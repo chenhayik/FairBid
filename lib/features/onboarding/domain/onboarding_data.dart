@@ -45,9 +45,16 @@ class OnboardingData {
   List<String> certificateUrls = [];
   List<String> portfolioLinks = [];
 
-  // Stage 5 — service profile.
+  // Stage 5 — service profile. `coverageArea` mirrors `Region.label` (kept as
+  // a plain string for backward-compatible display); `districtCode`/`town`/
+  // `lat`/`lng` are the structured pick behind it, from the Penang-scoped
+  // location picker.
   String? category;
   String coverageArea = '';
+  String? districtCode;
+  String? town;
+  double? lat;
+  double? lng;
   String hourlyRate = '';
   List<String> portfolioImageUrls = [];
 
@@ -82,6 +89,10 @@ class OnboardingData {
         'portfolioLinks': portfolioLinks,
         'category': category,
         'coverageArea': coverageArea,
+        'districtCode': districtCode,
+        'town': town,
+        'lat': lat,
+        'lng': lng,
         'hourlyRate': hourlyRate,
         'portfolioImageUrls': portfolioImageUrls,
         'bankName': bankName,
@@ -110,6 +121,10 @@ class OnboardingData {
       ..portfolioLinks = strings(map['portfolioLinks'])
       ..category = map['category'] as String?
       ..coverageArea = map['coverageArea'] as String? ?? ''
+      ..districtCode = map['districtCode'] as String?
+      ..town = map['town'] as String?
+      ..lat = (map['lat'] as num?)?.toDouble()
+      ..lng = (map['lng'] as num?)?.toDouble()
       ..hourlyRate = map['hourlyRate'] as String? ?? ''
       ..portfolioImageUrls = strings(map['portfolioImageUrls'])
       ..bankName = map['bankName'] as String? ?? ''
