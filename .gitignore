@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android signing: never commit keystores or signing credentials
+*.jks
+*.keystore
+/android/key.properties
+
+# Firebase emulator artifacts
+*-debug.log
+.firebase/
