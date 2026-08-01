@@ -53,13 +53,13 @@ class RequestorOnboardingData {
   bool get isBusiness => type == RequestorType.business;
 
   /// Public fields to merge into the user document. The identity/SSM document
-  /// URL is intentionally excluded — see [privateMap].
+  /// URL and phone number are intentionally excluded — see [privateMap] and
+  /// [payoutMap] respectively.
   Map<String, dynamic> toMap() => {
         'requestorOnboardingStep': step,
         'requestorType': type?.name,
         if (fullName.isNotEmpty) 'displayName': fullName,
         'profilePhotoUrl': profilePhotoUrl,
-        'phone': phone,
         'location': location,
         'districtCode': districtCode,
         'town': town,
@@ -75,6 +75,11 @@ class RequestorOnboardingData {
   Map<String, dynamic> privateMap() => {
         'clientDocumentUrl': clientDocumentUrl,
       };
+
+  /// Phone number — stored in the owner+admin-only `users/{uid}/private/payout`
+  /// doc, never in the world-readable user document. Shares that doc with
+  /// [OnboardingData]'s payout bank details (providers' twin of this class).
+  Map<String, dynamic> payoutMap() => {'phone': phone};
 
   /// Rebuilds from the top-level fields of a `users/{uid}` document.
   static RequestorOnboardingData fromMap(Map<String, dynamic>? map) {

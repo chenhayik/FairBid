@@ -61,6 +61,15 @@ abstract interface class AuthRepository {
     required String? bio,
   });
 
+  /// Saves the signed-in user's avatar URL (Edit Profile screen's photo
+  /// control). Uploading the file itself is handled by
+  /// `DocumentStorageRepository.uploadAvatar`; this just persists the
+  /// resulting download URL onto the profile.
+  Future<void> updateProfilePhoto({
+    required String uid,
+    required String photoUrl,
+  });
+
   /// Toggles whether [jobId] is on [uid]'s watchlist (the bookmark on a job
   /// card / feed / "Jobs near you"). Not a protected field — the self-update
   /// rule already permits it.
@@ -99,6 +108,24 @@ class FirebaseAuthRepository implements AuthRepository {
   CollectionReference<Map<String, dynamic>> get _users =>
       _firestore.collection('users');
 
+  /// Owner+admin-only doc holding payout bank details and the phone number —
+  /// see `firestore.rules`' `private/{doc}` block. Shared by both onboarding
+  /// flows and [updateProfile].
+  DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
+      _users.doc(uid).collection('private').doc('payout');
+
+  /// Best-effort read of [uid]'s private payout doc: a missing doc (every
+  /// legacy user who hasn't saved since the migration) or a read failure
+  /// degrades to `null`, never throws — the caller falls back to the legacy
+  /// public-doc locations for those fields.
+  Future<Map<String, dynamic>?> _payoutData(String uid) async {
+    try {
+      return (await _payoutDoc(uid).get()).data();
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   Stream<AppUser?> authStateChanges() {
     // Re-emit not only when the Firebase Auth state changes (sign in/out), but
@@ -107,7 +134,7 @@ class FirebaseAuthRepository implements AuthRepository {
     // live in the app without forcing a re-login.
     late final StreamController<AppUser?> controller;
     StreamSubscription<User?>? authSub;
-    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? profileSub;
+    StreamSubscription<AppUser?>? profileSub;
 
     void emit(AppUser? user) {
       if (!controller.isClosed) controller.add(user);
@@ -124,10 +151,15 @@ class FirebaseAuthRepository implements AuthRepository {
           }
           // Live-watch the profile doc; fall back to a minimal user if it
           // can't be read so the app never gets stuck on the splash screen.
-          profileSub = _users.doc(user.uid).snapshots().listen(
-                (snapshot) => emit(_mapUser(user, snapshot.data())),
-                onError: (_) => emit(_fallbackUser(user)),
-              );
+          // Each emission also re-reads the owner-only private payout doc
+          // (asyncMap) so phone/bank details stay live too, without a second
+          // top-level stream to combine.
+          profileSub = _users
+              .doc(user.uid)
+              .snapshots()
+              .asyncMap((snapshot) async =>
+                  _mapUser(user, snapshot.data(), await _payoutData(user.uid)))
+              .listen(emit, onError: (_) => emit(_fallbackUser(user)));
         });
       },
       onCancel: () async {
@@ -240,11 +272,31 @@ class FirebaseAuthRepository implements AuthRepository {
     required String? location,
     required String? bio,
   }) {
+    // Phone moved to the owner+admin-only private/payout doc (it used to sit
+    // on the world-readable public profile); write it there and explicitly
+    // delete the public copy so legacy accounts migrate as they save. A
+    // one-off backfill Cloud Function is still needed for users who never
+    // save again — deliberately out of scope here.
+    final batch = _firestore.batch()
+      ..set(_users.doc(uid), {
+        'displayName': displayName.trim(),
+        'location': location?.trim(),
+        'bio': bio?.trim(),
+        'phone': FieldValue.delete(),
+      }, SetOptions(merge: true))
+      ..set(_payoutDoc(uid), {
+        'phone': phone?.trim(),
+      }, SetOptions(merge: true));
+    return batch.commit();
+  }
+
+  @override
+  Future<void> updateProfilePhoto({
+    required String uid,
+    required String photoUrl,
+  }) {
     return _users.doc(uid).set({
-      'displayName': displayName.trim(),
-      'phone': phone?.trim(),
-      'location': location?.trim(),
-      'bio': bio?.trim(),
+      'profilePhotoUrl': photoUrl,
     }, SetOptions(merge: true));
   }
 
@@ -344,7 +396,7 @@ class FirebaseAuthRepository implements AuthRepository {
     if (user == null) return null;
     try {
       final snapshot = await _users.doc(user.uid).get();
-      return _mapUser(user, snapshot.data());
+      return _mapUser(user, snapshot.data(), await _payoutData(user.uid));
     } on FirebaseException {
       // If the profile can't be read (offline, transient error), fall back to a
       // minimal user so the app never gets stuck on the splash screen.
@@ -352,11 +404,23 @@ class FirebaseAuthRepository implements AuthRepository {
     }
   }
 
-  /// Builds an [AppUser] from a Firebase auth [user] and its Firestore profile
-  /// [data] (null when the doc doesn't exist yet, e.g. mid-registration).
-  AppUser _mapUser(User user, Map<String, dynamic>? data) {
+  /// Builds an [AppUser] from a Firebase auth [user], its Firestore profile
+  /// [data] (null when the doc doesn't exist yet, e.g. mid-registration) and
+  /// [payoutData], its owner-only private/payout doc (null when missing —
+  /// every legacy user who hasn't saved since the migration, or when the read
+  /// failed; either way this degrades to nulls rather than throwing).
+  AppUser _mapUser(
+    User user,
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? payoutData,
+  ) {
     final onboarding = data?['onboarding'] as Map<String, dynamic>?;
-    final accountLast4 = onboarding?['accountLast4'] as String?;
+    // Payout bank details and phone moved to the private/payout doc; legacy
+    // accounts that haven't saved since the migration still carry them on the
+    // public doc, so fall back to those locations until the user's next save
+    // scrubs them (see updateProfile and the onboarding repositories).
+    final accountLast4 = (payoutData?['accountLast4'] ??
+        onboarding?['accountLast4']) as String?;
     return AppUser(
       uid: user.uid,
       email: user.email,
@@ -366,7 +430,7 @@ class FirebaseAuthRepository implements AuthRepository {
       verificationStatus: data?['verificationStatus'] as String? ?? 'none',
       onboardingComplete: data?['onboardingComplete'] as bool? ?? false,
       trustScore: (data?['trustScore'] as num?)?.toInt() ?? 0,
-      phone: data?['phone'] as String?,
+      phone: (payoutData?['phone'] ?? data?['phone']) as String?,
       location: data?['location'] as String?,
       baseLat: (data?['baseLat'] as num?)?.toDouble(),
       baseLng: (data?['baseLng'] as num?)?.toDouble(),
@@ -389,7 +453,8 @@ class FirebaseAuthRepository implements AuthRepository {
           : TrustBreakdown.fromMap(data!['trust'] as Map<String, dynamic>),
       profilePhotoUrl: data?['profilePhotoUrl'] as String?,
       providerType: onboarding?['providerType'] as String?,
-      payoutBankName: onboarding?['bankName'] as String?,
+      payoutBankName:
+          (payoutData?['bankName'] ?? onboarding?['bankName']) as String?,
       payoutAccountLast4:
           accountLast4 == null || accountLast4.isEmpty ? null : accountLast4,
       isPasswordAccount: _isPasswordAccount(user),

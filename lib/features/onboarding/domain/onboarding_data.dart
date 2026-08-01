@@ -79,6 +79,17 @@ class OnboardingData {
         'selfieUrl': selfieUrl,
       };
 
+  /// Payout bank details — stored in the owner+admin-only
+  /// `users/{uid}/private/payout` doc, never in the world-readable
+  /// `onboarding` map (the full account number never reaches Firestore at
+  /// all; only its last 4 digits are persisted).
+  Map<String, dynamic> payoutMap() => {
+        'bankName': bankName,
+        'accountHolder': accountHolder,
+        'accountLast4': accountLast4,
+        'branchCode': branchCode,
+      };
+
   Map<String, dynamic> toMap() => {
         'step': step,
         'providerType': providerType?.name,
@@ -95,10 +106,6 @@ class OnboardingData {
         'lng': lng,
         'hourlyRate': hourlyRate,
         'portfolioImageUrls': portfolioImageUrls,
-        'bankName': bankName,
-        'accountHolder': accountHolder,
-        'accountLast4': accountLast4,
-        'branchCode': branchCode,
       };
 
   static OnboardingData fromMap(Map<String, dynamic>? map) {

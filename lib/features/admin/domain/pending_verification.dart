@@ -36,6 +36,8 @@ class PendingVerification {
     this.skills = const [],
     this.bankName,
     this.accountHolder,
+    this.accountLast4,
+    this.branchCode,
     this.documents = const [],
   });
 
@@ -60,6 +62,8 @@ class PendingVerification {
   final List<String> skills;
   final String? bankName;
   final String? accountHolder;
+  final String? accountLast4;
+  final String? branchCode;
 
   /// Every uploaded image/document, labelled for the review gallery.
   final List<VerificationDocument> documents;
@@ -78,8 +82,18 @@ class PendingVerification {
   }
 
   /// Builds a snapshot from a raw `users/{uid}` document map, or null when the
-  /// document is missing.
-  static PendingVerification? fromMap(String uid, Map<String, dynamic>? data) {
+  /// document is missing. [payoutData] is the applicant's owner+admin-only
+  /// `private/payout` doc (phone and payout bank details, which moved off
+  /// this public doc — see firestore.rules); `VerificationRepository.
+  /// watchPending` loads it per applicant and passes it in here, mirroring
+  /// `AuthRepository._mapUser`'s merge. Null (missing/unreadable doc) falls
+  /// back to the legacy public-doc locations below, so applicants who
+  /// haven't saved since the migration still display fully.
+  static PendingVerification? fromMap(
+    String uid,
+    Map<String, dynamic>? data, {
+    Map<String, dynamic>? payoutData,
+  }) {
     if (data == null) return null;
     final role = UserRole.fromStorage(data['role'] as String?);
     final onboarding = data['onboarding'] as Map<String, dynamic>?;
@@ -123,7 +137,7 @@ class PendingVerification {
           : (data['requestorType'] as String?),
       submittedAt: _asDate(data['submittedAt']),
       trustScore: (data['trustScore'] as num?)?.toInt() ?? 0,
-      phone: data['phone'] as String?,
+      phone: (payoutData?['phone'] ?? data['phone']) as String?,
       location: data['location'] as String?,
       bio: role == UserRole.provider
           ? (onboarding?['bio'] as String?)
@@ -134,8 +148,13 @@ class PendingVerification {
       companyName: data['companyName'] as String?,
       ssmNumber: data['ssmNumber'] as String?,
       skills: strings(onboarding?['skills']),
-      bankName: onboarding?['bankName'] as String?,
-      accountHolder: onboarding?['accountHolder'] as String?,
+      bankName: (payoutData?['bankName'] ?? onboarding?['bankName']) as String?,
+      accountHolder: (payoutData?['accountHolder'] ??
+          onboarding?['accountHolder']) as String?,
+      accountLast4: (payoutData?['accountLast4'] ??
+          onboarding?['accountLast4']) as String?,
+      branchCode:
+          (payoutData?['branchCode'] ?? onboarding?['branchCode']) as String?,
       documents: docs,
     );
   }

@@ -41,11 +41,13 @@ class FirestoreVerificationRepository implements VerificationRepository {
     return _users
         .where('verificationStatus', isEqualTo: 'pending')
         .snapshots()
-        .map((snapshot) {
-      final items = <PendingVerification>[
-        for (final doc in snapshot.docs)
-          ?PendingVerification.fromMap(doc.id, doc.data()),
-      ]..sort((a, b) {
+        .asyncMap((snapshot) async {
+      final items = (await Future.wait([
+        for (final doc in snapshot.docs) _toPendingVerification(doc),
+      ]))
+          .whereType<PendingVerification>()
+          .toList()
+        ..sort((a, b) {
           // Oldest first; undated submissions sink to the bottom.
           final at = a.submittedAt, bt = b.submittedAt;
           if (at == null && bt == null) return 0;
@@ -55,6 +57,27 @@ class FirestoreVerificationRepository implements VerificationRepository {
         });
       return items;
     });
+  }
+
+  /// Merges in the applicant's private/payout doc (phone and payout bank
+  /// details) before building the snapshot — mirrors
+  /// `AuthRepository._mapUser`'s merge. A missing/unreadable private doc
+  /// degrades to null (applicants who haven't saved since the
+  /// payout-privacy migration keep showing those fields from the legacy
+  /// public-doc locations via `PendingVerification.fromMap`'s fallback),
+  /// never throws and never breaks the queue's rendering.
+  Future<PendingVerification?> _toPendingVerification(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) async {
+    Map<String, dynamic>? payout;
+    try {
+      payout =
+          (await doc.reference.collection('private').doc('payout').get())
+              .data();
+    } catch (_) {
+      payout = null;
+    }
+    return PendingVerification.fromMap(doc.id, doc.data(), payoutData: payout);
   }
 
   @override

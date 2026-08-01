@@ -139,6 +139,16 @@ class AuthController extends ChangeNotifier {
     await refreshUser();
   }
 
+  /// Uploads/saves the signed-in user's avatar (Edit Profile screen's photo
+  /// control), then refreshes so the header/profile reflect the new photo
+  /// immediately. No-ops when signed out.
+  Future<void> updateProfilePhoto(String photoUrl) async {
+    final uid = _user?.uid;
+    if (uid == null) return;
+    await _repository.updateProfilePhoto(uid: uid, photoUrl: photoUrl);
+    await refreshUser();
+  }
+
   /// Toggles whether [jobId] is on the signed-in user's watchlist (the
   /// bookmark on a job card), then refreshes so the change reflects
   /// immediately. No-ops when signed out.
