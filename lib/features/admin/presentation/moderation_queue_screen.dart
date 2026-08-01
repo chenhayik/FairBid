@@ -45,8 +45,8 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(hide
-              ? 'Review hidden — the Trust Score has been recomputed.'
-              : 'Review kept — the flag was cleared.')));
+              ? 'Review hidden. The Trust Score has been recomputed.'
+              : 'Review kept. The flag was cleared.')));
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -79,7 +79,7 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
             const SizedBox(height: 24),
             StatCard(
               label: 'Flagged Reviews',
-              value: items == null ? '—' : '${items.length}',
+              value: items == null ? '-' : '${items.length}',
               icon: Icons.flag_outlined,
             ),
             const SizedBox(height: 24),

@@ -124,7 +124,7 @@ class _ActiveJobsStat extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
-          return const StatCard(label: 'Active Jobs', value: '—');
+          return const StatCard(label: 'Active Jobs', value: '-');
         }
         final active = (snapshot.data ?? [])
             .where((j) => j.status == JobStatus.inProgress)
@@ -150,7 +150,7 @@ class _PendingBidsStat extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
-          return const StatCard(label: 'Pending Bids', value: '—');
+          return const StatCard(label: 'Pending Bids', value: '-');
         }
         final pending = (snapshot.data ?? [])
             .where((b) => b.status == BidStatus.pending)
@@ -170,7 +170,7 @@ class _TotalEarningsStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid == null) {
-      return const StatCard(label: 'Total Earnings', value: '—');
+      return const StatCard(label: 'Total Earnings', value: '-');
     }
     return StreamBuilder<List<Milestone>>(
       stream:
@@ -178,7 +178,7 @@ class _TotalEarningsStat extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
-          return const StatCard(label: 'Total Earnings', value: '—');
+          return const StatCard(label: 'Total Earnings', value: '-');
         }
         final earnedSen = (snapshot.data ?? [])
             .where((m) =>

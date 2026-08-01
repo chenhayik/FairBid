@@ -460,7 +460,7 @@ class _RejectReasonDialogState extends State<_RejectReasonDialog> {
             maxLines: 3,
             autofocus: true,
             decoration: const InputDecoration(
-              hintText: 'e.g. Identity document is blurry — please resubmit.',
+              hintText: 'e.g. Identity document is blurry, please resubmit.',
             ),
           ),
         ],

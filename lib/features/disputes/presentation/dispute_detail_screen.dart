@@ -78,7 +78,7 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
         title: const Text('Cancel the entire job?'),
         content: const Text(
             'This ends the job for both parties. It only works once no '
-            'milestone holds escrow — settle any funded milestone or open '
+            'milestone holds escrow. Settle any funded milestone or open '
             'dispute first.'),
         actions: [
           TextButton(
@@ -178,7 +178,7 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
                     body: 'Read both sides and the chat. Releasing pays the '
                         'provider and closes the milestone. Refunding returns '
                         'the money to the client and reopens the milestone for '
-                        'rework — the job stays in progress. Rulings are final '
+                        'rework. The job stays in progress. Rulings are final '
                         'and move real wallet balances.',
                   ),
                 ],

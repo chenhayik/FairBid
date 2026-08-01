@@ -35,7 +35,7 @@ class VerificationQueueScreen extends StatelessWidget {
             const SizedBox(height: 24),
             StatCard(
               label: 'Pending Review',
-              value: items == null ? '—' : '${items.length}',
+              value: items == null ? '-' : '${items.length}',
               icon: Icons.verified_user_outlined,
             ),
             const SizedBox(height: 24),

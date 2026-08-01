@@ -140,7 +140,7 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
             Text('Raise a Dispute', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 4),
             Text(
-              '"${widget.milestone.description}" — '
+              '"${widget.milestone.description}": '
               '${formatRm(widget.milestone.amountSen)} in escrow.',
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
@@ -158,7 +158,7 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
             AppTextField(
               controller: _statement,
               label: 'What went wrong?',
-              hint: 'Describe the issue factually — what was agreed, what '
+              hint: 'Describe the issue factually: what was agreed, what '
                   'was delivered…',
               maxLines: 4,
             ),
