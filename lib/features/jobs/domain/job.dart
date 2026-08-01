@@ -101,12 +101,14 @@ class Job {
     required this.id,
     required this.requestorId,
     required this.requestorName,
+    this.requestorPhotoUrl,
     required this.title,
     required this.description,
     required this.category,
     required this.location,
     this.budget,
     this.photoUrls = const [],
+    this.videoUrl,
     this.status = JobStatus.open,
     this.bidCount = 0,
     this.createdAt,
@@ -125,12 +127,23 @@ class Job {
   final String id;
   final String requestorId;
   final String requestorName;
+
+  /// Snapshot of the requestor's `profilePhotoUrl` at posting time,
+  /// denormalised so providers see a face without loading the requestor's
+  /// profile — mirrors how [requestorName] is already denormalised. Null if
+  /// the requestor had no photo when they posted. A future Cloud Function
+  /// could refresh this snapshot if the requestor later changes their photo.
+  final String? requestorPhotoUrl;
   final String title;
   final String description;
   final String category;
   final JobLocation location;
   final JobBudget? budget;
   final List<String> photoUrls;
+
+  /// One optional attached video (see `document_storage_repository.dart`'s
+  /// `uploadJobVideo`); null when the requestor didn't add one.
+  final String? videoUrl;
   final JobStatus status;
   final int bidCount;
   final DateTime? createdAt;
@@ -167,12 +180,14 @@ class Job {
   Map<String, dynamic> toMap() => {
         'requestorId': requestorId,
         'requestorName': requestorName,
+        if (requestorPhotoUrl != null) 'requestorPhotoUrl': requestorPhotoUrl,
         'title': title,
         'description': description,
         'category': category,
         'location': location.toMap(),
         'budget': budget?.toMap(),
         'photoUrls': photoUrls,
+        if (videoUrl != null) 'videoUrl': videoUrl,
         if (deadline != null) 'deadline': deadline,
       };
 
@@ -182,6 +197,7 @@ class Job {
         id: id,
         requestorId: m['requestorId'] as String? ?? '',
         requestorName: m['requestorName'] as String? ?? 'Requestor',
+        requestorPhotoUrl: m['requestorPhotoUrl'] as String?,
         title: m['title'] as String? ?? '',
         description: m['description'] as String? ?? '',
         category: m['category'] as String? ?? 'Other',
@@ -191,6 +207,7 @@ class Job {
             : JobBudget.fromMap(m['budget'] as Map<String, dynamic>?),
         photoUrls:
             (m['photoUrls'] as List?)?.whereType<String>().toList() ?? const [],
+        videoUrl: m['videoUrl'] as String?,
         status: JobStatus.fromStorage(m['status'] as String?),
         bidCount: (m['bidCount'] as num?)?.toInt() ?? 0,
         createdAt: m['createdAt'] as DateTime?,

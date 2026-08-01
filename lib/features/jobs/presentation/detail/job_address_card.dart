@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/widgets/app_widgets.dart';
+import '../../../auth/presentation/auth_controller.dart';
 import '../../data/job_repository.dart';
 import '../../domain/job.dart';
 import '../../domain/service_address.dart';
@@ -29,10 +30,13 @@ class _JobAddressCardState extends State<JobAddressCard> {
       context.read<JobRepository>().watchJobAddress(widget.job.id);
 
   Future<void> _editAddress(BuildContext context, ServiceAddress? initial) async {
+    // Prefer the job's picked region town; fall back to the requestor's own
+    // saved default town when the job has none.
+    final defaultTown = context.read<AuthController>().user?.defaultTown;
     final result = await ServiceAddressSheet.show(
       context,
       initial: initial,
-      defaultCity: widget.job.location.town,
+      defaultCity: widget.job.location.town ?? defaultTown,
     );
     if (result == null || !context.mounted) return;
     try {

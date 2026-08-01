@@ -105,7 +105,7 @@ class _ServiceAddressFormState extends State<_ServiceAddressForm> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Only shared with your hired provider — never with other '
+                    'Only shared with your hired provider, never with other '
                     'bidders.',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
@@ -157,6 +157,24 @@ class _ServiceAddressFormState extends State<_ServiceAddressForm> {
                   ),
                 ),
               ],
+            ),
+            // State is fixed to Penang (FairBid's launch scope), so it's
+            // shown as pre-set context rather than an editable, easy-to-miss
+            // field.
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.location_city_outlined,
+                      size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Text(
+                    'State: Penang',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
             ),
             AppTextField(
               controller: _accessNote,

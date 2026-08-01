@@ -19,6 +19,7 @@ import '../../data/assist_repository.dart';
 import '../../data/job_repository.dart';
 import '../../domain/job.dart';
 import '../../domain/service_address.dart';
+import '../detail/job_video_player.dart';
 import '../detail/service_address_sheet.dart';
 import 'post_job_controller.dart';
 
@@ -55,7 +56,6 @@ class _PostJobViewState extends State<_PostJobView> {
   final _budgetMin = TextEditingController();
   final _budgetMax = TextEditingController();
   bool _hourly = false;
-  bool _showOptional = false;
   DateTime? _deadline;
 
   /// True while the location shown is still the requestor's saved default
@@ -109,13 +109,15 @@ class _PostJobViewState extends State<_PostJobView> {
   }
 
   /// Opens the address sheet, pre-filling the town from the picked map
-  /// location if any. Fully optional — posting still works without one.
+  /// location if any, else the requestor's saved default town. Fully
+  /// optional — posting still works without one.
   Future<void> _pickAddress() async {
     final controller = context.read<PostJobController>();
+    final user = context.read<AuthController>().user;
     final result = await ServiceAddressSheet.show(
       context,
       initial: controller.pendingAddress,
-      defaultCity: controller.location?.region.town,
+      defaultCity: controller.location?.region.town ?? user?.defaultTown,
     );
     if (result == null) return;
     controller.setAddress(result);
@@ -154,6 +156,7 @@ class _PostJobViewState extends State<_PostJobView> {
       id: '',
       requestorId: user.uid,
       requestorName: user.displayName ?? 'Requestor',
+      requestorPhotoUrl: user.profilePhotoUrl,
       title: _title.text.trim(),
       description: _description.text.trim(),
       category: controller.category!,
@@ -173,6 +176,7 @@ class _PostJobViewState extends State<_PostJobView> {
         hourly: _hourly,
       ),
       photoUrls: List.of(controller.photoUrls),
+      videoUrl: controller.videoUrl,
       deadline: _deadline,
     );
     final id = await controller.submit(job);
@@ -196,7 +200,7 @@ class _PostJobViewState extends State<_PostJobView> {
     }
     final rough = _description.text.trim();
     if (rough.length < 3) {
-      _snack('Type a rough note first — e.g. "leaking pipe under sink".');
+      _snack('Type a rough note first, e.g. "leaking pipe under sink".');
       return;
     }
     final suggestion = await controller.suggestDescription(rough);
@@ -206,7 +210,7 @@ class _PostJobViewState extends State<_PostJobView> {
       return;
     }
     _description.text = suggestion;
-    _snack('Draft written — edit it to match your situation.');
+    _snack('Draft written. Edit it to match your situation.');
   }
 
   /// Gemini fair-price guide: fetches an indicative RM range shown beside the
@@ -235,6 +239,19 @@ class _PostJobViewState extends State<_PostJobView> {
     final theme = Theme.of(context);
     final uid = context.read<AuthController>().user?.uid ?? '';
 
+    return Stack(
+      children: [
+        _buildForm(context, controller, theme, uid),
+        // Always-visible submit feedback: a screen-wide blocking overlay, so
+        // it's obvious regardless of how far down the long form the user has
+        // scrolled (unlike the Post Job button's own spinner, at the bottom).
+        if (controller.isSubmitting) const _SubmitOverlay(),
+      ],
+    );
+  }
+
+  Widget _buildForm(BuildContext context, PostJobController controller,
+      ThemeData theme, String uid) {
     return Scaffold(
       appBar: AppBar(title: const Text('Post a New Job')),
       body: SafeArea(
@@ -254,6 +271,10 @@ class _PostJobViewState extends State<_PostJobView> {
                 const SizedBox(height: 24),
                 if (controller.errorMessage != null)
                   ErrorBanner(controller.errorMessage!),
+
+                // ---- The basics (required) ----
+                const _SectionHeader('The basics'),
+                const SizedBox(height: 12),
                 Text('Category', style: theme.textTheme.labelLarge),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
@@ -279,7 +300,7 @@ class _PostJobViewState extends State<_PostJobView> {
                   label: 'Description',
                   hint: 'Describe what needs to be done, the problem, and any '
                       'specific requirements...',
-                  maxLines: 4,
+                  maxLines: 8,
                   validator: (v) => Validators.required(v, 'Description'),
                 ),
                 Align(
@@ -290,23 +311,69 @@ class _PostJobViewState extends State<_PostJobView> {
                     onPressed: controller.isBusy ? null : _suggestDescription,
                   ),
                 ),
+
+                // ---- Photos & video (optional) ----
+                const SizedBox(height: 24),
+                const _SectionHeader('Photos & video (optional)'),
+                const SizedBox(height: 8),
+                // No optional toggle left to expand — tapping opens the
+                // photo picker directly, same as the "Add photo" box below.
                 _PhotoAssistHint(
                   hasPhoto: controller.photoUrls.isNotEmpty,
-                  onAddPhoto: () => setState(() => _showOptional = true),
+                  onAddPhoto: () => controller.addPhoto(uid),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: LocationField(
-                    label: controller.location == null ? null : _address.text,
-                    placeholder: 'Pick location on map',
-                    onTap: _pickLocation,
+                const SizedBox(height: 8),
+                if (controller.photoUrls.isNotEmpty)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final url in controller.photoUrls)
+                        _PhotoThumb(
+                          url: url,
+                          onRemove: () => controller.removePhoto(url),
+                        ),
+                    ],
                   ),
+                const SizedBox(height: 8),
+                UploadBox(
+                  compact: true,
+                  onTap: () => controller.addPhoto(uid),
+                  icon: Icons.add_photo_alternate_outlined,
+                  hint: 'JPEG or PNG',
+                  busy: controller.uploadingPhoto,
+                ),
+                const SizedBox(height: 16),
+                Text('Video (optional)', style: theme.textTheme.labelLarge),
+                const SizedBox(height: 8),
+                if (controller.videoUrl != null)
+                  _VideoThumb(
+                    url: controller.videoUrl!,
+                    onRemove: controller.removeVideo,
+                  )
+                else
+                  UploadBox(
+                    compact: true,
+                    onTap: () => controller.addVideo(uid),
+                    icon: Icons.videocam_outlined,
+                    hint: 'Up to 60 seconds, under 45 MB',
+                    busy: controller.uploadingVideo,
+                  ),
+
+                // ---- Where (location required, label/address optional) ----
+                const SizedBox(height: 24),
+                const _SectionHeader('Where'),
+                const SizedBox(height: 12),
+                LocationField(
+                  label: controller.location == null ? null : _address.text,
+                  placeholder: 'Pick location on map',
+                  onTap: _pickLocation,
                 ),
                 if (_locationDefaulted && controller.location != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6, left: 4),
                     child: Text(
-                      'Defaulted to your saved area — tap the map to change.',
+                      'Defaulted to your saved area. Tap the map to change.',
                       style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant),
                     ),
@@ -315,7 +382,7 @@ class _PostJobViewState extends State<_PostJobView> {
                   const SizedBox(height: 12),
                   AppTextField(
                     controller: _address,
-                    label: 'Location label',
+                    label: 'Location label (optional)',
                     hint: 'e.g. Bangsar, Kuala Lumpur',
                   ),
                 ],
@@ -324,33 +391,35 @@ class _PostJobViewState extends State<_PostJobView> {
                   address: controller.pendingAddress,
                   onTap: _pickAddress,
                 ),
-                const SizedBox(height: 8),
+
+                // ---- When & budget (optional) ----
+                const SizedBox(height: 24),
+                const _SectionHeader('When & budget (optional)'),
+                const SizedBox(height: 12),
                 _DeadlineField(
                   deadline: _deadline,
                   onTap: _pickDeadline,
                   onClear: _clearDeadline,
                 ),
-                const SizedBox(height: 8),
-                _OptionalToggle(
-                  expanded: _showOptional,
-                  onTap: () =>
-                      setState(() => _showOptional = !_showOptional),
+                const SizedBox(height: 16),
+                _BudgetFields(
+                  controller: controller,
+                  budgetMin: _budgetMin,
+                  budgetMax: _budgetMax,
+                  hourly: _hourly,
+                  onHourly: (v) => setState(() => _hourly = v),
+                  onSuggestPrice: controller.isBusy ? null : _suggestPrice,
                 ),
-                if (_showOptional)
-                  _OptionalDetails(
-                    controller: controller,
-                    uid: uid,
-                    budgetMin: _budgetMin,
-                    budgetMax: _budgetMax,
-                    hourly: _hourly,
-                    onHourly: (v) => setState(() => _hourly = v),
-                    onSuggestPrice: controller.isBusy ? null : _suggestPrice,
-                  ),
+
                 const SizedBox(height: 24),
                 PrimaryButton(
                   label: 'Post Job',
-                  busy: controller.isBusy,
-                  onPressed: _submit,
+                  // Its own spinner reflects submitting only — the screen-wide
+                  // overlay already covers that — but stays disabled during a
+                  // photo/video upload too, so the job can't be created before
+                  // an in-flight upload finishes.
+                  busy: controller.isSubmitting,
+                  onPressed: controller.isBusy ? null : _submit,
                 ),
               ],
             ),
@@ -358,6 +427,57 @@ class _PostJobViewState extends State<_PostJobView> {
         ),
       ),
     );
+  }
+}
+
+/// Full-screen blocking overlay shown only while [PostJobController.submit]
+/// is running: a modal barrier (absorbing all input) plus a centred spinner
+/// and label, so submit feedback is immediate no matter where the user has
+/// scrolled on the long form. Distinct from the per-upload spinner on each
+/// UploadBox, which shows instead while a photo or video is uploading.
+class _SubmitOverlay extends StatelessWidget {
+  const _SubmitOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          const ModalBarrier(dismissible: false, color: Colors.black54),
+          Center(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text('Posting your job…', style: theme.textTheme.bodyLarge),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Section header shown above each of the form's four groups ("The basics",
+/// "Photos & video (optional)", "Where", "When & budget (optional)").
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(label, style: Theme.of(context).textTheme.titleMedium);
   }
 }
 
@@ -459,25 +579,14 @@ class _AddressField extends StatelessWidget {
   }
 }
 
-class _OptionalToggle extends StatelessWidget {
-  const _OptionalToggle({required this.expanded, required this.onTap});
-  final bool expanded;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton.icon(
-      onPressed: onTap,
-      icon: Icon(expanded ? Icons.remove : Icons.add),
-      label: const Text('Add optional details (Budget, Photos)'),
-    );
-  }
-}
-
-class _OptionalDetails extends StatelessWidget {
-  const _OptionalDetails({
+/// Budget fields for the "When & budget" group: the min/max RM inputs, the
+/// hourly-rate switch and the "Suggest a fair range" assist with its
+/// "Use this" shortcut. Split out of the old always-collapsed
+/// `_OptionalDetails` now that photos live in their own group and budget is
+/// always visible.
+class _BudgetFields extends StatelessWidget {
+  const _BudgetFields({
     required this.controller,
-    required this.uid,
     required this.budgetMin,
     required this.budgetMax,
     required this.hourly,
@@ -486,7 +595,6 @@ class _OptionalDetails extends StatelessWidget {
   });
 
   final PostJobController controller;
-  final String uid;
   final TextEditingController budgetMin;
   final TextEditingController budgetMax;
   final bool hourly;
@@ -503,12 +611,10 @@ class _OptionalDetails extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
-              child:
-                  Text('Budget (optional)', style: theme.textTheme.labelLarge),
+              child: Text('Budget', style: theme.textTheme.labelLarge),
             ),
             _AssistButton(
               label: 'Suggest a fair range',
@@ -566,28 +672,6 @@ class _OptionalDetails extends StatelessWidget {
           title: const Text('Hourly rate'),
           value: hourly,
           onChanged: onHourly,
-        ),
-        const SizedBox(height: 8),
-        Text('Photos (optional)', style: theme.textTheme.labelLarge),
-        const SizedBox(height: 8),
-        if (controller.photoUrls.isNotEmpty)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final url in controller.photoUrls)
-                _PhotoThumb(
-                  url: url,
-                  onRemove: () => controller.removePhoto(url),
-                ),
-            ],
-          ),
-        const SizedBox(height: 8),
-        UploadBox(
-          compact: true,
-          onTap: () => controller.addPhoto(uid),
-          icon: Icons.add_photo_alternate_outlined,
-          hint: 'JPEG or PNG',
         ),
       ],
     );
@@ -706,6 +790,54 @@ class _PhotoThumb extends StatelessWidget {
           child: Semantics(
             button: true,
             label: 'Remove photo',
+            child: InkWell(
+              onTap: onRemove,
+              customBorder: const CircleBorder(),
+              child: const SizedBox(
+                width: 48,
+                height: 48,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: EdgeInsets.all(4),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                          color: Colors.black54, shape: BoxShape.circle),
+                      child: Padding(
+                        padding: EdgeInsets.all(2),
+                        child:
+                            Icon(Icons.close, size: 16, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The attached video's preview (first frame + play overlay, via
+/// [JobVideoPreview]) with a remove (×) button, mirroring [_PhotoThumb].
+class _VideoThumb extends StatelessWidget {
+  const _VideoThumb({required this.url, required this.onRemove});
+  final String url;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        JobVideoPreview(url: url, height: 140),
+        Positioned(
+          right: 0,
+          top: 0,
+          child: Semantics(
+            button: true,
+            label: 'Remove video',
             child: InkWell(
               onTap: onRemove,
               customBorder: const CircleBorder(),

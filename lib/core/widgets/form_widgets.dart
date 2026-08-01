@@ -147,6 +147,10 @@ class StageHeader extends StatelessWidget {
 
 /// Dashed-border upload area: icon, "Click to upload" and a hint line.
 /// Shows the picked file name with a green check once [pickedName] is set.
+/// While [busy] (a pick/upload this box triggered is in flight), shows an
+/// in-place spinner instead of the icon and disables the tap target — so
+/// per-upload progress is obvious right where the user is looking, as
+/// opposed to a screen-wide overlay.
 class UploadBox extends StatelessWidget {
   const UploadBox({
     super.key,
@@ -155,6 +159,7 @@ class UploadBox extends StatelessWidget {
     this.icon = Icons.upload_file_outlined,
     this.pickedName,
     this.compact = false,
+    this.busy = false,
   });
 
   final VoidCallback onTap;
@@ -162,6 +167,7 @@ class UploadBox extends StatelessWidget {
   final IconData icon;
   final String? pickedName;
   final bool compact;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -171,7 +177,7 @@ class UploadBox extends StatelessWidget {
         picked ? context.fairbid.success : context.fairbid.verified;
 
     return InkWell(
-      onTap: onTap,
+      onTap: busy ? null : onTap,
       borderRadius: BorderRadius.circular(12),
       child: CustomPaint(
         painter: _DashedRRectPainter(
@@ -182,17 +188,27 @@ class UploadBox extends StatelessWidget {
           padding: EdgeInsets.symmetric(vertical: compact ? 16 : 28),
           child: Column(
             children: [
-              Icon(picked ? Icons.check_circle_outline : icon,
-                  color: accent, size: 28),
+              if (busy)
+                SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: accent),
+                )
+              else
+                Icon(picked ? Icons.check_circle_outline : icon,
+                    color: accent, size: 28),
               const SizedBox(height: 8),
               Text(
-                picked ? pickedName! : 'Click to upload',
+                busy
+                    ? 'Uploading…'
+                    : (picked ? pickedName! : 'Click to upload'),
                 style: theme.textTheme.labelLarge?.copyWith(color: accent),
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 4),
               Text(
-                picked ? 'Tap to change' : hint,
+                busy ? 'Please wait' : (picked ? 'Tap to change' : hint),
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,
