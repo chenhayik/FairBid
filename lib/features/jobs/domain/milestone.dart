@@ -14,35 +14,35 @@ enum MilestoneStatus {
   resolved;
 
   String get storage => switch (this) {
-        MilestoneStatus.proposed => 'proposed',
-        MilestoneStatus.pending => 'pending',
-        MilestoneStatus.funded => 'funded',
-        MilestoneStatus.submitted => 'submitted',
-        MilestoneStatus.released => 'released',
-        MilestoneStatus.disputed => 'disputed',
-        MilestoneStatus.resolved => 'resolved',
-      };
+    MilestoneStatus.proposed => 'proposed',
+    MilestoneStatus.pending => 'pending',
+    MilestoneStatus.funded => 'funded',
+    MilestoneStatus.submitted => 'submitted',
+    MilestoneStatus.released => 'released',
+    MilestoneStatus.disputed => 'disputed',
+    MilestoneStatus.resolved => 'resolved',
+  };
 
   String get label => switch (this) {
-        MilestoneStatus.proposed => 'Awaiting Client Approval',
-        MilestoneStatus.pending => 'Awaiting Funding',
-        MilestoneStatus.funded => 'Funded',
-        MilestoneStatus.submitted => 'Delivered',
-        MilestoneStatus.released => 'Released',
-        MilestoneStatus.disputed => 'Disputed',
-        MilestoneStatus.resolved => 'Resolved',
-      };
+    MilestoneStatus.proposed => 'Awaiting Client Approval',
+    MilestoneStatus.pending => 'Not funded yet',
+    MilestoneStatus.funded => 'In escrow',
+    MilestoneStatus.submitted => 'Delivered, awaiting release',
+    MilestoneStatus.released => 'Paid out',
+    MilestoneStatus.disputed => 'Disputed, on hold',
+    MilestoneStatus.resolved => 'Resolved',
+  };
 
   static MilestoneStatus fromStorage(String? value) => switch (value) {
-        'proposed' => MilestoneStatus.proposed,
-        'pending' => MilestoneStatus.pending,
-        'funded' => MilestoneStatus.funded,
-        'submitted' => MilestoneStatus.submitted,
-        'released' => MilestoneStatus.released,
-        'disputed' => MilestoneStatus.disputed,
-        'resolved' => MilestoneStatus.resolved,
-        _ => MilestoneStatus.proposed,
-      };
+    'proposed' => MilestoneStatus.proposed,
+    'pending' => MilestoneStatus.pending,
+    'funded' => MilestoneStatus.funded,
+    'submitted' => MilestoneStatus.submitted,
+    'released' => MilestoneStatus.released,
+    'disputed' => MilestoneStatus.disputed,
+    'resolved' => MilestoneStatus.resolved,
+    _ => MilestoneStatus.proposed,
+  };
 }
 
 /// One escrow milestone of a job, stored at `jobs/{jobId}/milestones/{id}`.
@@ -101,11 +101,11 @@ class Milestone {
   /// Fields written to Firestore. `status`/`createdAt` for a new milestone are
   /// set by the repository, so they are omitted here.
   Map<String, dynamic> toMap() => {
-        'providerId': providerId,
-        'description': description,
-        'amountSen': amountSen,
-        'order': order,
-      };
+    'providerId': providerId,
+    'description': description,
+    'amountSen': amountSen,
+    'order': order,
+  };
 
   /// Builds a [Milestone] from its job id, doc id and (already
   /// Timestamp-normalised) data map.
