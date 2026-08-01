@@ -43,9 +43,10 @@ another — `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
 `rules.test.js`, one `describe` block per collection:
 
 - **Bids** (`jobs/{jobId}/bids/{bidId}`): amount validation (positive
-  integer, ≤ 100,000,000), the `providerTrustScore`/`providerScoreVisible`
-  snapshot must match the provider's own stored profile (can't forge a
-  higher Best Value ranking), approved-provider-only, open-job-only.
+  integer, ≤ 100,000,000), the `providerTrustScore`/`providerScoreVisible`/
+  `providerPhotoUrl` snapshots must match the provider's own stored profile
+  (can't forge a higher Best Value ranking or put someone else's photo on a
+  bid), approved-provider-only, open-job-only.
 - **Reviews** (`users/{revieweeId}/reviews/{reviewId}`): rating must be an
   integer 1–5, doc id must be `{jobId}_{reviewerId}` (blocks the
   multi-review-per-job spam vector), job must be `completed`, reviewer must
@@ -53,15 +54,25 @@ another — `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
 - **User profile self-writes** (`users/{uid}`): a user can update ordinary
   fields (`displayName`, `phone`, `bio`, ...) but not the Trust Score/wallet
   fields (`trustScore`, `ratingSum`, `ratingCount`, `jobsCompleted`,
-  `disputesLost`, `trust`, `walletBalanceSen`, `escrowLockedSen`) — those are
-  Cloud-Function-only; a create is denied if it carries a nonzero wallet
-  balance or any trust field.
+  `disputesLost`, `trust`, `walletBalanceSen`, `escrowLockedSen`) or the
+  public-profile client-history counters (`jobsPosted`, `jobsAssigned`,
+  `hireRate`) — all Cloud-Function-only; a create is denied if it carries a
+  nonzero wallet balance, any trust field, or a forged `jobsPosted`/
+  `hireRate`.
 - **Conversations** (`conversations/{id}`): an update can only touch the
   message-preview/unread-counter fields — writing `chatClosesAt` (the
   chat-reopen hole) or changing `participantIds` is denied.
 - **Server-only collections**: `transactions/{id}` and `disputes/{id}` deny
   every client write; a `milestones` doc `create` is denied even for the
   job's own requestor/accepted provider — all three are Cloud-Function-only.
+- **Service address privacy** (`jobs/{jobId}/private/address`): only the
+  job's owner (read + write), its accepted provider (read only) and admins
+  (read only) may read it — a signed-in non-participant is denied read; a
+  suspended owner is denied write; delete is always denied.
+- **Private payout doc** (`users/{uid}/private/payout`): payout bank details
+  and the phone number, moved off the world-readable `users/{uid}` doc —
+  only the owner (read + write) and admins (read only) may read it; another
+  signed-in user is denied.
 
 ## Notes
 

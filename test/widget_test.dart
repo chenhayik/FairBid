@@ -36,6 +36,7 @@ import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
 import 'package:fairbid/features/jobs/domain/service_address.dart';
+import 'package:fairbid/features/jobs/presentation/detail/job_detail_view_model.dart';
 import 'package:fairbid/features/jobs/presentation/widgets/bid_card.dart';
 import 'package:fairbid/features/messages/data/chat_repository.dart';
 import 'package:fairbid/features/messages/domain/conversation.dart';
@@ -50,9 +51,13 @@ import 'package:fairbid/features/onboarding/domain/onboarding_data.dart';
 import 'package:fairbid/features/onboarding/domain/requestor_onboarding_data.dart';
 import 'package:fairbid/features/onboarding/presentation/onboarding_controller.dart';
 import 'package:fairbid/features/onboarding/presentation/steps/service_step.dart';
+import 'package:fairbid/features/profile/data/public_profile_repository.dart';
 import 'package:fairbid/features/profile/data/review_repository.dart';
+import 'package:fairbid/features/profile/data/user_report_repository.dart';
+import 'package:fairbid/features/profile/domain/public_profile.dart';
 import 'package:fairbid/features/profile/domain/review.dart';
 import 'package:fairbid/features/profile/presentation/edit_profile_screen.dart';
+import 'package:fairbid/features/profile/presentation/public_profile_screen.dart';
 import 'package:fairbid/features/wallet/data/wallet_repository.dart';
 import 'package:fairbid/features/wallet/domain/ledger_entry.dart';
 import 'package:flutter/material.dart';
@@ -82,6 +87,7 @@ class FakeAuthRepository implements AuthRepository {
   String? phone;
   String? location;
   String? bio;
+  String? profilePhotoUrl;
   String? providerType;
   String? payoutBankName;
   String? payoutAccountLast4;
@@ -140,6 +146,7 @@ class FakeAuthRepository implements AuthRepository {
       phone: phone,
       location: location,
       bio: bio,
+      profilePhotoUrl: profilePhotoUrl,
       providerType: providerType,
       payoutBankName: payoutBankName,
       payoutAccountLast4: payoutAccountLast4,
@@ -198,6 +205,14 @@ class FakeAuthRepository implements AuthRepository {
     this.phone = phone;
     this.location = location;
     this.bio = bio;
+  }
+
+  @override
+  Future<void> updateProfilePhoto({
+    required String uid,
+    required String photoUrl,
+  }) async {
+    profilePhotoUrl = photoUrl;
   }
 
   @override
@@ -316,10 +331,22 @@ class FakeDocumentStorageRepository implements DocumentStorageRepository {
   }) async => 'https://fake.storage/$uid/$purpose';
 
   @override
+  Future<String> uploadAvatar({
+    required String uid,
+    required XFile file,
+  }) async => 'https://fake.storage/avatars/$uid';
+
+  @override
   Future<String> uploadJobPhoto({
     required String uid,
     required XFile file,
   }) async => 'https://fake.storage/jobs/$uid';
+
+  @override
+  Future<String> uploadJobVideo({
+    required String uid,
+    required XFile file,
+  }) async => 'https://fake.storage/jobs/$uid/video';
 
   @override
   Future<String> uploadDisputeEvidence({
@@ -998,8 +1025,24 @@ class FakeReviewRepository implements ReviewRepository {
   final reviewScores = <String, int>{};
 
   @override
-  Stream<List<Review>> watchReviews(String userId) async* {
-    yield _reviews;
+  Stream<List<Review>> watchReviews(String userId, {int limit = 20}) async* {
+    yield _reviews.take(limit).toList();
+  }
+
+  @override
+  Future<List<Review>> fetchReviewPage(
+    String userId, {
+    int limit = 20,
+    DateTime? startAfter,
+  }) async {
+    final ordered = startAfter == null
+        ? _reviews
+        : _reviews
+              .where(
+                (r) => r.createdAt != null && r.createdAt!.isBefore(startAfter),
+              )
+              .toList();
+    return ordered.take(limit).toList();
   }
 
   @override
@@ -1039,6 +1082,44 @@ class FakeReviewRepository implements ReviewRepository {
     required String flaggedByUid,
   }) async {
     flags.add((revieweeId, reviewId, reason));
+  }
+}
+
+/// In-memory [PublicProfileRepository]; seeded with profiles keyed by uid.
+class FakePublicProfileRepository implements PublicProfileRepository {
+  FakePublicProfileRepository([Map<String, PublicProfile> profiles = const {}])
+    : _profiles = Map.of(profiles);
+
+  final Map<String, PublicProfile> _profiles;
+
+  @override
+  Stream<PublicProfile?> watchProfile(String uid) async* {
+    yield _profiles[uid];
+  }
+}
+
+/// In-memory [UserReportRepository]; records filed reports so tests can
+/// assert "Report this user" actually persists one (it used to be a stub
+/// that acknowledged the report and dropped it).
+class FakeUserReportRepository implements UserReportRepository {
+  final List<({String reporterId, String reportedUid, String reason})> filed =
+      [];
+
+  /// When true, [reportUser] throws, so tests can assert the failure copy.
+  bool shouldFail = false;
+
+  @override
+  Future<void> reportUser({
+    required String reporterId,
+    required String reportedUid,
+    required String reason,
+  }) async {
+    if (shouldFail) throw Exception('offline');
+    filed.add((
+      reporterId: reporterId,
+      reportedUid: reportedUid,
+      reason: reason,
+    ));
   }
 }
 
@@ -1368,6 +1449,7 @@ Job sampleJob({
   String? acceptedProviderName,
   int? acceptedBidAmountSen,
   DateTime? deadline,
+  int bidCount = 0,
 }) => Job(
   id: id,
   requestorId: requestorId,
@@ -1383,6 +1465,7 @@ Job sampleJob({
   acceptedProviderName: acceptedProviderName,
   acceptedBidAmountSen: acceptedBidAmountSen,
   deadline: deadline,
+  bidCount: bidCount,
 );
 
 /// Builds a sample pending bid on [jobId] for tests. Defaults to an
@@ -1414,6 +1497,8 @@ Widget buildApp(
   List<Review> reviews = const [],
   List<Milestone> milestones = const [],
   FakeReviewRepository? review,
+  FakePublicProfileRepository? publicProfile,
+  FakeUserReportRepository? userReport,
   FakeVerificationRepository? verification,
   FakeChatRepository? chat,
   FakeDisputeRepository? dispute,
@@ -1435,6 +1520,8 @@ Widget buildApp(
     jobRepository: jobRepo,
     bidRepository: FakeBidRepository(jobRepo, auth, bids),
     reviewRepository: review ?? FakeReviewRepository(reviews),
+    publicProfileRepository: publicProfile ?? FakePublicProfileRepository(),
+    userReportRepository: userReport ?? FakeUserReportRepository(),
     verificationRepository: verification ?? FakeVerificationRepository(),
     userAdminRepository: userAdmin ?? FakeUserAdminRepository(),
     chatRepository: chat ?? FakeChatRepository(),
@@ -1880,6 +1967,113 @@ void main() {
       expect(parsed.jobId, 'job-1');
       expect(parsed.jobTitle, 'Fix sink');
     });
+
+    test('PublicProfile.fromMap maps every public field and cannot expose '
+        'private ones', () {
+      // A realistic doc carrying every field the mapper is forbidden from
+      // reading (email/phone/wallet/payout/private-doc-only/coordinates/
+      // raw disputesLost/suspension), alongside the fields it should map.
+      final map = <String, dynamic>{
+        'displayName': 'Jane Doe',
+        'email': 'jane@example.com',
+        'role': 'provider',
+        'bio': 'Experienced plumber.',
+        'location': 'Some free-text address',
+        'baseTown': 'Bayan Lepas',
+        'baseLat': 5.35,
+        'baseLng': 100.28,
+        'baseAddress': '12, Jalan Mawar 3',
+        'walletBalanceSen': 999999,
+        'escrowLockedSen': 5000,
+        'verificationStatus': 'approved',
+        'trustScore': 620,
+        'trust': {
+          'reviewScore': 80,
+          'trackRecordScore': 70,
+          'verificationScore': 100,
+          'profileScore': 60,
+          'composite': 620,
+          'scoreVisible': true,
+        },
+        'ratingCount': 12,
+        'ratingSum': 55,
+        'jobsCompleted': 8,
+        'jobsPosted': 3,
+        'hireRate': 66,
+        'disputesLost': 2,
+        'suspended': true,
+        'suspensionReason': 'spam',
+        'profilePhotoUrl': 'https://example.com/me.jpg',
+        'idDocumentUrl': 'https://example.com/id.jpg',
+        'selfieUrl': 'https://example.com/selfie.jpg',
+        'createdAt': DateTime(2025, 3, 1),
+        'onboarding': {
+          'providerType': 'individual',
+          'category': 'Plumbing',
+          'skills': ['Pipe repair', 'Leak detection'],
+          'coverageArea': 'George Town, Bayan Lepas',
+          'hourlyRate': '60',
+          'portfolioImageUrls': ['https://example.com/p1.jpg'],
+          'portfolioLinks': ['https://example.com/portfolio'],
+          'certificateUrls': [
+            'https://example.com/c1.pdf',
+            'https://example.com/c2.pdf',
+          ],
+          'bankName': 'Maybank',
+          'accountHolder': 'Jane Doe',
+          'accountLast4': '6789',
+          'branchCode': '1234',
+        },
+      };
+
+      final profile = PublicProfile.fromMap('uid-1', map);
+
+      // Public fields map correctly.
+      expect(profile.displayName, 'Jane Doe');
+      expect(profile.bio, 'Experienced plumber.');
+      // Prefers the structured town over the free-text location field.
+      expect(profile.location, 'Bayan Lepas');
+      expect(profile.trustScore, 620);
+      expect(profile.scoreVisible, isTrue);
+      expect(profile.ratingCount, 12);
+      expect(profile.averageRating, closeTo(55 / 12, 0.001));
+      expect(profile.jobsCompleted, 8);
+      expect(profile.jobsPosted, 3);
+      expect(profile.hireRate, 66);
+      expect(profile.category, 'Plumbing');
+      expect(profile.skills, ['Pipe repair', 'Leak detection']);
+      expect(profile.coverageArea, 'George Town, Bayan Lepas');
+      expect(profile.hourlyRate, '60');
+      expect(profile.portfolioImageUrls, ['https://example.com/p1.jpg']);
+      expect(profile.portfolioLinks, ['https://example.com/portfolio']);
+      expect(profile.memberSince, DateTime(2025, 3, 1));
+
+      // Certificates are exposed only as a count, never the URLs — and
+      // [PublicProfile] has no field/getter at all that could return them,
+      // nor one for email/phone/wallet/payout/coordinates/suspension: the
+      // type itself is the proof those values can never surface through
+      // this model, regardless of what the source map carries.
+      expect(profile.certificateCount, 2);
+    });
+
+    test('PublicProfile.hireRate is null when jobsPosted is zero', () {
+      // Never a forged "0%" for a client who hasn't posted a job yet.
+      final profile = PublicProfile.fromMap('uid-2', {
+        'role': 'requestor',
+        'jobsPosted': 0,
+        'hireRate': 0,
+      });
+      expect(profile.jobsPosted, 0);
+      expect(profile.hireRate, isNull);
+    });
+
+    test('PublicProfile falls back to the free-text location field', () {
+      final profile = PublicProfile.fromMap('uid-3', {
+        'role': 'requestor',
+        'location': 'Georgetown',
+      });
+      expect(profile.location, 'Georgetown');
+    });
   });
 
   group('Profile screen', () {
@@ -2254,56 +2448,55 @@ void main() {
       expect(button.onPressed, isNotNull);
     });
 
-    testWidgets(
-      'provider onboarding Coverage Area drives the Penang picker',
-      (tester) async {
-        // The smallest host that exercises ServiceStep's real picker wiring:
-        // an OnboardingController (backed by the fake repo) provided directly
-        // to the widget, rather than driving the full multi-stage flow.
-        final auth = FakeAuthRepository();
-        final controller = OnboardingController(
-          FakeOnboardingRepository(auth),
-          FakeDocumentStorageRepository(),
-        );
-        await controller.loadFor('uid-1');
+    testWidgets('provider onboarding Coverage Area drives the Penang picker', (
+      tester,
+    ) async {
+      // The smallest host that exercises ServiceStep's real picker wiring:
+      // an OnboardingController (backed by the fake repo) provided directly
+      // to the widget, rather than driving the full multi-stage flow.
+      final auth = FakeAuthRepository();
+      final controller = OnboardingController(
+        FakeOnboardingRepository(auth),
+        FakeDocumentStorageRepository(),
+      );
+      await controller.loadFor('uid-1');
 
-        // Tall surface: ServiceStep's card (category, coverage area, rate,
-        // portfolio) is taller than the default test viewport, and the
-        // picker's dropdown row needs the default width to avoid overflow.
-        await tester.binding.setSurfaceSize(const Size(800, 1400));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
+      // Tall surface: ServiceStep's card (category, coverage area, rate,
+      // portfolio) is taller than the default test viewport, and the
+      // picker's dropdown row needs the default width to avoid overflow.
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
 
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: AppTheme.light,
-            home: ChangeNotifierProvider<OnboardingController>.value(
-              value: controller,
-              child: const Scaffold(
-                body: SingleChildScrollView(child: ServiceStep()),
-              ),
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: ChangeNotifierProvider<OnboardingController>.value(
+            value: controller,
+            child: const Scaffold(
+              body: SingleChildScrollView(child: ServiceStep()),
             ),
           ),
-        );
-        await tester.pumpAndSettle();
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        expect(controller.data.districtCode, isNull);
-        expect(find.text('Pick your coverage area in Penang'), findsOneWidget);
+      expect(controller.data.districtCode, isNull);
+      expect(find.text('Pick your coverage area in Penang'), findsOneWidget);
 
-        await pickPenangLocation(
-          tester,
-          placeholder: 'Pick your coverage area in Penang',
-        );
+      await pickPenangLocation(
+        tester,
+        placeholder: 'Pick your coverage area in Penang',
+      );
 
-        // The structured pick landed on the provider's OnboardingData, not
-        // just a display string.
-        expect(controller.data.districtCode, 'BD');
-        expect(controller.data.town, isNull);
-        expect(controller.data.lat, isNotNull);
-        expect(controller.data.lng, isNotNull);
-        expect(controller.data.coverageArea, 'Barat Daya, Penang');
-        expect(find.text('Barat Daya, Penang'), findsOneWidget);
-      },
-    );
+      // The structured pick landed on the provider's OnboardingData, not
+      // just a display string.
+      expect(controller.data.districtCode, 'BD');
+      expect(controller.data.town, isNull);
+      expect(controller.data.lat, isNotNull);
+      expect(controller.data.lng, isNotNull);
+      expect(controller.data.coverageArea, 'Barat Daya, Penang');
+      expect(find.text('Barat Daya, Penang'), findsOneWidget);
+    });
   });
 
   group('Jobs', () {
@@ -2398,8 +2591,10 @@ void main() {
       await tester.pumpAndSettle();
       await openJobAsProvider(tester);
 
-      // Open the sheet and submit empty → validation errors.
-      await tester.tap(find.widgetWithText(FilledButton, 'Submit a bid'));
+      // Open the sheet and submit empty → validation errors. "Submit a bid"
+      // now renders twice (the bids slot's own button and its duplicate on
+      // the pinned bottom bar); either opens the same sheet.
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit a bid').first);
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Submit Bid'));
       await tester.pumpAndSettle();
@@ -2432,7 +2627,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsWidgets);
     });
 
     testWidgets('pending provider sees the locked state', (tester) async {
@@ -2833,10 +3028,44 @@ void main() {
       await tester.pumpAndSettle();
       await openOwnJob(tester);
 
-      expect(find.text('New provider — no score yet'), findsOneWidget);
+      expect(find.text('New provider, no score yet'), findsOneWidget);
       expect(find.textContaining('Trust Score'), findsNothing);
       // Still rankable / acceptable — the internal score just isn't surfaced.
       expect(find.widgetWithText(FilledButton, 'Accept Bid'), findsOneWidget);
+    });
+
+    testWidgets("tapping a bid card's identity row opens the provider's public "
+        'profile', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final publicProfile = FakePublicProfileRepository({
+        'p-trust': const PublicProfile(
+          uid: 'p-trust',
+          displayName: 'Trusty Tina',
+          role: UserRole.provider,
+          bio: 'Reliable and fast.',
+        ),
+      });
+      await tester.pumpWidget(
+        buildApp(
+          FakeAuthRepository(),
+          jobs: [sampleJob()],
+          bids: valueBids(),
+          publicProfile: publicProfile,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openOwnJob(tester);
+
+      await tester.tap(find.text('Trusty Tina'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PublicProfileScreen), findsOneWidget);
+      expect(find.text('Reliable and fast.'), findsOneWidget);
+      // Private fields never render, even though nothing in this profile
+      // sets them (the model has no field for them at all).
+      expect(find.textContaining('@'), findsNothing);
     });
   });
 
@@ -2909,8 +3138,12 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Completed → review the provider with 5★.
-        final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
+        // Completed → review the provider with 5★. "Review Pro Fixer" now
+        // renders twice (the inline prompt and its duplicate on the pinned
+        // bottom bar); either opens the same sheet.
+        final reviewBtn = find
+            .widgetWithText(FilledButton, 'Review Pro Fixer')
+            .first;
         await tester.ensureVisible(reviewBtn);
         await tester.tap(reviewBtn);
         await tester.pumpAndSettle();
@@ -2958,7 +3191,10 @@ void main() {
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
 
-      final reviewBtn = find.widgetWithText(FilledButton, 'Review Rita Client');
+      // "Review Rita Client" renders twice (inline prompt + bottom bar).
+      final reviewBtn = find
+          .widgetWithText(FilledButton, 'Review Rita Client')
+          .first;
       await tester.ensureVisible(reviewBtn);
       await tester.tap(reviewBtn);
       await tester.pumpAndSettle();
@@ -3008,7 +3244,10 @@ void main() {
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
 
-      final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
+      // "Review Pro Fixer" renders twice (inline prompt + bottom bar).
+      final reviewBtn = find
+          .widgetWithText(FilledButton, 'Review Pro Fixer')
+          .first;
       await tester.ensureVisible(reviewBtn);
       await tester.tap(reviewBtn);
       await tester.pumpAndSettle();
@@ -3298,11 +3537,91 @@ void main() {
       expect(data.privateMap()['selfieUrl'], 'https://x/selfie.jpg');
     });
 
+    test('provider toMap excludes payout bank details (they go private)', () {
+      final data = OnboardingData()
+        ..bankName = 'Maybank'
+        ..accountHolder = 'Jane Doe'
+        ..accountNumber = '1234567890'
+        ..branchCode = 'BR1';
+      final map = data.toMap();
+      expect(map.containsKey('bankName'), isFalse);
+      expect(map.containsKey('accountHolder'), isFalse);
+      expect(map.containsKey('accountLast4'), isFalse);
+      expect(map.containsKey('branchCode'), isFalse);
+      expect(data.payoutMap()['bankName'], 'Maybank');
+      expect(data.payoutMap()['accountHolder'], 'Jane Doe');
+      expect(data.payoutMap()['accountLast4'], '7890');
+      expect(data.payoutMap()['branchCode'], 'BR1');
+    });
+
     test('requestor toMap excludes the ID/SSM document URL', () {
       final data = RequestorOnboardingData()
         ..clientDocumentUrl = 'https://x/doc.jpg';
       expect(data.toMap().containsKey('clientDocumentUrl'), isFalse);
       expect(data.privateMap()['clientDocumentUrl'], 'https://x/doc.jpg');
+    });
+
+    test('requestor toMap excludes the phone number (it goes private)', () {
+      final data = RequestorOnboardingData()..phone = '012-345 6789';
+      expect(data.toMap().containsKey('phone'), isFalse);
+      expect(data.payoutMap()['phone'], '012-345 6789');
+    });
+
+    test('PendingVerification merges phone/bank details from the private '
+        'payout doc, preferring it over legacy public-doc locations', () {
+      final v = PendingVerification.fromMap(
+        'prov-1',
+        {
+          'role': 'provider',
+          'displayName': 'Alex Rivera',
+          // Legacy public locations, still present on a doc that hasn't
+          // fully migrated yet — the payout doc below must win.
+          'phone': '011-000 0000',
+          'onboarding': {
+            'bankName': 'Legacy Bank',
+            'accountHolder': 'Legacy Name',
+            'accountLast4': '0000',
+            'branchCode': 'OLD',
+          },
+        },
+        payoutData: {
+          'phone': '012-345 6789',
+          'bankName': 'Maybank',
+          'accountHolder': 'Alex Rivera',
+          'accountLast4': '6789',
+          'branchCode': 'BR1',
+        },
+      );
+      expect(v?.phone, '012-345 6789');
+      expect(v?.bankName, 'Maybank');
+      expect(v?.accountHolder, 'Alex Rivera');
+      expect(v?.accountLast4, '6789');
+      expect(v?.branchCode, 'BR1');
+    });
+
+    test('PendingVerification falls back to the legacy public-doc fields '
+        'when the private payout doc is missing (pre-migration applicant)', () {
+      final requestor = PendingVerification.fromMap('req-1', {
+        'role': 'requestor',
+        'displayName': 'Jamie Lee',
+        'phone': '019-888 7777',
+      });
+      expect(requestor?.phone, '019-888 7777');
+
+      final provider = PendingVerification.fromMap('prov-2', {
+        'role': 'provider',
+        'displayName': 'Old Provider',
+        'onboarding': {
+          'bankName': 'CIMB',
+          'accountHolder': 'Old Provider',
+          'accountLast4': '1234',
+          'branchCode': 'OLD1',
+        },
+      });
+      expect(provider?.bankName, 'CIMB');
+      expect(provider?.accountHolder, 'Old Provider');
+      expect(provider?.accountLast4, '1234');
+      expect(provider?.branchCode, 'OLD1');
     });
   });
 
@@ -3392,10 +3711,11 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
       await tester.pumpAndSettle();
 
-      // Open own job → the funded milestone offers "Raise a dispute".
+      // Open own job → the funded (current) milestone step offers the
+      // low-emphasis "Something wrong?" dispute link.
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
-      final disputeBtn = find.widgetWithText(TextButton, 'Raise a dispute');
+      final disputeBtn = find.widgetWithText(TextButton, 'Something wrong?');
       await tester.ensureVisible(disputeBtn);
       await tester.tap(disputeBtn);
       await tester.pumpAndSettle();
@@ -3417,8 +3737,8 @@ void main() {
 
       expect(dispute.raised, hasLength(1));
       expect(dispute.raised.single.milestoneId, 'ms-1');
-      expect(find.text('Disputed'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Raise a dispute'), findsNothing);
+      expect(find.text('Disputed, on hold'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Something wrong?'), findsNothing);
     });
 
     testWidgets('admin rules a dispute from the Disputes tab', (tester) async {
@@ -3744,6 +4064,232 @@ void main() {
         expect(m.status, MilestoneStatus.funded);
       },
     );
+  });
+
+  group('Job detail view model', () {
+    // Pure-function tests (no widget pumping) over the role × status matrix
+    // that drives the job detail screen's fixed slot order and its bottom
+    // bar's single CTA.
+    AppUser testUser({
+      String uid = 'me',
+      UserRole role = UserRole.requestor,
+      String verificationStatus = 'none',
+    }) => AppUser(
+      uid: uid,
+      email: '$uid@fairbid.app',
+      displayName: uid,
+      role: role,
+      verificationStatus: verificationStatus,
+    );
+
+    test('owner + open with bids: primary action compares them', () {
+      final job = sampleJob(requestorId: 'me', bidCount: 3);
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.role, JobViewerRole.owner);
+      expect(vm.primaryAction?.kind, JobActionKind.compareBids);
+      expect(vm.primaryAction?.label, 'Compare 3 bids');
+      expect(vm.showBids, isTrue);
+      expect(vm.showMilestones, isFalse);
+      expect(vm.showCancel, isTrue);
+    });
+
+    test('owner + open with no bids: no action, a waiting line instead', () {
+      final job = sampleJob(requestorId: 'me');
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.primaryAction, isNull);
+      expect(vm.waitingLine, isNotNull);
+    });
+
+    test('owner + in progress: message the provider, milestones and address '
+        'show', () {
+      final job = sampleJob(
+        requestorId: 'me',
+        status: JobStatus.inProgress,
+        acceptedProviderId: 'prov-1',
+        acceptedProviderName: 'Pro Fixer',
+        acceptedBidAmountSen: 15000,
+      );
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.role, JobViewerRole.owner);
+      expect(vm.primaryAction?.kind, JobActionKind.message);
+      expect(vm.primaryAction?.label, 'Message provider');
+      expect(vm.showMilestones, isTrue);
+      expect(vm.showAddress, isTrue);
+      expect(vm.showCancel, isTrue);
+      expect(vm.showCancellationResponse, isFalse);
+    });
+
+    test('owner + in progress with a pending cancellation: the response card '
+        'shows', () {
+      final job = Job(
+        id: 'job-1',
+        requestorId: 'me',
+        requestorName: 'Test User',
+        title: 'Fix leaking sink',
+        description: 'Kitchen sink is leaking under the cabinet.',
+        category: 'Plumbing',
+        location: const JobLocation(
+          lat: 3.14,
+          lng: 101.7,
+          address: 'Bangsar, KL',
+        ),
+        status: JobStatus.inProgress,
+        acceptedProviderId: 'prov-1',
+        acceptedProviderName: 'Pro Fixer',
+        acceptedBidAmountSen: 15000,
+        cancellationRequestedBy: 'provider',
+      );
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.showCancellationResponse, isTrue);
+      expect(vm.statusHeadline, contains('cancellation'));
+    });
+
+    test('owner + completed: leave-a-review is the primary action', () {
+      final job = sampleJob(
+        requestorId: 'me',
+        status: JobStatus.completed,
+        acceptedProviderId: 'prov-1',
+        acceptedProviderName: 'Pro Fixer',
+        acceptedBidAmountSen: 15000,
+      );
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.primaryAction?.kind, JobActionKind.leaveReview);
+      expect(vm.primaryAction?.label, 'Review Pro Fixer');
+      expect(vm.showReviewPrompt, isTrue);
+      expect(vm.showCancel, isFalse);
+    });
+
+    test('owner + cancelled: no primary action', () {
+      final job = sampleJob(requestorId: 'me', status: JobStatus.cancelled);
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.primaryAction, isNull);
+      expect(vm.showMilestones, isFalse);
+      expect(vm.showCancel, isFalse);
+    });
+
+    test('accepted provider + in progress: message the client', () {
+      final job = sampleJob(
+        status: JobStatus.inProgress,
+        acceptedProviderId: 'me',
+        acceptedProviderName: 'Pro Fixer',
+        acceptedBidAmountSen: 15000,
+      );
+      final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), null);
+
+      expect(vm.role, JobViewerRole.acceptedProvider);
+      expect(vm.primaryAction?.kind, JobActionKind.message);
+      expect(vm.primaryAction?.label, 'Message client');
+      expect(vm.showMilestones, isTrue);
+      expect(vm.showAddress, isTrue);
+    });
+
+    test(
+      'accepted provider + completed: leave-a-review is the primary action',
+      () {
+        final job = sampleJob(
+          status: JobStatus.completed,
+          acceptedProviderId: 'me',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+        );
+        final vm = buildJobDetailVm(
+          job,
+          testUser(role: UserRole.provider),
+          null,
+        );
+
+        expect(vm.primaryAction?.kind, JobActionKind.leaveReview);
+        expect(vm.showReviewPrompt, isTrue);
+      },
+    );
+
+    test('bidder: shows the placed bid with a Withdraw secondary action', () {
+      final job = sampleJob(requestorId: 'req-9');
+      final bid = sampleBid(providerId: 'me', amountSen: 15000);
+      final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), bid);
+
+      expect(vm.role, JobViewerRole.bidder);
+      expect(vm.primaryAction?.kind, JobActionKind.yourBid);
+      expect(vm.primaryAction?.label, 'Your bid RM 150.00');
+      expect(vm.primaryAction?.secondaryLabel, 'Withdraw');
+      expect(vm.showBids, isTrue);
+    });
+
+    test('browser: a verified provider can submit a bid', () {
+      final job = sampleJob(requestorId: 'req-9');
+      final vm = buildJobDetailVm(
+        job,
+        testUser(role: UserRole.provider, verificationStatus: 'approved'),
+        null,
+      );
+
+      expect(vm.role, JobViewerRole.browser);
+      expect(vm.primaryAction?.kind, JobActionKind.submitBid);
+    });
+
+    test('browser: an unverified provider is routed to get verified', () {
+      final job = sampleJob(requestorId: 'req-9');
+      final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), null);
+
+      expect(vm.primaryAction?.kind, JobActionKind.getVerified);
+    });
+
+    test('browser: bidding is closed once the deadline has passed', () {
+      final job = sampleJob(
+        requestorId: 'req-9',
+        deadline: DateTime.now().subtract(const Duration(hours: 1)),
+      );
+      final vm = buildJobDetailVm(
+        job,
+        testUser(role: UserRole.provider, verificationStatus: 'approved'),
+        null,
+      );
+
+      expect(vm.primaryAction, isNull);
+    });
+
+    test('browser: a non-provider viewer gets no bidding action', () {
+      final job = sampleJob(requestorId: 'req-9');
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.role, JobViewerRole.browser);
+      expect(vm.primaryAction, isNull);
+    });
+
+    test('outsider: no relation to a job that has moved on', () {
+      final job = sampleJob(
+        requestorId: 'req-9',
+        status: JobStatus.inProgress,
+        acceptedProviderId: 'prov-1',
+        acceptedProviderName: 'Pro Fixer',
+      );
+      final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), null);
+
+      expect(vm.role, JobViewerRole.outsider);
+      expect(vm.primaryAction, isNull);
+      expect(vm.showBids, isFalse);
+    });
+
+    test('outsider: a cancelled job says so plainly', () {
+      final job = sampleJob(requestorId: 'req-9', status: JobStatus.cancelled);
+      final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), null);
+
+      expect(vm.statusHeadline, 'This job was cancelled.');
+    });
+
+    test('not signed in: browsing an open job with no bidding action', () {
+      final job = sampleJob(requestorId: 'req-9');
+      final vm = buildJobDetailVm(job, null, null);
+
+      expect(vm.role, JobViewerRole.browser);
+      expect(vm.primaryAction, isNull);
+    });
   });
 
   group('Admin user suspension', () {

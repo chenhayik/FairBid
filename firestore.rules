@@ -38,10 +38,22 @@ service cloud.firestore {
     // record a verification decision on any user (only the verification
     // fields), which is how pending providers and requestors are approved
     // into the marketplace. Deletion is client-denied.
+    //
+    // TODO: walletBalanceSen and escrowLockedSen are still world-readable
+    // here too (any signed-in user can read another user's wallet balance).
+    // They're written by Cloud Functions and read by the escrow logic, so
+    // moving them under private/ is a larger change than the payout/phone
+    // move below — deliberately left alone for now.
     match /users/{userId} {
+      // 'jobsPosted'/'jobsAssigned'/'hireRate' are the requestor job-posting
+      // counters behind the public profile's client-history strip
+      // (functions/index.js's bumpJobsPostedOnCreate /
+      // bumpJobsAssignedOnAccept) — server-owned exactly like the Trust
+      // Score fields, so a client can't forge a higher hire rate.
       function trustFields() {
         return ['trustScore', 'ratingSum', 'ratingCount', 'jobsCompleted',
-                'disputesLost', 'trust'];
+                'disputesLost', 'trust', 'jobsPosted', 'jobsAssigned',
+                'hireRate'];
       }
 
       allow read: if isSignedIn();
@@ -118,10 +130,15 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      // Sensitive onboarding data (identity/selfie/ID-document photo URLs).
-      // The owner writes it; only the owner and admins may read it — so a
-      // Storage download URL (whose token bypasses Storage rules) can't be
-      // harvested from another user's world-readable profile.
+      // Sensitive per-user data that must never be world-readable: onboarding
+      // identity documents (identity/selfie/ID-document photo URLs, doc id
+      // `verification`) and, since payout bank details (bankName,
+      // accountHolder, accountLast4, branchCode) and the phone number used to
+      // sit on the world-readable doc above, those too (doc id `payout`). The
+      // owner writes it; only the owner and admins may read it — so a Storage
+      // download URL (whose token bypasses Storage rules) can't be harvested
+      // from another user's world-readable profile, and neither can a payout
+      // bank detail or phone number.
       match /private/{doc} {
         allow read: if isSignedIn()
                     && (request.auth.uid == userId || isAdmin());
@@ -157,6 +174,15 @@ service cloud.firestore {
     function callerScoreVisible() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid))
           .data.get('trust', {}).get('scoreVisible', false);
+    }
+
+    // The caller's own stored avatar, used to pin a bid's `providerPhotoUrl`
+    // to reality — so a provider can't put someone else's (or an arbitrary
+    // external) image on their bid. `.get(..., null)` means a provider with
+    // no photo yet still passes (both sides read as null).
+    function callerPhotoUrl() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid))
+          .data.get('profilePhotoUrl', null);
     }
 
     function ownsJob(jobId) {
@@ -263,7 +289,12 @@ service cloud.firestore {
                                   == callerTrustScore()
                               && request.resource.data
                                   .get('providerScoreVisible', false)
-                                  == callerScoreVisible();
+                                  == callerScoreVisible()
+                              // Same pin for the photo snapshot — a bid that
+                              // omits it entirely (no photo) still passes.
+                              && request.resource.data
+                                  .get('providerPhotoUrl', null)
+                                  == callerPhotoUrl();
         // Withdraw own bid — but only while it's still pending, so a provider
         // can't delete a bid the requestor just accepted and orphan the job's
         // winner fields.
@@ -424,6 +455,31 @@ service cloud.firestore {
     match /topups/{billCode} {
       allow read: if isSignedIn() && request.auth.uid == resource.data.uid;
       allow write: if false;
+    }
+
+    // "Report this user" complaints raised from a public profile. Unlike the
+    // disputes/transactions ledgers above (which are server-owned), a client
+    // files these directly, so the create rule does the vetting: a reporter
+    // may only author a report as themselves, may not report themselves, and
+    // must supply a non-empty reason. `status` is pinned to 'open' at
+    // creation so a client can't file a pre-resolved report.
+    //
+    // Read is admin-only: a reporter deliberately cannot list or re-read what
+    // they filed, so the collection can never be mined to discover who has
+    // been reported. Nothing may edit or delete a report once filed, which
+    // keeps the trail auditable.
+    match /reports/{reportId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn()
+                    && !isSuspended()
+                    && request.resource.data.reporterId == request.auth.uid
+                    && request.resource.data.reportedUid is string
+                    && request.resource.data.reportedUid != request.auth.uid
+                    && request.resource.data.reason is string
+                    && request.resource.data.reason.size() > 0
+                    && request.resource.data.reason.size() <= 2000
+                    && request.resource.data.status == 'open';
+      allow update, delete: if false;
     }
 
     // Deny everything else by default until its own rules are written.

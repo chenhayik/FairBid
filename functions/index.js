@@ -136,6 +136,68 @@ exports.onJobCompleted = functions.firestore
     });
 
 // ---------------------------------------------------------------------------
+// Requestor job-posting counters (jobsPosted / hireRate) — power the public
+// profile's client-history strip (lib/features/profile/domain/
+// public_profile.dart). Both fields (plus the jobsAssigned they're derived
+// from) are server-owned, exactly like the Trust Score fields above — see
+// firestore.rules' trustFields().
+// ---------------------------------------------------------------------------
+
+/**
+ * Applies [postedDelta]/[assignedDelta] to [uid]'s `jobsPosted`/
+ * `jobsAssigned` counters and recomputes `hireRate` (0–100 int, the share of
+ * posted jobs that reached an assigned/accepted state) from the result,
+ * inside one transaction. No jobs posted yet -> `hireRate` is cleared
+ * entirely, never a misleading "0%".
+ */
+async function bumpRequestorCounters(uid, {postedDelta = 0, assignedDelta = 0}) {
+  const db = admin.firestore();
+  const ref = db.doc(`users/${uid}`);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return; // defensive: shouldn't happen in practice
+    const data = snap.data() || {};
+    const jobsPosted = (data.jobsPosted || 0) + postedDelta;
+    const jobsAssigned = (data.jobsAssigned || 0) + assignedDelta;
+    tx.update(ref, {
+      jobsPosted,
+      jobsAssigned,
+      hireRate: jobsPosted > 0 ?
+          Math.round((jobsAssigned / jobsPosted) * 100) :
+          admin.firestore.FieldValue.delete(),
+    });
+  });
+}
+
+/**
+ * A job posting bumps its requestor's `jobsPosted` counter. Mirrors
+ * `logJobPosted` below (same trigger document, a separate function so the
+ * timeline write and the counter write stay independent).
+ */
+exports.bumpJobsPostedOnCreate = functions.firestore
+    .document("jobs/{jobId}")
+    .onCreate(async (snap) => {
+      const requestorId = snap.data()?.requestorId;
+      if (!requestorId) return;
+      await bumpRequestorCounters(requestorId, {postedDelta: 1});
+    });
+
+/**
+ * A job reaching an assigned/accepted state (open -> in_progress, i.e. a bid
+ * was accepted) bumps its requestor's `jobsAssigned` counter, the numerator
+ * behind `hireRate`.
+ */
+exports.bumpJobsAssignedOnAccept = functions.firestore
+    .document("jobs/{jobId}")
+    .onUpdate(async (change) => {
+      const before = change.before.data();
+      const after = change.after.data();
+      if (before.status !== "open" || after.status !== "in_progress") return;
+      if (!after.requestorId) return;
+      await bumpRequestorCounters(after.requestorId, {assignedDelta: 1});
+    });
+
+// ---------------------------------------------------------------------------
 // Wallet + milestone escrow.
 //
 // Firestore rules reject every client write to `walletBalanceSen`, to a
@@ -544,6 +606,7 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const jobId = checkId(data.jobId, "jobId");
   const milestoneId = checkId(data.milestoneId, "milestoneId");
+  functions.logger.info("fundMilestone requested", {uid, jobId, milestoneId});
   const db = admin.firestore();
   const jobRef = db.doc(`jobs/${jobId}`);
   const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
@@ -569,6 +632,8 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
     if (balance < milestone.amountSen) {
+      functions.logger.error("fundMilestone rejected: insufficient balance",
+          {uid, jobId, milestoneId, amountSen: milestone.amountSen, balance});
       throw new functions.https.HttpsError(
           "failed-precondition", "Insufficient wallet balance.");
     }
@@ -595,10 +660,11 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
       type: "milestone",
       title: "Milestone funded",
       body: `${rm(milestone.amountSen)} is in escrow for ` +
-          `"${milestone.description}" — you can start work.`,
+          `"${milestone.description}". You can start work.`,
       route: `/jobs/${jobId}`,
     });
   });
+  functions.logger.info("fundMilestone funded", {uid, jobId, milestoneId});
 });
 
 /**
@@ -610,6 +676,8 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const jobId = checkId(data.jobId, "jobId");
   const milestoneId = checkId(data.milestoneId, "milestoneId");
+  functions.logger.info("releaseMilestone requested",
+      {uid, jobId, milestoneId});
   const db = admin.firestore();
   const jobRef = db.doc(`jobs/${jobId}`);
   const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
@@ -628,10 +696,16 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
           "Only the job's requestor can release milestones.");
     }
     if (!job.acceptedProviderId) {
+      functions.logger.error(
+          "releaseMilestone rejected: no accepted provider",
+          {uid, jobId, milestoneId});
       throw new functions.https.HttpsError(
           "failed-precondition", "This job has no accepted provider.");
     }
     if (milestoneSnap.data()?.status !== "submitted") {
+      functions.logger.error(
+          "releaseMilestone rejected: milestone not submitted",
+          {uid, jobId, milestoneId, status: milestoneSnap.data()?.status});
       throw new functions.https.HttpsError(
           "failed-precondition", "This milestone has not been delivered yet.");
     }
@@ -663,10 +737,12 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
       type: "payment",
       title: "Payment released",
       body: `${rm(amountSen)} was released to your wallet for ` +
-          `"${job.title}"${wasLast ? " — job complete!" : "."}`,
+          `"${job.title}"${wasLast ? ". Job complete!" : "."}`,
       route: `/jobs/${jobId}`,
     });
   });
+  functions.logger.info("releaseMilestone released",
+      {uid, jobId, milestoneId});
 });
 
 // Per-top-up cap. Must stay in sync with PlatformConfig.maxTopUpSen
@@ -690,7 +766,10 @@ const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
 exports.topUpWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const amountSen = checkAmount(data.amountSen);
+  functions.logger.info("topUpWallet requested", {uid, amountSen});
   if (amountSen > MAX_TOPUP_SEN) {
+    functions.logger.error("topUpWallet rejected: over per-call cap",
+        {uid, amountSen, capSen: MAX_TOPUP_SEN});
     throw new functions.https.HttpsError(
         "invalid-argument", "Top-ups are capped at RM 10,000.");
   }
@@ -702,6 +781,8 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
     const walletSnap = await tx.get(walletRef);
     const balance = walletSnap.data()?.walletBalanceSen || 0;
     if (balance + amountSen > MAX_WALLET_BALANCE_SEN) {
+      functions.logger.error("topUpWallet rejected: over wallet cap",
+          {uid, amountSen, balance, capSen: MAX_WALLET_BALANCE_SEN});
       throw new functions.https.HttpsError(
           "failed-precondition", "Wallet balance is capped at RM 50,000.");
     }
@@ -716,12 +797,14 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
       participantIds: [uid],
     });
   });
+  functions.logger.info("topUpWallet credited", {uid, amountSen});
 });
 
 /** Withdraws from the caller's available balance; rejects overdrafts. */
 exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const amountSen = checkAmount(data.amountSen);
+  functions.logger.info("withdrawFromWallet requested", {uid, amountSen});
   const db = admin.firestore();
   const walletRef = db.doc(`users/${uid}`);
 
@@ -734,6 +817,8 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     // isn't free to withdraw, even though it hasn't left walletBalanceSen yet.
     const available = balance - (wallet.escrowLockedSen || 0);
     if (available < amountSen) {
+      functions.logger.error("withdrawFromWallet rejected: insufficient balance",
+          {uid, amountSen, available});
       throw new functions.https.HttpsError(
           "failed-precondition", "Insufficient wallet balance.");
     }
@@ -754,6 +839,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
       route: "/profile/earnings",
     });
   });
+  functions.logger.info("withdrawFromWallet completed", {uid, amountSen});
 });
 
 // ---------------------------------------------------------------------------
@@ -787,7 +873,10 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     .https.onCall(async (data, context) => {
       const uid = callerUid(context);
       const amountSen = checkAmount(data.amountSen);
+      functions.logger.info("createToyyibpayBill requested", {uid, amountSen});
       if (amountSen > MAX_TOPUP_SEN) {
+        functions.logger.error("createToyyibpayBill rejected: over per-call cap",
+            {uid, amountSen, capSen: MAX_TOPUP_SEN});
         throw new functions.https.HttpsError(
             "invalid-argument", "Top-ups are capped at RM 10,000.");
       }
@@ -795,12 +884,16 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
       const userSnap = await db.doc(`users/${uid}`).get();
       const user = userSnap.data() || {};
       if (user.suspended === true) {
+        functions.logger.error("createToyyibpayBill rejected: suspended user",
+            {uid});
         throw new functions.https.HttpsError(
             "permission-denied",
             "Your account is suspended. Contact support if you think this " +
             "is a mistake.");
       }
       if ((user.walletBalanceSen || 0) + amountSen > MAX_WALLET_BALANCE_SEN) {
+        functions.logger.error("createToyyibpayBill rejected: over wallet cap",
+            {uid, amountSen, capSen: MAX_WALLET_BALANCE_SEN});
         throw new functions.https.HttpsError(
             "failed-precondition", "Wallet balance is capped at RM 50,000.");
       }
@@ -845,6 +938,8 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
         status: "pending",
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+      functions.logger.info("createToyyibpayBill created",
+          {uid, amountSen, billCode});
       return {billCode, paymentUrl: `${TOYYIBPAY_BASE}/${billCode}`};
     });
 
@@ -873,11 +968,17 @@ async function creditToyyibpayTopup(billCode) {
   const transactions = await res.json().catch(() => null);
   const paid = Array.isArray(transactions) ?
       transactions.find((t) => t.billpaymentStatus === "1") : null;
-  if (!paid) return {credited: false, reason: "not_paid"};
+  if (!paid) {
+    functions.logger.info("creditToyyibpayTopup: not paid", {billCode});
+    return {credited: false, reason: "not_paid"};
+  }
 
   const topupRef = db.doc(`topups/${billCode}`);
   const topupSnap = await topupRef.get();
-  if (!topupSnap.exists) return {credited: false, reason: "unknown_bill"};
+  if (!topupSnap.exists) {
+    functions.logger.error("creditToyyibpayTopup: unknown bill", {billCode});
+    return {credited: false, reason: "unknown_bill"};
+  }
 
   // getBillTransactions reports the ringgit amount as a decimal string
   // ("10.00") — convert to sen before comparing to our own stored amount.
@@ -892,8 +993,14 @@ async function creditToyyibpayTopup(billCode) {
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(topupRef);
     const rec = snap.data();
-    if (!rec) return {credited: false, reason: "unknown_bill"};
+    if (!rec) {
+      functions.logger.error("creditToyyibpayTopup: record vanished",
+          {billCode});
+      return {credited: false, reason: "unknown_bill"};
+    }
     if (rec.status === "credited") {
+      functions.logger.info("creditToyyibpayTopup: already credited",
+          {billCode, uid: rec.uid, amountSen: rec.amountSen});
       return {credited: true, reason: "already_credited"}; // idempotent no-op
     }
 
@@ -925,6 +1032,8 @@ async function creditToyyibpayTopup(billCode) {
       ref: billCode,
       participantIds: [rec.uid],
     });
+    functions.logger.info("creditToyyibpayTopup: credited",
+        {billCode, uid: rec.uid, amountSen: rec.amountSen});
     return {credited: true, reason: "credited"};
   });
 }
@@ -949,7 +1058,9 @@ exports.toyyibpayCallback = functions.runWith({secrets: [toyyibpaySecret]})
         return;
       }
       try {
-        const {reason} = await creditToyyibpayTopup(billCode);
+        const {credited, reason} = await creditToyyibpayTopup(billCode);
+        functions.logger.info("toyyibpayCallback handled",
+            {billCode, credited, reason});
         const messages = {
           not_paid: "not paid",
           unknown_bill: "unknown bill",
@@ -975,13 +1086,20 @@ exports.reconcileToyyibpayTopup =
         .https.onCall(async (data, context) => {
           const uid = callerUid(context);
           const billCode = checkId(data.billCode, "billCode");
+          functions.logger.info("reconcileToyyibpayTopup requested",
+              {uid, billCode});
           const topupSnap =
               await admin.firestore().doc(`topups/${billCode}`).get();
           if (topupSnap.data()?.uid !== uid) {
+            functions.logger.error(
+                "reconcileToyyibpayTopup rejected: bill not owned by caller",
+                {uid, billCode});
             throw new functions.https.HttpsError(
                 "permission-denied", "This top-up does not belong to you.");
           }
-          const {credited} = await creditToyyibpayTopup(billCode);
+          const {credited, reason} = await creditToyyibpayTopup(billCode);
+          functions.logger.info("reconcileToyyibpayTopup result",
+              {uid, billCode, credited, reason});
           return {credited};
         });
 
@@ -1526,7 +1644,7 @@ exports.respondToJobCancellation =
         notify(tx, requesterUid, {
           type: "cancellation",
           title: "Cancellation declined",
-          body: `The other party declined to cancel "${job.title}" — the ` +
+          body: `The other party declined to cancel "${job.title}". The ` +
               "job continues.",
           route: `/jobs/${jobId}`,
         });
@@ -1543,7 +1661,7 @@ exports.respondToJobCancellation =
       notify(tx, requesterUid, {
         type: "cancellation",
         title: "Job cancelled",
-        body: `Both parties agreed — "${job.title}" has been cancelled.`,
+        body: `Both parties agreed: "${job.title}" has been cancelled.`,
         route: `/jobs/${jobId}`,
       });
     });
@@ -1626,7 +1744,7 @@ exports.closeExpiredJobs = functions.pubsub
         status: "cancelled",
         cancelledBy: "system",
         cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
-        cancellationReason: "Bidding deadline passed — no bid was accepted.",
+        cancellationReason: "Bidding deadline passed, no bid was accepted.",
       }));
       if (!snap.empty) await batch.commit();
       functions.logger.info(`closeExpiredJobs: closed ${snap.size} job(s)`);
@@ -1900,7 +2018,7 @@ exports.logJobStatusChange = functions.firestore
       const jobId = ctx.params.jobId;
       if (before.status === "open" && after.status === "in_progress") {
         return logJobEvent(jobId, "assigned", "assigned",
-            `Provider assigned — ${after.acceptedProviderName || "provider"} ` +
+            `Provider assigned: ${after.acceptedProviderName || "provider"} ` +
             `(${rm(after.acceptedBidAmountSen || 0)})`);
       }
       if (after.status === "completed") {
@@ -1933,20 +2051,20 @@ exports.logMilestoneStatusChange = functions.firestore
       switch (after.status) {
         case "funded":
           return logJobEvent(jobId, `${milestoneId}_funded`, "funded",
-              `Funded "${d}" — ${rm(amt)}`);
+              `Funded "${d}": ${rm(amt)}`);
         case "submitted":
           return logJobEvent(jobId, `${milestoneId}_submitted`, "submitted",
-              `Work delivered — "${d}"`);
+              `Work delivered: "${d}"`);
         case "released":
           return logJobEvent(jobId, `${milestoneId}_released`, "released",
-              `Payment released — "${d}" (${rm(amt)})`);
+              `Payment released: "${d}" (${rm(amt)})`);
         case "disputed":
           return logJobEvent(jobId, `${milestoneId}_disputed`, "disputed",
-              `Disputed — "${d}"`);
+              `Disputed: "${d}"`);
         case "pending":
           if (before?.status !== "disputed") return null;
           return logJobEvent(jobId, `${milestoneId}_refunded`, "refunded",
-              `Refunded & reopened — "${d}"`);
+              `Refunded & reopened: "${d}"`);
         default:
           return null;
       }
@@ -1969,23 +2087,43 @@ const geminiKey = defineSecret("GEMINI_KEY");
 // Current Gemini Flash-Lite id; requires the @google/genai SDK.
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
-/** System instruction for the description helper: rough text → structured
- * description. */
+/** System instruction for the description helper: rough text → a short,
+ * scannable, up-to-three-section description (What needs doing / Access &
+ * details / Expected outcome). Tuned for directness: plain words, no
+ * filler/preamble, fragments over full sentences, and a section is dropped
+ * rather than padded when the note gives it no basis. */
 const DESCRIPTION_SYSTEM = "You help customers on FairBid, a Malaysian " +
-    "home-services marketplace, write clear job postings. Expand the " +
-    "customer's rough note into a job description in plain prose (no " +
-    "markdown, no headings), under 120 words, covering: what the problem " +
-    "is, any access details the provider should confirm, and the expected " +
-    "outcome. Never invent prices, deadlines or commitments the customer " +
-    "did not state. If a photo is provided, use it to make the " +
-    "description more specific and accurate.";
+    "home-services marketplace, turn a rough note into a job posting a " +
+    "provider can scan in seconds. Use plain, everyday words. No preamble, " +
+    "no greeting, no restating the category, no closing pleasantries, no " +
+    "filler. Aim for about 50 to 80 words total. Use up to three " +
+    "sections, in this order, each starting with its label on its own " +
+    "line: What needs doing, then Access & details, then Expected " +
+    "outcome. Drop a section entirely, rather than padding it, when the " +
+    "note gives no basis for it. Under 'What needs doing', lead with the " +
+    "action or the object: one short sentence or fragment naming the " +
+    "problem or task. Under 'Access & details', list only the practical " +
+    "things a provider should confirm that the note actually supports " +
+    "(for example property type, floor or unit, parking, whether parts " +
+    "or materials are provided, pets, or timing constraints), one short " +
+    "fragment per line, each starting with the bullet character '•'. " +
+    "Under 'Expected outcome', name what a good result looks like in one " +
+    "short sentence or fragment. Put a blank line between sections. " +
+    "Write in plain prose, favouring short sentence fragments over full " +
+    "sentences. Do not use markdown, headings syntax, or bold. Do not " +
+    "use em dashes. Never invent prices, deadlines, brand names, " +
+    "measurements, or commitments the customer did not state; if " +
+    "something is unknown, leave it out rather than guessing. If a photo " +
+    "is provided, use it to make the description more specific and " +
+    "accurate.";
 
 /** System instruction for the fair-price guide; the JSON shape is enforced
  * by `PRICE_SCHEMA`, so no "reply with ONLY JSON" wording is needed here. */
 const PRICE_SYSTEM = "You estimate fair market prices for home services " +
-    "in Malaysia. Give a realistic ringgit range a customer should expect " +
-    "to pay for the job described. If a photo is provided, factor it into " +
-    "the estimate.";
+    "in Malaysia. Give a realistic ringgit range for the job described, " +
+    "based only on what it states. If a photo is provided, factor it in. " +
+    "Never invent a price from an assumed brand name, measurement, or " +
+    "detail the description does not give. Do not use em dashes.";
 
 /** Structured-output schema for the fair-price guide: a ringgit range. */
 const PRICE_SCHEMA = {
