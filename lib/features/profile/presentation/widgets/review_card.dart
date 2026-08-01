@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/time_ago.dart';
+import '../../../../core/widgets/user_chip.dart';
 import '../../domain/review.dart';
 
 /// A single review as it appears inside the profile's Reviews card: the
@@ -26,12 +27,23 @@ class ReviewCard extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: Text(
-                review.reviewerName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelLarge,
-              ),
+              // Empty reviewerId only happens on malformed legacy data — fall
+              // back to plain, non-tappable text rather than pushing
+              // `/users/` with no id.
+              child: review.reviewerId.isEmpty
+                  ? Text(
+                      review.reviewerName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelLarge,
+                    )
+                  : UserChip(
+                      uid: review.reviewerId,
+                      name: review.reviewerName,
+                      showAvatar: false,
+                      showChevron: false,
+                      nameStyle: theme.textTheme.labelLarge,
+                    ),
             ),
             const SizedBox(width: 8),
             Text(timeAgo(review.createdAt),

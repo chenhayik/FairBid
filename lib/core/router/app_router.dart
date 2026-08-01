@@ -23,6 +23,8 @@ import '../../features/onboarding/presentation/onboarding_flow_screen.dart';
 import '../../features/profile/presentation/earnings_screen.dart';
 import '../../features/profile/presentation/edit_profile_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
+import '../../features/profile/presentation/public_profile_screen.dart';
+import '../../features/profile/presentation/user_reviews_screen.dart';
 import '../navigation/app_shell.dart';
 
 /// Builds the app router. It listens to [auth] so that signing in/out or
@@ -119,6 +121,24 @@ GoRouter buildRouter(AuthController auth) {
       GoRoute(
           path: '/profile/earnings',
           builder: (_, _) => const EarningsScreen()),
+
+      // Public profile — pushed full-screen (outside the tab shell) with a
+      // back button, matching /jobs/:id. Viewing your own uid redirects to
+      // the canonical /profile screen instead of a second copy of it.
+      GoRoute(
+        path: '/users/:uid',
+        redirect: (context, state) {
+          final uid = state.pathParameters['uid'];
+          return uid != null && uid == auth.user?.uid ? '/profile' : null;
+        },
+        builder: (_, state) =>
+            PublicProfileScreen(uid: state.pathParameters['uid']!),
+      ),
+      GoRoute(
+        path: '/users/:uid/reviews',
+        builder: (_, state) =>
+            UserReviewsScreen(uid: state.pathParameters['uid']!),
+      ),
 
       // The four main tabs live in a persistent bottom-nav shell.
       StatefulShellRoute.indexedStack(

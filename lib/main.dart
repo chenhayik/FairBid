@@ -19,7 +19,9 @@ import 'features/notifications/data/push_service.dart';
 import 'features/onboarding/data/document_storage_repository.dart';
 import 'features/onboarding/data/onboarding_repository.dart';
 import 'features/onboarding/data/requestor_onboarding_repository.dart';
+import 'features/profile/data/public_profile_repository.dart';
 import 'features/profile/data/review_repository.dart';
+import 'features/profile/data/user_report_repository.dart';
 import 'features/wallet/data/wallet_repository.dart';
 import 'firebase_options.dart';
 
@@ -48,6 +50,8 @@ Future<void> main() async {
     jobRepository: FirestoreJobRepository(),
     bidRepository: FirestoreBidRepository(),
     reviewRepository: FirebaseReviewRepository(),
+    publicProfileRepository: FirebasePublicProfileRepository(),
+    userReportRepository: FirestoreUserReportRepository(),
     verificationRepository: FirestoreVerificationRepository(),
     userAdminRepository: FirestoreUserAdminRepository(),
     chatRepository: FirestoreChatRepository(),

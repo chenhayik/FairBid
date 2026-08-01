@@ -21,7 +21,9 @@ import '../features/onboarding/data/onboarding_repository.dart';
 import '../features/onboarding/data/requestor_onboarding_repository.dart';
 import '../features/onboarding/presentation/onboarding_controller.dart';
 import '../features/onboarding/presentation/requestor_onboarding_controller.dart';
+import '../features/profile/data/public_profile_repository.dart';
 import '../features/profile/data/review_repository.dart';
+import '../features/profile/data/user_report_repository.dart';
 import '../features/wallet/data/wallet_repository.dart';
 import 'router/app_router.dart';
 import 'theme/app_theme.dart';
@@ -38,6 +40,8 @@ class FairBidApp extends StatelessWidget {
     required this.jobRepository,
     required this.bidRepository,
     required this.reviewRepository,
+    required this.publicProfileRepository,
+    required this.userReportRepository,
     required this.verificationRepository,
     required this.userAdminRepository,
     required this.chatRepository,
@@ -58,6 +62,8 @@ class FairBidApp extends StatelessWidget {
   final JobRepository jobRepository;
   final BidRepository bidRepository;
   final ReviewRepository reviewRepository;
+  final PublicProfileRepository publicProfileRepository;
+  final UserReportRepository userReportRepository;
   final VerificationRepository verificationRepository;
   final UserAdminRepository userAdminRepository;
   final ChatRepository chatRepository;
@@ -78,6 +84,9 @@ class FairBidApp extends StatelessWidget {
         Provider<JobRepository>.value(value: jobRepository),
         Provider<BidRepository>.value(value: bidRepository),
         Provider<ReviewRepository>.value(value: reviewRepository),
+        Provider<PublicProfileRepository>.value(
+            value: publicProfileRepository),
+        Provider<UserReportRepository>.value(value: userReportRepository),
         Provider<VerificationRepository>.value(
             value: verificationRepository),
         Provider<UserAdminRepository>.value(value: userAdminRepository),

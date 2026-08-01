@@ -11,11 +11,23 @@ class ReviewAlreadyExistsException implements Exception {
 /// Reads and writes reviews left on a user's profile. UI depends on this
 /// interface so tests can use a fake without Firestore.
 abstract interface class ReviewRepository {
-  /// Streams the reviews on [userId]'s profile, newest first, excluding
-  /// admin-hidden ones. A single-field `orderBy('createdAt')` inside one
-  /// subcollection needs no composite index (hidden is filtered client-side
-  /// for the same reason).
-  Stream<List<Review>> watchReviews(String userId);
+  /// Streams the [limit] newest reviews on [userId]'s profile, newest first,
+  /// excluding admin-hidden ones. Capped so a heavily-reviewed profile never
+  /// streams its entire subcollection just to show a short preview list. A
+  /// single-field `orderBy('createdAt')` inside one subcollection needs no
+  /// composite index (hidden is filtered client-side for the same reason).
+  Stream<List<Review>> watchReviews(String userId, {int limit = 20});
+
+  /// One page of [userId]'s reviews, newest first, for a paged "See all
+  /// reviews" screen. Pass the previous page's last review's `createdAt` as
+  /// [startAfter] to fetch the next page; null for the first page. Like
+  /// [watchReviews], hidden reviews are filtered out after the query runs, so
+  /// a page can come back shorter than [limit] even when more reviews exist.
+  Future<List<Review>> fetchReviewPage(
+    String userId, {
+    int limit = 20,
+    DateTime? startAfter,
+  });
 
   /// Records [review] on [revieweeId]'s profile. A Cloud Function recomputes
   /// their Bayesian Trust Score (plan §3.4.3) shortly after. Throws
@@ -47,15 +59,34 @@ class FirebaseReviewRepository implements ReviewRepository {
       _firestore.collection('users').doc(userId).collection('reviews');
 
   @override
-  Stream<List<Review>> watchReviews(String userId) {
+  Stream<List<Review>> watchReviews(String userId, {int limit = 20}) {
     return _reviews(userId)
         .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
         .map((snapshot) => [
               for (final doc in snapshot.docs)
                 if (_fromDoc(doc) case final review when !review.hidden)
                   review,
             ]);
+  }
+
+  @override
+  Future<List<Review>> fetchReviewPage(
+    String userId, {
+    int limit = 20,
+    DateTime? startAfter,
+  }) async {
+    var query =
+        _reviews(userId).orderBy('createdAt', descending: true).limit(limit);
+    if (startAfter != null) {
+      query = query.startAfter([Timestamp.fromDate(startAfter)]);
+    }
+    final snapshot = await query.get();
+    return [
+      for (final doc in snapshot.docs)
+        if (_fromDoc(doc) case final review when !review.hidden) review,
+    ];
   }
 
   @override

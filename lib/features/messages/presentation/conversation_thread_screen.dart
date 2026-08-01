@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/user_chip.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../data/chat_repository.dart';
 import '../domain/conversation.dart';
@@ -62,7 +63,6 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final myUid = context.watch<AuthController>().user?.uid;
 
     return StreamBuilder<Conversation?>(
@@ -89,24 +89,17 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
         return Scaffold(
           appBar: AppBar(
             toolbarHeight: 72,
+            // Tapping the chat header opens the counterparty's public
+            // profile — the strongest convention for "who am I talking to".
             title: conversation == null || myUid == null
                 ? const Text('Chat')
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        conversation.otherPartyName(myUid),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        conversation.jobTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                    ],
+                : UserChip(
+                    uid: conversation.otherPartyId(myUid),
+                    name: conversation.otherPartyName(myUid),
+                    photoUrl: conversation.otherPartyPhotoUrl(myUid),
+                    subtitle: conversation.jobTitle,
+                    avatarRadius: 18,
+                    showChevron: false,
                   ),
           ),
           body: SafeArea(
