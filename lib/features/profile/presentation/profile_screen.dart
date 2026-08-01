@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../../core/config/platform_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/user_avatar.dart';
 import '../../admin/data/verification_repository.dart';
 import '../../admin/domain/pending_verification.dart';
 import '../../auth/domain/app_user.dart';
@@ -180,42 +181,16 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
   }
 }
 
-class _Header extends StatefulWidget {
+class _Header extends StatelessWidget {
   const _Header({required this.user});
   final AppUser user;
 
   @override
-  State<_Header> createState() => _HeaderState();
-}
-
-class _HeaderState extends State<_Header> {
-  AppUser get user => widget.user;
-
-  /// Set once the avatar fails to load, so the fallback icon is shown instead
-  /// of a broken image.
-  bool _avatarFailed = false;
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final photo = user.profilePhotoUrl;
-    final hasPhoto = photo != null && photo.isNotEmpty && !_avatarFailed;
     return Column(
       children: [
-        CircleAvatar(
-          radius: 36,
-          backgroundColor: context.fairbid.subtleBlue,
-          backgroundImage: hasPhoto ? NetworkImage(photo) : null,
-          onBackgroundImageError: hasPhoto
-              ? (_, _) {
-                  if (mounted) setState(() => _avatarFailed = true);
-                }
-              : null,
-          child: hasPhoto
-              ? null
-              : Icon(Icons.person_outline,
-                  size: 36, color: context.fairbid.verified),
-        ),
+        UserAvatar(photoUrl: user.profilePhotoUrl, radius: 36, iconSize: 36),
         const SizedBox(height: 12),
         Text(user.displayName ?? user.email ?? 'User',
             style: theme.textTheme.headlineMedium),
@@ -266,7 +241,7 @@ class _AdminActivityCard extends StatelessWidget {
         final count = snapshot.data?.length;
         return StatCard(
           label: 'Pending Verifications',
-          value: count?.toString() ?? '—',
+          value: count?.toString() ?? '-',
           icon: Icons.verified_user_outlined,
         );
       },
@@ -316,7 +291,7 @@ class _TrustScoreCard extends StatelessWidget {
               user.verificationStatus == 'approved'
                   ? 'Your score unlocks after '
                       '${PlatformConfig.minJobsForVisibleScore} completed '
-                      'jobs — $jobsToGo to go.'
+                      'jobs, $jobsToGo to go.'
                   : 'Your score unlocks once you\'re verified and have '
                       'completed ${PlatformConfig.minJobsForVisibleScore} '
                       'jobs (${user.jobsCompleted}/'
@@ -541,7 +516,9 @@ class _ReviewsCard extends StatelessWidget {
 
     return AppCard(
       child: StreamBuilder<List<Review>>(
-        stream: reviews.watchReviews(user.uid),
+        // Only 3 are ever shown below (.take(3)), so there's no need to
+        // stream more than that.
+        stream: reviews.watchReviews(user.uid, limit: 3),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return const EmptyState(
@@ -600,7 +577,7 @@ class _ReviewsCard extends StatelessWidget {
         flaggedByUid: user.uid,
       );
       messenger.showSnackBar(const SnackBar(
-          content: Text('Review reported — an admin will look at it.')));
+          content: Text('Review reported. An admin will look at it.')));
     } catch (_) {
       messenger.showSnackBar(const SnackBar(
           content: Text('Could not report the review. Please try again.')));

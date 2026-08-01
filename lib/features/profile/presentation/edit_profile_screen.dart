@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/form_widgets.dart';
+import '../../../core/widgets/user_avatar.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/validators.dart';
+import '../../onboarding/data/document_storage_repository.dart';
 
 /// Pushed form for editing the signed-in user's profile: full name, phone,
 /// location and About text. Email is shown read-only. One Save writes through
@@ -69,6 +72,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           child: ListView(
             padding: const EdgeInsets.all(24),
             children: [
+              _AvatarPicker(photoUrl: user?.profilePhotoUrl),
               AppTextField(
                 controller: _name,
                 label: 'Full Name',
@@ -103,6 +107,92 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The profile-photo control at the top of the form: the current avatar (or
+/// the placeholder, via [UserAvatar]) with a "Change photo" / "Add photo"
+/// action beneath it. Picking a photo uploads it immediately and saves the
+/// resulting URL, rather than waiting for the form's own Save button —
+/// mirroring how the other upload boxes in the app behave.
+class _AvatarPicker extends StatefulWidget {
+  const _AvatarPicker({required this.photoUrl});
+
+  final String? photoUrl;
+
+  @override
+  State<_AvatarPicker> createState() => _AvatarPickerState();
+}
+
+class _AvatarPickerState extends State<_AvatarPicker> {
+  final _picker = ImagePicker();
+  bool _uploading = false;
+
+  Future<void> _pick() async {
+    // Capture everything context-derived before the first await, so nothing
+    // below ever touches BuildContext across an async gap.
+    final auth = context.read<AuthController>();
+    final storage = context.read<DocumentStorageRepository>();
+    final messenger = ScaffoldMessenger.of(context);
+    final uid = auth.user?.uid;
+    if (uid == null || _uploading) return;
+
+    final XFile? file;
+    try {
+      file = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 800,
+        imageQuality: 85,
+      );
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Could not open the photo picker.')));
+      return;
+    }
+    if (file == null) return; // cancelled
+
+    setState(() => _uploading = true);
+    try {
+      final url = await storage.uploadAvatar(uid: uid, file: file);
+      await auth.updateProfilePhoto(url);
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Could not upload your photo. Please try again.')));
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhoto = widget.photoUrl != null && widget.photoUrl!.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Center(
+        child: Column(
+          children: [
+            SizedBox(
+              width: 80,
+              height: 80,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  UserAvatar(
+                      photoUrl: widget.photoUrl, radius: 40, iconSize: 40),
+                  if (_uploading)
+                    const CircularProgressIndicator(strokeWidth: 2),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: _uploading ? null : _pick,
+              child: Text(hasPhoto ? 'Change photo' : 'Add photo'),
+            ),
+          ],
         ),
       ),
     );

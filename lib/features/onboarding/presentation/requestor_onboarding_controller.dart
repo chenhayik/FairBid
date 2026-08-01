@@ -74,18 +74,28 @@ class RequestorOnboardingController extends ChangeNotifier {
     return true;
   }
 
+  // The profile photo goes to `avatars/{uid}/...` (world-readable to any
+  // signed-in user, see storage.rules) rather than `verification/{uid}/...`,
+  // so it can be shown to counterparties on bids/jobs/chats. Photos from
+  // before this change are still stored under `verification/` — they keep
+  // resolving fine via their tokened download URLs, they just aren't
+  // re-uploaded on re-save.
   Future<void> pickProfilePhoto() => _pickAndUpload(
-        purpose: 'requestor_photo',
+        upload: (file) => _storage.uploadAvatar(uid: _loadedUid!, file: file),
         apply: (url) => data.profilePhotoUrl = url,
       );
 
   Future<void> pickVerificationDocument() => _pickAndUpload(
-        purpose: 'client_document',
+        upload: (file) => _storage.uploadVerificationImage(
+          uid: _loadedUid!,
+          purpose: 'client_document',
+          file: file,
+        ),
         apply: (url) => data.clientDocumentUrl = url,
       );
 
   Future<void> _pickAndUpload({
-    required String purpose,
+    required Future<String> Function(XFile file) upload,
     required void Function(String url) apply,
   }) async {
     final XFile? file;
@@ -106,12 +116,7 @@ class RequestorOnboardingController extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
     try {
-      final url = await _storage.uploadVerificationImage(
-        uid: _loadedUid!,
-        purpose: purpose,
-        file: file,
-      );
-      apply(url);
+      apply(await upload(file));
     } catch (_) {
       _errorMessage = 'Could not upload the file. Please try again.';
     } finally {

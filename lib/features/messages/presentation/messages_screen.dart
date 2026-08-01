@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/user_avatar.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../home/presentation/home_app_bar.dart';
 import '../data/chat_repository.dart';
@@ -109,11 +110,7 @@ class _ConversationTile extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            CircleAvatar(
-              backgroundColor: context.fairbid.subtleBlue,
-              child:
-                  Icon(Icons.person_outline, color: context.fairbid.verified),
-            ),
+            UserAvatar(photoUrl: conversation.otherPartyPhotoUrl(myUid)),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

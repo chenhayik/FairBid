@@ -56,6 +56,9 @@ class FirestoreChatRepository implements ChatRepository {
   CollectionReference<Map<String, dynamic>> _messages(String conversationId) =>
       _conversations.doc(conversationId).collection('messages');
 
+  DocumentReference<Map<String, dynamic>> _job(String jobId) =>
+      _firestore.collection('jobs').doc(jobId);
+
   @override
   Future<String> openConversation(Job job) async {
     final providerId = job.acceptedProviderId;
@@ -69,6 +72,11 @@ class FirestoreChatRepository implements ChatRepository {
     // existing thread is still reachable (read-only after its grace window),
     // but we don't spin up a brand-new, ungated conversation on a closed job.
     if (!existing.exists && job.status == JobStatus.inProgress) {
+      // The winning bid carries the provider's photo snapshot (see
+      // bid.dart's providerPhotoUrl); reuse it here rather than a second
+      // profile lookup.
+      final winningBid =
+          await _job(job.id).collection('bids').doc(providerId).get();
       // Both sides may race to create the same doc; they write identical
       // initial content, so last-write-wins is harmless. `lastMessageAt` is
       // set at creation so the empty thread still sorts into the list.
@@ -77,8 +85,12 @@ class FirestoreChatRepository implements ChatRepository {
         'jobTitle': job.title,
         'requestorId': job.requestorId,
         'requestorName': job.requestorName,
+        if (job.requestorPhotoUrl != null)
+          'requestorPhotoUrl': job.requestorPhotoUrl,
         'providerId': providerId,
         'providerName': job.acceptedProviderName ?? 'Provider',
+        if (winningBid.data()?['providerPhotoUrl'] != null)
+          'providerPhotoUrl': winningBid.data()!['providerPhotoUrl'],
         'participantIds': [job.requestorId, providerId],
         'unreadCount': {job.requestorId: 0, providerId: 0},
         'lastMessageText': '',

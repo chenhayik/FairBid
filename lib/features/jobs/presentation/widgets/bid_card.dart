@@ -4,6 +4,7 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/util/time_ago.dart';
 import '../../../../core/widgets/app_widgets.dart';
+import '../../../../core/widgets/user_chip.dart';
 import '../../domain/bid.dart';
 
 /// One bid as the requestor sees it: provider identity, price, duration and
@@ -40,30 +41,21 @@ class BidCard extends StatelessWidget {
           ],
           Row(
             children: [
-              CircleAvatar(
-                backgroundColor: context.fairbid.subtleBlue,
-                child: Icon(Icons.person_outline,
-                    color: context.fairbid.verified),
-              ),
-              const SizedBox(width: 12),
+              // Only the identity row is tappable (through to the provider's
+              // public profile) — not the whole card, which already owns the
+              // Accept Bid action below.
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(bid.providerName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleLarge),
-                    Text(
-                        // A provider who hasn't earned a visible score yet is
-                        // labelled honestly instead of showing the internal
-                        // ranking prior as if it were earned.
-                        bid.providerScoreVisible
-                            ? 'Trust Score $trustPercent/100'
-                            : 'New provider — no score yet',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant)),
-                  ],
+                child: UserChip(
+                  uid: bid.providerId,
+                  name: bid.providerName,
+                  photoUrl: bid.providerPhotoUrl,
+                  nameStyle: theme.textTheme.titleLarge,
+                  // A provider who hasn't earned a visible score yet is
+                  // labelled honestly instead of showing the internal
+                  // ranking prior as if it were earned.
+                  subtitle: bid.providerScoreVisible
+                      ? 'Trust Score $trustPercent/100'
+                      : 'New provider, no score yet',
                 ),
               ),
               const SizedBox(width: 8),

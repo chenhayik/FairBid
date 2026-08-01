@@ -35,6 +35,7 @@ class Bid {
     required this.jobId,
     required this.providerId,
     required this.providerName,
+    this.providerPhotoUrl,
     this.providerTrustScore = 0,
     this.providerScoreVisible = true,
     required this.amountSen,
@@ -48,6 +49,13 @@ class Bid {
   final String jobId;
   final String providerId;
   final String providerName;
+
+  /// Snapshot of the provider's `profilePhotoUrl` at bid time, denormalised
+  /// so the requestor sees a face without loading each provider's profile —
+  /// mirrors how [providerName]/[providerTrustScore] are already denormalised.
+  /// Null if the provider had no photo when they bid. A future Cloud Function
+  /// could refresh this snapshot if the provider later changes their photo.
+  final String? providerPhotoUrl;
 
   /// Snapshot of the provider's Trust Score (0–1000) at bid time, denormalised
   /// so the requestor can sort bids without loading each provider profile.
@@ -71,6 +79,7 @@ class Bid {
   Map<String, dynamic> toMap() => {
         'providerId': providerId,
         'providerName': providerName,
+        if (providerPhotoUrl != null) 'providerPhotoUrl': providerPhotoUrl,
         'providerTrustScore': providerTrustScore,
         'providerScoreVisible': providerScoreVisible,
         'amountSen': amountSen,
@@ -85,6 +94,7 @@ class Bid {
         jobId: jobId,
         providerId: providerId,
         providerName: m['providerName'] as String? ?? 'Provider',
+        providerPhotoUrl: m['providerPhotoUrl'] as String?,
         providerTrustScore: (m['providerTrustScore'] as num?)?.toInt() ?? 0,
         // Legacy bids (pre-v2) default to visible so established providers
         // aren't mislabelled "New".

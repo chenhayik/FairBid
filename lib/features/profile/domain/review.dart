@@ -7,6 +7,7 @@ class Review {
     required this.id,
     required this.reviewerId,
     required this.reviewerName,
+    this.reviewerPhotoUrl,
     required this.rating,
     this.comment = '',
     this.jobId,
@@ -22,6 +23,13 @@ class Review {
   final String id;
   final String reviewerId;
   final String reviewerName;
+
+  /// Snapshot of the reviewer's `profilePhotoUrl` at review time, denormalised
+  /// so the review list shows a face without loading the reviewer's profile —
+  /// mirrors how [reviewerName] is already denormalised. Null if the reviewer
+  /// had no photo when they reviewed. A future Cloud Function could refresh
+  /// this snapshot if the reviewer later changes their photo.
+  final String? reviewerPhotoUrl;
 
   /// Star rating, 1–5.
   final int rating;
@@ -44,6 +52,7 @@ class Review {
   Map<String, dynamic> toMap() => {
         'reviewerId': reviewerId,
         'reviewerName': reviewerName,
+        if (reviewerPhotoUrl != null) 'reviewerPhotoUrl': reviewerPhotoUrl,
         'rating': rating,
         'comment': comment,
         if (jobId != null) 'jobId': jobId,
@@ -56,6 +65,7 @@ class Review {
         id: id,
         reviewerId: m['reviewerId'] as String? ?? '',
         reviewerName: m['reviewerName'] as String? ?? 'User',
+        reviewerPhotoUrl: m['reviewerPhotoUrl'] as String?,
         rating: (m['rating'] as num?)?.toInt() ?? 0,
         comment: m['comment'] as String? ?? '',
         jobId: m['jobId'] as String?,

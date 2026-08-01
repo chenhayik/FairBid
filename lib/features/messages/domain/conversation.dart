@@ -10,8 +10,10 @@ class Conversation {
     required this.jobTitle,
     required this.requestorId,
     required this.requestorName,
+    this.requestorPhotoUrl,
     required this.providerId,
     required this.providerName,
+    this.providerPhotoUrl,
     this.lastMessageText = '',
     this.lastMessageSenderId,
     this.lastMessageAt,
@@ -27,8 +29,16 @@ class Conversation {
 
   final String requestorId;
   final String requestorName;
+
+  /// Snapshots of each party's `profilePhotoUrl` at conversation-creation
+  /// time, denormalised so the thread and list show faces without loading
+  /// either profile — mirrors how [requestorName]/[providerName] are already
+  /// denormalised. Null if that party had no photo yet. A future Cloud
+  /// Function could refresh these snapshots on a later photo change.
+  final String? requestorPhotoUrl;
   final String providerId;
   final String providerName;
+  final String? providerPhotoUrl;
 
   /// Preview of the newest message, denormalised onto the conversation so the
   /// list renders without reading any message documents.
@@ -55,9 +65,18 @@ class Conversation {
   /// backs the "my conversations" query.
   List<String> get participantIds => [requestorId, providerId];
 
+  /// The counterparty's uid from [uid]'s point of view.
+  String otherPartyId(String uid) =>
+      uid == providerId ? requestorId : providerId;
+
   /// The counterparty's display name from [uid]'s point of view.
   String otherPartyName(String uid) =>
       uid == providerId ? requestorName : providerName;
+
+  /// The counterparty's photo URL from [uid]'s point of view, or null when
+  /// they have none.
+  String? otherPartyPhotoUrl(String uid) =>
+      uid == providerId ? requestorPhotoUrl : providerPhotoUrl;
 
   /// [uid]'s unread-message count on this thread.
   int unreadFor(String uid) => unreadCounts[uid] ?? 0;
@@ -69,8 +88,10 @@ class Conversation {
         'jobTitle': jobTitle,
         'requestorId': requestorId,
         'requestorName': requestorName,
+        if (requestorPhotoUrl != null) 'requestorPhotoUrl': requestorPhotoUrl,
         'providerId': providerId,
         'providerName': providerName,
+        if (providerPhotoUrl != null) 'providerPhotoUrl': providerPhotoUrl,
         'participantIds': participantIds,
       };
 
@@ -83,8 +104,10 @@ class Conversation {
         jobTitle: m['jobTitle'] as String? ?? '',
         requestorId: m['requestorId'] as String? ?? '',
         requestorName: m['requestorName'] as String? ?? 'Requestor',
+        requestorPhotoUrl: m['requestorPhotoUrl'] as String?,
         providerId: m['providerId'] as String? ?? '',
         providerName: m['providerName'] as String? ?? 'Provider',
+        providerPhotoUrl: m['providerPhotoUrl'] as String?,
         lastMessageText: m['lastMessageText'] as String? ?? '',
         lastMessageSenderId: m['lastMessageSenderId'] as String?,
         lastMessageAt: m['lastMessageAt'] as DateTime?,

@@ -88,6 +88,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
       jobId: widget.job.id,
       providerId: widget.bidder.uid,
       providerName: widget.bidder.displayName ?? 'Provider',
+      providerPhotoUrl: widget.bidder.profilePhotoUrl,
       providerTrustScore: widget.bidder.trustScore,
       providerScoreVisible: widget.bidder.scoreVisible,
       amountSen: parseRmToSen(_amount.text)!,

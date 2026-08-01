@@ -77,6 +77,7 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
       id: '', // Doc id is derived from the job + reviewer in the repository.
       reviewerId: widget.reviewer.uid,
       reviewerName: widget.reviewer.displayName ?? 'User',
+      reviewerPhotoUrl: widget.reviewer.profilePhotoUrl,
       rating: _rating,
       comment: _comment.text.trim(),
       jobId: widget.job.id,
@@ -134,7 +135,7 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
             AppTextField(
               controller: _comment,
               label: 'Comment (optional)',
-              hint: 'Share how it went — quality, communication, timeliness…',
+              hint: 'Share how it went: quality, communication, timeliness…',
               maxLines: 4,
             ),
             const SizedBox(height: 8),
