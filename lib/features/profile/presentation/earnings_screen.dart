@@ -1,9 +1,11 @@
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/config/platform_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
+import '../../../core/util/payment_log.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../auth/domain/user_role.dart';
@@ -52,19 +54,24 @@ class _EarningsScreenState extends State<EarningsScreen> {
 
   Future<void> _withdraw(int balanceSen) async {
     final wallet = context.read<WalletRepository>();
+    int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
       title: 'Withdraw',
       subtitle: 'Move money from your FairBid balance to your bank account.',
       actionLabel: 'Withdraw',
       maxSen: balanceSen,
-      onSubmit: wallet.withdraw,
+      onSubmit: (sen) async {
+        await wallet.withdraw(sen);
+        amountSen = sen;
+      },
     );
     if (ok == true && mounted) {
       await _refreshBalance();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Withdrawal complete.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              '${formatRm(amountSen ?? 0)} withdrawn to your bank account.')));
     }
   }
 
@@ -73,59 +80,109 @@ class _EarningsScreenState extends State<EarningsScreen> {
   /// updates once the server independently confirms the bill was paid — the
   /// WebView returning is just a UX cue, never trusted on its own — so this
   /// reconciles with the server immediately after, as a backstop for a
-  /// webhook toyyibPay hasn't delivered yet.
+  /// webhook toyyibPay hasn't delivered yet. The WebView's return status is
+  /// only ever used to pick which copy to show below (cancelled vs.
+  /// attempted); [WalletRepository.reconcileTopUp] is the sole source of
+  /// truth for whether money actually moved.
   Future<void> _topUp() async {
     final wallet = context.read<WalletRepository>();
     String? billCode;
     String? paymentUrl;
+    int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
       title: 'Top Up Wallet',
       subtitle: 'Pay by FPX or online banking (toyyibPay sandbox).',
       actionLabel: 'Continue to Payment',
       maxSen: PlatformConfig.maxTopUpSen,
-      onSubmit: (amountSen) async {
-        final bill = await wallet.createTopUpBill(amountSen);
+      onSubmit: (sen) async {
+        final bill = await wallet.createTopUpBill(sen);
         billCode = bill.billCode;
         paymentUrl = bill.paymentUrl;
+        amountSen = sen;
       },
     );
     if (ok != true || !mounted || paymentUrl == null) return;
 
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => ToyyibpayWebViewScreen(paymentUrl: paymentUrl!),
-    ));
+    final status = await Navigator.of(context).push<ToyyibpayReturnStatus>(
+      MaterialPageRoute<ToyyibpayReturnStatus>(
+        builder: (_) => ToyyibpayWebViewScreen(paymentUrl: paymentUrl!),
+      ),
+    );
     if (!mounted) return;
+    logPayment('topup.webview.returned',
+        data: {'billCode': billCode, 'statusHint': status?.name});
+
+    // The user backed out before the browser ever reached toyyibPay's return
+    // URL: most likely nothing was attempted, so there is nothing to
+    // reconcile — reconciling anyway would just report "not paid" and read
+    // as a false alarm.
+    if (status == null || status == ToyyibpayReturnStatus.cancelled) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Payment cancelled. Nothing was charged.')));
+      return;
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Confirming payment…')));
-    final credited = await wallet.reconcileTopUp(billCode!);
+    bool credited;
+    try {
+      credited = await wallet.reconcileTopUp(billCode!);
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          e.message ??
+              "Couldn't confirm your payment. If you were charged, it'll "
+                  'show up in your transaction history once processed, '
+                  'pull to refresh to check.')));
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              "Couldn't confirm your payment. If you were charged, it'll "
+              'show up in your transaction history once processed, pull to '
+              'refresh to check.')));
+      return;
+    }
+
     await _refreshBalance();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(credited
-          ? 'Wallet topped up.'
-          : "Payment not confirmed yet — it'll appear once processed."),
-    ));
+    final String message;
+    if (credited) {
+      message = '${formatRm(amountSen ?? 0)} added to your wallet.';
+    } else if (status == ToyyibpayReturnStatus.failed) {
+      message = 'Payment failed. No funds were added. You can try again.';
+    } else {
+      message = "Payment not confirmed yet. It'll appear in your "
+          'transaction history once processed, pull to refresh to check.';
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Demo-only top-up standing in for the gateway (kept for testing without
   /// driving the real toyyibPay flow); untouched by the change above.
   Future<void> _topUpDemo() async {
     final wallet = context.read<WalletRepository>();
+    int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
       title: 'Demo Top Up',
-      subtitle: 'Demo top-up — this stands in for a payment gateway.',
+      subtitle: 'Demo top-up: this stands in for a payment gateway.',
       actionLabel: 'Top Up',
       maxSen: PlatformConfig.maxTopUpSen,
-      onSubmit: wallet.topUp,
+      onSubmit: (sen) async {
+        await wallet.topUp(sen);
+        amountSen = sen;
+      },
     );
     if (ok == true && mounted) {
       await _refreshBalance();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Wallet topped up.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text('${formatRm(amountSen ?? 0)} added to your wallet.')));
     }
   }
 

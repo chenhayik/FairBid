@@ -2,6 +2,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/util/money.dart';
+import '../../../core/util/payment_log.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/form_widgets.dart';
 
@@ -81,13 +82,24 @@ class _WalletAmountSheetState extends State<WalletAmountSheet> {
       _busy = true;
       _error = null;
     });
+    final amountSen = parseRmToSen(_amount.text)!;
     try {
-      await widget.onSubmit(parseRmToSen(_amount.text)!);
+      await widget.onSubmit(amountSen);
       if (mounted) Navigator.of(context).pop(true);
-    } on FirebaseFunctionsException catch (e) {
-      // The wallet functions raise user-readable messages.
-      if (mounted) setState(() => _error = e.message);
-    } catch (_) {
+    } on FirebaseFunctionsException catch (e, st) {
+      logPayment('wallet_amount_sheet.submit.error',
+          data: {'amountSen': amountSen, 'code': e.code},
+          error: e,
+          stackTrace: st);
+      // The wallet functions raise user-readable messages — but fall back
+      // rather than leaving the sheet with no explanation when one isn't set.
+      if (mounted) {
+        setState(() =>
+            _error = e.message ?? 'Something went wrong. Please try again.');
+      }
+    } catch (e, st) {
+      logPayment('wallet_amount_sheet.submit.error',
+          data: {'amountSen': amountSen}, error: e, stackTrace: st);
       if (mounted) setState(() => _error = 'Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _busy = false);

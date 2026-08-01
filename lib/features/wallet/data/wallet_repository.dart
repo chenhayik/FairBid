@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
+import '../../../core/util/payment_log.dart';
 import '../domain/ledger_entry.dart';
 
 /// Moves money in and out of the simulated wallet and reads the transaction
@@ -47,35 +48,78 @@ class FirebaseWalletRepository implements WalletRepository {
 
   @override
   Future<void> topUp(int amountSen) async {
-    await _functions.httpsCallable('topUpWallet').call<void>(
-        {'amountSen': amountSen});
+    logPayment('topup.demo.requested', data: {'amountSen': amountSen});
+    try {
+      await _functions.httpsCallable('topUpWallet').call<void>(
+          {'amountSen': amountSen});
+      logPayment('topup.demo.result',
+          data: {'amountSen': amountSen, 'outcome': 'ok'});
+    } on FirebaseFunctionsException catch (e, st) {
+      logPayment('topup.demo.error',
+          data: {'amountSen': amountSen, 'code': e.code},
+          error: e,
+          stackTrace: st);
+      rethrow;
+    }
   }
 
   @override
   Future<void> withdraw(int amountSen) async {
-    await _functions.httpsCallable('withdrawFromWallet').call<void>(
-        {'amountSen': amountSen});
+    logPayment('withdraw.requested', data: {'amountSen': amountSen});
+    try {
+      await _functions.httpsCallable('withdrawFromWallet').call<void>(
+          {'amountSen': amountSen});
+      logPayment('withdraw.result',
+          data: {'amountSen': amountSen, 'outcome': 'ok'});
+    } on FirebaseFunctionsException catch (e, st) {
+      logPayment('withdraw.error',
+          data: {'amountSen': amountSen, 'code': e.code},
+          error: e,
+          stackTrace: st);
+      rethrow;
+    }
   }
 
   @override
   Future<({String billCode, String paymentUrl})> createTopUpBill(
       int amountSen) async {
-    final result = await _functions
-        .httpsCallable('createToyyibpayBill')
-        .call<Map<Object?, Object?>>({'amountSen': amountSen});
-    final data = result.data;
-    return (
-      billCode: data['billCode'] as String,
-      paymentUrl: data['paymentUrl'] as String,
-    );
+    logPayment('topup.bill.requested', data: {'amountSen': amountSen});
+    try {
+      final result = await _functions
+          .httpsCallable('createToyyibpayBill')
+          .call<Map<Object?, Object?>>({'amountSen': amountSen});
+      final data = result.data;
+      final billCode = data['billCode'] as String;
+      logPayment('topup.bill.created',
+          data: {'amountSen': amountSen, 'billCode': billCode});
+      return (billCode: billCode, paymentUrl: data['paymentUrl'] as String);
+    } on FirebaseFunctionsException catch (e, st) {
+      logPayment('topup.bill.error',
+          data: {'amountSen': amountSen, 'code': e.code},
+          error: e,
+          stackTrace: st);
+      rethrow;
+    }
   }
 
   @override
   Future<bool> reconcileTopUp(String billCode) async {
-    final result = await _functions
-        .httpsCallable('reconcileToyyibpayTopup')
-        .call<Map<Object?, Object?>>({'billCode': billCode});
-    return result.data['credited'] as bool? ?? false;
+    logPayment('topup.reconcile.requested', data: {'billCode': billCode});
+    try {
+      final result = await _functions
+          .httpsCallable('reconcileToyyibpayTopup')
+          .call<Map<Object?, Object?>>({'billCode': billCode});
+      final credited = result.data['credited'] as bool? ?? false;
+      logPayment('topup.reconcile.result',
+          data: {'billCode': billCode, 'credited': credited});
+      return credited;
+    } on FirebaseFunctionsException catch (e, st) {
+      logPayment('topup.reconcile.error',
+          data: {'billCode': billCode, 'code': e.code},
+          error: e,
+          stackTrace: st);
+      rethrow;
+    }
   }
 
   @override
