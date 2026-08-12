@@ -92,8 +92,8 @@ jobs:
         working-directory: firestore-tests
         run: npx --yes firebase-tools@15 emulators:exec --only firestore "npm test"
 
-  trust-vectors:
-    name: Trust-score parity (Dart vs JS)
+  functions:
+    name: Lint and test (Cloud Functions)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -108,6 +108,12 @@ jobs:
       - name: Install functions dependencies
         working-directory: functions
         run: npm ci
+
+      # Static analysis for the money-handling backend, which otherwise had
+      # none. See functions/eslint.config.js for what is enforced and why.
+      - name: Lint
+        working-directory: functions
+        run: npm run lint
 
       # Guards the scoring maths in functions/trust.js against the Dart mirror
       # in PlatformConfig, pinned by test/fixtures/trust_vectors.json. These
