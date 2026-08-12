@@ -11,7 +11,7 @@ const kState = 'Penang';
 class PenangDistrict {
   const PenangDistrict(this.code, this.nameEn, this.nameMs);
 
-  /// Stable short code — never shown to the user, only stored.
+  /// Stable short code - never shown to the user, only stored.
   final String code;
   final String nameEn;
   final String nameMs;
@@ -38,11 +38,11 @@ const kDistrictCenters = <String, LatLng>{
   'SPS': LatLng(5.1656, 100.4790), // Nibong Tebal
 };
 
-/// George Town — the picker's default map centre.
+/// George Town - the picker's default map centre.
 const kGeorgeTown = LatLng(5.4141, 100.3288);
 
 /// The picker's map camera is constrained to this bounding box (see
-/// `CameraConstraint.contain` in `RegionPickerScreen`). Not `const` — flutter_map's
+/// `CameraConstraint.contain` in `RegionPickerScreen`). Not `const` - flutter_map's
 /// [LatLngBounds] is a plain mutable class, only reachable via its factory.
 final kPenangBounds = LatLngBounds(
   const LatLng(5.10, 100.15),

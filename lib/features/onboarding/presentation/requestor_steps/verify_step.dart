@@ -8,7 +8,7 @@ import '../../../../core/widgets/form_widgets.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../requestor_onboarding_controller.dart';
 
-/// Stage 3 — optional "Verified Client / Business" document, a wallet/escrow
+/// Stage 3 - optional "Verified Client / Business" document, a wallet/escrow
 /// intro, and the finish actions.
 class VerifyStep extends StatelessWidget {
   const VerifyStep({super.key});

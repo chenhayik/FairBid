@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../../core/widgets/user_avatar.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../home/presentation/home_app_bar.dart';
@@ -47,10 +48,11 @@ class _ConversationList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<Conversation>>(
-      stream: context.read<ChatRepository>().watchConversations(uid),
+    return KeyedStreamBuilder<List<Conversation>>(
+      cacheKey: uid,
+      create: () => context.read<ChatRepository>().watchConversations(uid),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (!snapshot.hasData && !snapshot.hasError) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
@@ -103,10 +105,8 @@ class _ConversationTile extends StatelessWidget {
         ? 'No messages yet'
         : conversation.lastMessageText;
 
-    return InkWell(
-      onTap: () => context.push('/messages/${conversation.id}'),
-      borderRadius: BorderRadius.circular(12),
-      child: AppCard(
+    return AppCard(
+        onTap: () => context.push('/messages/${conversation.id}'),
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
@@ -173,7 +173,6 @@ class _ConversationTile extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
+      );
   }
 }

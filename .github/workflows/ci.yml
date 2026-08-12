@@ -1,0 +1,144 @@
+name: CI
+
+# Runs the four suites that already exist in this repo but were previously
+# only ever run by hand: Dart analysis + widget tests, the Firestore security
+# rules suite, and the Dart<->JS trust-score parity check. Plus an Android
+# debug build, which catches toolchain and plugin-registration problems that
+# static analysis cannot see.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch supersedes the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned to the version the project is developed against. Bump deliberately:
+  # a floating "stable" turns an upstream Flutter release into a red build on
+  # an unrelated PR.
+  FLUTTER_VERSION: "3.41.6"
+  # Matches functions/package.json "engines".
+  NODE_VERSION: "22"
+  # android/app/build.gradle.kts targets JavaVersion.VERSION_17, and the
+  # Firestore emulator needs a JDK too.
+  JAVA_VERSION: "17"
+
+jobs:
+  analyze-and-test:
+    name: Analyze and test (Dart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      # Formatting is NOT enforced yet: 105 of 129 files currently differ from
+      # `dart format`, so turning this on today fails every PR. Land one
+      # isolated formatting-only commit first, then delete this comment and
+      # uncomment the step below.
+      # - name: Check formatting
+      #   run: dart format --output=none --set-exit-if-changed lib test
+
+  firestore-rules:
+    name: Firestore security rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: firestore-tests/package-lock.json
+
+      # The Firestore emulator is a Java process; there is no pure-JS fallback.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Install test dependencies
+        working-directory: firestore-tests
+        run: npm ci
+
+      # emulators:exec reads ../firebase.json for the port, starts the
+      # emulator, runs mocha against it, and tears it down. firebase-tools is
+      # pinned to a major so an upstream release cannot break CI silently.
+      - name: Run rules suite against the emulator
+        working-directory: firestore-tests
+        run: npx --yes firebase-tools@15 emulators:exec --only firestore "npm test"
+
+  trust-vectors:
+    name: Trust-score parity (Dart vs JS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Install functions dependencies
+        working-directory: functions
+        run: npm ci
+
+      # Guards the scoring maths in functions/trust.js against the Dart mirror
+      # in PlatformConfig, pinned by test/fixtures/trust_vectors.json. These
+      # two implementations must never drift.
+      - name: Check trust vectors
+        working-directory: functions
+        run: npm test
+
+  android-build:
+    name: Android debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # Debug, not release: signing keystores are deliberately gitignored, so
+      # a release build cannot work here without secrets. Debug still exercises
+      # Gradle, AGP, the NDK and plugin registration.
+      - name: Build debug APK
+        run: flutter build apk --debug

@@ -9,7 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 /// which copy to show while that reconcile runs.
 enum ToyyibpayReturnStatus {
   /// The user dismissed the page (✕ or system back) before the browser ever
-  /// reached toyyibPay's return URL — most likely no payment was attempted,
+  /// reached toyyibPay's return URL - most likely no payment was attempted,
   /// so the caller should skip reconciling altogether.
   cancelled,
 
@@ -42,10 +42,10 @@ enum ToyyibpayReturnStatus {
 /// convenience only: it pops with a [ToyyibpayReturnStatus] once either the
 /// browser is redirected to the return URL (carrying a status hint parsed
 /// from `status_id`) or the user closes it manually via the ✕ or system back
-/// ([ToyyibpayReturnStatus.cancelled]) — but that result is never trusted as
-/// proof of payment. The `toyyibpayCallback` Cloud Function — and, as a
+/// ([ToyyibpayReturnStatus.cancelled]) - but that result is never trusted as
+/// proof of payment. The `toyyibpayCallback` Cloud Function - and, as a
 /// backstop, `WalletRepository.reconcileTopUp` called by the caller after
-/// this screen pops — are the sole source of truth for whether the wallet
+/// this screen pops - are the sole source of truth for whether the wallet
 /// was actually credited.
 class ToyyibpayWebViewScreen extends StatefulWidget {
   const ToyyibpayWebViewScreen({super.key, required this.paymentUrl});
@@ -59,7 +59,7 @@ class ToyyibpayWebViewScreen extends StatefulWidget {
 
 class _ToyyibpayWebViewScreenState extends State<ToyyibpayWebViewScreen> {
   // The browser redirect toyyibPay sends payers to after a payment attempt.
-  // It doesn't need to resolve to a real page — this screen intercepts it.
+  // It doesn't need to resolve to a real page - this screen intercepts it.
   static const _returnUrlPrefix = 'https://fairbid-c9340.web.app/payment-return';
 
   late final WebViewController _controller;

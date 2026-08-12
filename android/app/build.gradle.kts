@@ -30,7 +30,7 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // firebase_auth 6.x needs API 23; flutter_local_notifications 21+ needs
-        // API 24 (Android 7.0) — the binding floor. Raising this drops Android
+        // API 24 (Android 7.0) - the binding floor. Raising this drops Android
         // 6.0 (API 23) devices.
         minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion

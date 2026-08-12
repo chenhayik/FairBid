@@ -25,7 +25,7 @@ import 'features/profile/data/user_report_repository.dart';
 import 'features/wallet/data/wallet_repository.dart';
 import 'firebase_options.dart';
 
-/// FCM background handler. Must be a top-level `vm:entry-point` function —
+/// FCM background handler. Must be a top-level `vm:entry-point` function -
 /// it runs in its own isolate when a push arrives with the app terminated or
 /// backgrounded. Android already displays notification-type messages itself;
 /// this exists so the isolate has Firebase ready if data-only work is added.

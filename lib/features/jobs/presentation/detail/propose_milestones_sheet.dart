@@ -11,7 +11,7 @@ import '../../domain/job.dart';
 import '../../domain/milestone.dart';
 
 /// Bottom sheet where the accepted provider splits the accepted bid into
-/// milestones. The amounts must add up to the accepted bid exactly — checked
+/// milestones. The amounts must add up to the accepted bid exactly - checked
 /// here for fast feedback and re-enforced by the `proposeMilestonePlan` Cloud
 /// Function. The plan is written `proposed` and only becomes fundable once the
 /// requestor approves it. Passing [existing] pre-fills the rows to amend a plan

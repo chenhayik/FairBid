@@ -4,7 +4,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../domain/dispute.dart';
 
 /// Raises and resolves milestone disputes, and streams the admin queue. Both
-/// mutations call Cloud Functions — freezing the milestone and moving the
+/// mutations call Cloud Functions - freezing the milestone and moving the
 /// escrowed money must be atomic and tamper-proof, so Firestore rules reject
 /// every client write to `disputes` (same pattern as the wallet).
 /// UI/controllers depend on this interface so tests can use a fake.
@@ -73,7 +73,7 @@ class FirestoreDisputeRepository implements DisputeRepository {
   @override
   Stream<List<Dispute>> watchOpenDisputes() {
     // Client-side sort (a handful of open disputes at most) keeps this a
-    // single-field query needing no composite index — same trick as the
+    // single-field query needing no composite index - same trick as the
     // verification queue.
     return _firestore
         .collection('disputes')

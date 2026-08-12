@@ -8,8 +8,8 @@ abstract interface class RequestorOnboardingRepository {
 
   Future<void> save(String uid, RequestorOnboardingData data);
 
-  /// Final submission: saves everything, marks onboarding complete, and — only
-  /// if a verification document was uploaded — flips `verificationStatus` to
+  /// Final submission: saves everything, marks onboarding complete, and - only
+  /// if a verification document was uploaded - flips `verificationStatus` to
   /// `pending` so it feeds the (future) admin review queue.
   Future<void> complete(String uid, RequestorOnboardingData data);
 }
@@ -64,7 +64,7 @@ class FirestoreRequestorOnboardingRepository
         // MIGRATION: phone used to live at the top level; strip it from the
         // public doc as each user saves so legacy data migrates organically.
         // A one-off backfill Cloud Function is still needed for users who
-        // never save again — deliberately out of scope here.
+        // never save again - deliberately out of scope here.
         'phone': FieldValue.delete(),
       }, SetOptions(merge: true))
       ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))

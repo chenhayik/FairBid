@@ -9,7 +9,7 @@ import '../../domain/service_address.dart';
 import 'service_address_sheet.dart';
 
 /// Job detail card for the private [ServiceAddress]: editable by the owner,
-/// read-only for the accepted provider it's shared with. Text only — the
+/// read-only for the accepted provider it's shared with. Text only - the
 /// coarse map pin ([JobLocation]) stays on the main detail card, unchanged.
 class JobAddressCard extends StatefulWidget {
   const JobAddressCard({super.key, required this.job, required this.isOwner});
@@ -23,7 +23,7 @@ class JobAddressCard extends StatefulWidget {
 
 class _JobAddressCardState extends State<JobAddressCard> {
   // Cached so a parent rebuild (e.g. the job detail screen's own
-  // StreamBuilder firing on any job-doc change — milestones, cancellation,
+  // StreamBuilder firing on any job-doc change - milestones, cancellation,
   // etc.) doesn't resubscribe to Firestore; job.id is stable for the
   // widget's life, so initState caching is safe.
   late final Stream<ServiceAddress?> _address =
@@ -61,7 +61,18 @@ class _JobAddressCardState extends State<JobAddressCard> {
             children: [
               Text('Address', style: theme.textTheme.titleLarge),
               const SizedBox(height: 12),
-              if (widget.isOwner)
+              // Distinguish "failed to load" from "not set yet". Without
+              // this, an owner whose read failed was prompted to add an
+              // address they had already saved, and a provider was told the
+              // client had not shared one.
+              if (snapshot.hasError)
+                Text(
+                  "Couldn't load the address. Check your connection, then "
+                  'reopen this job.',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                )
+              else if (widget.isOwner)
                 _OwnerContent(
                     job: widget.job, address: address, onEdit: _editAddress)
               else

@@ -6,7 +6,7 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/onboarding_data.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 2 — "Choose Provider Type": Individual/Freelancer vs Registered
+/// Stage 2 - "Choose Provider Type": Individual/Freelancer vs Registered
 /// Business, each with its verification-requirement badge.
 class ProviderTypeStep extends StatelessWidget {
   const ProviderTypeStep({super.key});

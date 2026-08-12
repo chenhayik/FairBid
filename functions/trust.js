@@ -1,4 +1,4 @@
-// Trust Score v2 math — a multi-signal composite of four 0–100 sub-scores:
+// Trust Score v2 math - a multi-signal composite of four 0–100 sub-scores:
 // reviews (Bayesian), track record (jobs completed − disputes lost),
 // verification status and profile completeness. Dependency-free so
 // check_vectors.js (npm test) can run it with bare node.
@@ -11,7 +11,7 @@
 const TRUST_PRIOR_MEAN = 3.5;
 const TRUST_PRIOR_WEIGHT = 10;
 
-// Integer-percent weights (sum 100) — integer math keeps JS and Dart exact.
+// Integer-percent weights (sum 100) - integer math keeps JS and Dart exact.
 const REVIEW_WEIGHT_PCT = 45;
 const TRACK_RECORD_WEIGHT_PCT = 25;
 const VERIFICATION_WEIGHT_PCT = 20;

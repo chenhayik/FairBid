@@ -6,7 +6,7 @@ service firebase.storage {
 
     // An admin is identified by their `role` on the Firestore user doc.
     // Storage rules can cross-read Firestore, so we reuse the same source of
-    // truth as `firestore.rules` — no custom auth claim / backend needed.
+    // truth as `firestore.rules` - no custom auth claim / backend needed.
     function isAdmin() {
       return request.auth != null
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid))
@@ -24,7 +24,7 @@ service firebase.storage {
 
     // Job photos and the optional job video: readable by any signed-in user
     // (providers browse jobs), writable only by the owner who posted them.
-    // Capped at 50 MB and restricted to image/video content types — the
+    // Capped at 50 MB and restricted to image/video content types - the
     // video path additionally enforces its own duration/size cap client-side
     // (post_job_controller.dart) before it ever reaches here.
     match /jobs/{userId}/{allPaths=**} {

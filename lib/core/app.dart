@@ -131,7 +131,7 @@ class _FairBidAppViewState extends State<_FairBidAppView> {
   bool _pushInited = false;
   String? _pushTokenUid;
 
-  /// Keeps push wiring in step with auth state. Idempotent — runs on every
+  /// Keeps push wiring in step with auth state. Idempotent - runs on every
   /// build but only acts on transitions (first signed-in build, uid change).
   void _syncPush(AuthController auth) {
     final user = auth.user;
@@ -140,7 +140,7 @@ class _FairBidAppViewState extends State<_FairBidAppView> {
       return;
     }
     // Wait until onboarding is done so the permission prompt appears on the
-    // home screen, when the app has shown its value — not at cold start.
+    // home screen, when the app has shown its value - not at cold start.
     if (user.needsOnboarding || _pushTokenUid == user.uid) return;
     _pushTokenUid = user.uid;
 

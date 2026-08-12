@@ -8,7 +8,7 @@ import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/image_source_sheet.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 3 — "Verify your identity": ID + selfie uploads and tips.
+/// Stage 3 - "Verify your identity": ID + selfie uploads and tips.
 class IdentityStep extends StatelessWidget {
   const IdentityStep({super.key});
 
@@ -79,7 +79,7 @@ class IdentityStep extends StatelessWidget {
               Row(
                 children: [
                   Icon(Icons.lightbulb_outline,
-                      size: 18, color: context.fairbid.warning),
+                      size: 18, color: context.fairbid.warningText),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text('Tips for a successful verification',

@@ -18,7 +18,7 @@ abstract interface class JobRepository {
   /// Streams the jobs posted by [requestorId] (newest first).
   Stream<List<Job>> watchMyJobs(String requestorId);
 
-  /// Streams the jobs a provider has won — where their accepted bid assigned
+  /// Streams the jobs a provider has won - where their accepted bid assigned
   /// them (newest first).
   Stream<List<Job>> watchAssignedJobs(String providerId);
 

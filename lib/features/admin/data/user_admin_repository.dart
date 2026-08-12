@@ -4,8 +4,8 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../domain/managed_user.dart';
 
 /// Admin-only: lists users and suspends/reinstates them. Suspension flips a
-/// server-owned flag via the `setUserSuspended` Cloud Function — Firestore
-/// rules deny any client write to it — so this never touches the flag
+/// server-owned flag via the `setUserSuspended` Cloud Function - Firestore
+/// rules deny any client write to it - so this never touches the flag
 /// directly. UI depends on this interface so tests can use a fake.
 abstract interface class UserAdminRepository {
   /// Streams every user for the admin "Users" list. Ordering and filtering

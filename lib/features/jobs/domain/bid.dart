@@ -27,7 +27,7 @@ enum BidStatus {
       };
 }
 
-/// A provider's offer on a job. Stored at `jobs/{jobId}/bids/{providerId}` —
+/// A provider's offer on a job. Stored at `jobs/{jobId}/bids/{providerId}` -
 /// the provider's uid as the doc id enforces one bid per provider per job.
 /// Framework-agnostic; the repository handles Firestore ↔ [Bid] mapping.
 class Bid {
@@ -51,7 +51,7 @@ class Bid {
   final String providerName;
 
   /// Snapshot of the provider's `profilePhotoUrl` at bid time, denormalised
-  /// so the requestor sees a face without loading each provider's profile —
+  /// so the requestor sees a face without loading each provider's profile -
   /// mirrors how [providerName]/[providerTrustScore] are already denormalised.
   /// Null if the provider had no photo when they bid. A future Cloud Function
   /// could refresh this snapshot if the provider later changes their photo.

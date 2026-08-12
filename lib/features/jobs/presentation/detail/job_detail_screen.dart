@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'dart:math' show min;
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/config/platform_config.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
+import '../../../../core/util/motion.dart';
 import '../../../../core/util/time_ago.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/user_chip.dart';
@@ -31,10 +34,10 @@ import 'milestone_section.dart';
 import 'photo_viewer_screen.dart';
 
 /// Full job detail. One [CustomScrollView] with a FIXED slot order for every
-/// viewer — a status headline, hero facts, the counterparty, description and
+/// viewer - a status headline, hero facts, the counterparty, description and
 /// media, bids (or the provider's own bid action), the milestone tracker,
 /// working details (address + chat), a review prompt and the activity
-/// timeline — only *presence* varies by [JobDetailViewModel], never order.
+/// timeline - only *presence* varies by [JobDetailViewModel], never order.
 /// A pinned bottom bar shows the one role-resolved action the viewer can
 /// take right now; destructive/rare actions (cancel, request cancellation)
 /// live in the app bar's overflow menu instead of competing for space in
@@ -65,6 +68,24 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
             body: const Center(child: CircularProgressIndicator()),
           );
         }
+        // Errors must be told apart from absence. A stream that fails
+        // (offline, permission-denied, a rules change) also delivers a null
+        // value, so this used to tell the requestor their own job had been
+        // removed. A failed stream is terminal, hence the explicit re-open
+        // instruction rather than a retry that would not work.
+        if (snapshot.hasError) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Job Details')),
+            body: const SafeArea(
+              child: EmptyState(
+                icon: Icons.cloud_off,
+                title: "Couldn't load this job",
+                message: 'Check your connection, then go back and open the '
+                    'job again.',
+              ),
+            ),
+          );
+        }
         final job = snapshot.data;
         if (job == null) {
           return Scaffold(
@@ -84,7 +105,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   }
 }
 
-/// Whether [status] is a terminal escrow state — money has finished moving.
+/// Whether [status] is a terminal escrow state - money has finished moving.
 bool _isMilestoneTerminal(MilestoneStatus status) =>
     status == MilestoneStatus.released || status == MilestoneStatus.resolved;
 
@@ -177,8 +198,8 @@ IconData _timelineIcon(String type) => switch (type) {
 /// the semantic colours used elsewhere (danger/warning/success/verified).
 Color _timelineColor(BuildContext context, String type) => switch (type) {
   'cancelled' || 'disputed' => context.fairbid.danger,
-  'refunded' => context.fairbid.warning,
-  'released' || 'completed' => context.fairbid.success,
+  'refunded' => context.fairbid.warningText,
+  'released' || 'completed' => context.fairbid.successText,
   _ => context.fairbid.verified,
 };
 
@@ -206,7 +227,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   late final String? _myUid = context.read<AuthController>().user?.uid;
 
   /// Only a provider looking at a still-open job that isn't theirs can have
-  /// a live bid worth watching — the owner and the accepted provider never
+  /// a live bid worth watching - the owner and the accepted provider never
   /// need this stream, and a job that has left `open` can never gain a new
   /// bidder. `job.status` only moves forward, so deciding this once at
   /// first build holds for the widget's whole lifetime.
@@ -230,7 +251,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     if (target == null) return;
     Scrollable.ensureVisible(
       target,
-      duration: const Duration(milliseconds: 300),
+      duration: motion(context, const Duration(milliseconds: 300)),
       curve: Curves.easeInOut,
     );
   }
@@ -359,7 +380,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   }
 
   /// The overflow menu's single cancel-related entry, or null when there's
-  /// none for this viewer/status (e.g. a cancellation is already pending —
+  /// none for this viewer/status (e.g. a cancellation is already pending -
   /// that's answered via the slot-3 response card instead).
   (String value, String label)? _cancelMenuEntry(
     Job job,
@@ -491,7 +512,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
           ? _keyed(_reviewSectionKey, _ReviewPrompt(job: job, isOwner: isOwner))
           : null,
     );
-    // An open job has only its lone "posted" event — not worth a card.
+    // An open job has only its lone "posted" event - not worth a card.
     add(job.status != JobStatus.open ? _ActivityTimeline(jobId: job.id) : null);
 
     return slots;
@@ -738,8 +759,8 @@ class _FactTile extends StatelessWidget {
   }
 }
 
-/// Slot 5: the counterparty identity — the job poster for providers, the
-/// assigned provider for the owner — unifying what used to be two
+/// Slot 5: the counterparty identity - the job poster for providers, the
+/// assigned provider for the owner - unifying what used to be two
 /// differently-shaped cards into one [UserChip]-based component. Taps
 /// through to `/users/:uid`.
 class _CounterpartyCard extends StatelessWidget {
@@ -826,6 +847,12 @@ class _DescriptionAndMedia extends StatelessWidget {
                     job.photoUrls[i],
                     width: 120,
                     height: 120,
+                    // width/height only constrain layout; without cacheWidth
+                    // each of these decodes at the full 1600px upload size,
+                    // roughly 7.7MB of RGBA per thumbnail. A five-photo job
+                    // cost ~38MB of bitmap to show a 600x120 strip.
+                    cacheWidth:
+                        (120 * MediaQuery.devicePixelRatioOf(context)).round(),
                     fit: BoxFit.cover,
                     loadingBuilder: (context, child, loadingProgress) {
                       if (loadingProgress == null) return child;
@@ -866,7 +893,7 @@ class _DescriptionAndMedia extends StatelessWidget {
 /// The job's description, bolding the "What needs doing" / "Access &
 /// details" / "Expected outcome" section labels the AI description helper
 /// writes (`functions/index.js`'s `DESCRIPTION_SYSTEM`), via simple
-/// line-matching — no markdown dependency needed. A free-typed description
+/// line-matching - no markdown dependency needed. A free-typed description
 /// that doesn't use those labels renders unchanged.
 class _JobDescription extends StatelessWidget {
   const _JobDescription({required this.text});
@@ -929,7 +956,7 @@ class _BidsOrBidAction extends StatefulWidget {
   final AppUser? me;
 
   /// The provider's own live bid on [job] (or null), already resolved by
-  /// [_JobDetailBodyState] — threaded down rather than re-subscribed here so
+  /// [_JobDetailBodyState] - threaded down rather than re-subscribed here so
   /// this slot doesn't open a second, redundant `watchMyBid` stream.
   final Bid? myBid;
 
@@ -939,6 +966,13 @@ class _BidsOrBidAction extends StatefulWidget {
 
 class _BidsOrBidActionState extends State<_BidsOrBidAction> {
   _BidSort _sort = _BidSort.bestValue;
+
+  /// Provider id of the bid whose accept is in flight, or null. `acceptBid` is
+  /// a server transaction that can take a second or two, and without any
+  /// in-flight state the screen sat completely unchanged: users tapped Accept
+  /// again, sometimes on a different provider, then lost the race to their own
+  /// first call and got the confusing "this job changed" snackbar.
+  String? _acceptingProviderId;
 
   // Cached so changing the sort (a setState) re-orders the already-loaded bids
   // client-side instead of resubscribing to Firestore and flashing the spinner.
@@ -971,10 +1005,30 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
       ),
     );
     if (confirmed != true || !mounted) return;
+
+    // Capture the outcome, then clear the busy state *before* reporting it.
+    // Reporting inside the catch would leave the button spinning behind the
+    // error dialog for as long as the user took to read it.
+    Object? failure;
+    setState(() => _acceptingProviderId = bid.providerId);
     try {
       await context.read<BidRepository>().acceptBid(bid);
-    } on InsufficientBalanceException catch (e) {
-      if (!mounted) return;
+    } catch (error) {
+      failure = error;
+    }
+    if (!mounted) return;
+    setState(() => _acceptingProviderId = null);
+
+    if (failure == null) {
+      // Hiring someone is the largest commitment in the app; confirm it in the
+      // hand as well as on screen. Deliberately not awaited: a haptic failure
+      // must never surface as a failed accept.
+      unawaited(HapticFeedback.mediumImpact());
+      return;
+    }
+
+    if (failure is InsufficientBalanceException) {
+      final e = failure;
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -999,8 +1053,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
           ],
         ),
       );
-    } on BidAcceptRaceException {
-      if (!mounted) return;
+    } else if (failure is BidAcceptRaceException) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -1009,8 +1062,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
           ),
         ),
       );
-    } catch (_) {
-      if (!mounted) return;
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Could not accept the bid. Please try again.'),
@@ -1121,6 +1173,8 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
                   bid: bid,
                   isBestValue: bid.providerId == bestValueId,
                   onAccept: () => _accept(bid),
+                  busy: _acceptingProviderId == bid.providerId,
+                  enabled: _acceptingProviderId == null,
                 ),
               ),
           ],
@@ -1132,7 +1186,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
 
 /// Submit-or-withdraw, driven by whether the provider already has a live
 /// bid. [myBid] is the already-resolved value from
-/// [_JobDetailBodyState]'s own cached `watchMyBid` stream — this widget
+/// [_JobDetailBodyState]'s own cached `watchMyBid` stream - this widget
 /// stays a plain [StatelessWidget] and never opens its own second
 /// subscription to the same document.
 class _BidAction extends StatelessWidget {
@@ -1314,7 +1368,7 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
         icon: Icons.check_circle_outline,
         title: 'Review submitted',
         body: 'Thanks, your feedback helps keep FairBid fair.',
-        color: context.fairbid.success,
+        color: context.fairbid.successText,
       );
     }
     return PrimaryButton(
@@ -1327,7 +1381,7 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
 
 /// Slot 11: the job's server-written activity log (plan §3.x), newest event
 /// first, inside an [ExpansionTile] collapsed by default with the latest
-/// event summarised in the header — so the most relevant entry is the
+/// event summarised in the header - so the most relevant entry is the
 /// easiest to reach, not the hardest.
 class _ActivityTimeline extends StatefulWidget {
   const _ActivityTimeline({required this.jobId});
@@ -1439,7 +1493,7 @@ class _ActivityTimelineState extends State<_ActivityTimeline> {
 
 /// The pinned bottom action bar: exactly one role-resolved primary CTA plus
 /// a short context/money line, or (when it's the other party's move) a
-/// muted waiting line instead. Hidden entirely — never disabled — when the
+/// muted waiting line instead. Hidden entirely - never disabled - when the
 /// viewer has no action at all (a losing bidder, an outsider). Once the job
 /// is in progress, milestone data refines the pure view model's generic
 /// "Message provider/client" fallback into "Fund RM X" / "Release RM X" /

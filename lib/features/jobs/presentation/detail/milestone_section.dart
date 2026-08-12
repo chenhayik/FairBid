@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
@@ -15,7 +18,7 @@ import '../../domain/milestone.dart';
 import 'propose_milestones_sheet.dart';
 
 /// The escrow milestone plan on a job detail: a hand-rolled vertical
-/// progress tracker (never Flutter's `Stepper` — it owns its own scroll
+/// progress tracker (never Flutter's `Stepper` - it owns its own scroll
 /// physics and its fixed `StepState` can't express
 /// proposed/pending/funded/submitted/released/disputed). One linear
 /// sequence: Step 0 "Agree the plan", one step per milestone, then a
@@ -25,9 +28,9 @@ import 'propose_milestones_sheet.dart';
 /// job (server-side, via the `releaseMilestone` Cloud Function), which is
 /// what unlocks reviews.
 ///
-/// Only the *current* step — the first milestone not yet released, Step 0
+/// Only the *current* step - the first milestone not yet released, Step 0
 /// while the plan is still unapproved, or any disputed milestone regardless
-/// of position — renders expanded, with the section's only filled button.
+/// of position - renders expanded, with the section's only filled button.
 /// Every other step collapses to one muted line; tapping a collapsed step
 /// expands it.
 class MilestoneSection extends StatefulWidget {
@@ -40,7 +43,7 @@ class MilestoneSection extends StatefulWidget {
 }
 
 /// Terminal statuses: money has finished moving for this milestone (paid
-/// out, or the legacy `resolved` alias — see [MilestoneStatus]'s doc).
+/// out, or the legacy `resolved` alias - see [MilestoneStatus]'s doc).
 bool _isTerminal(MilestoneStatus s) =>
     s == MilestoneStatus.released || s == MilestoneStatus.resolved;
 
@@ -50,7 +53,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       .read<MilestoneRepository>()
       .watchMilestones(widget.job.id);
 
-  /// The milestone with an action call in flight, disabling its button — or
+  /// The milestone with an action call in flight, disabling its button - or
   /// [_planBusyKey] while a plan-level (approve/reject) action runs.
   String? _busyId;
 
@@ -149,7 +152,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       actionLabel: 'Release',
     );
     if (confirmed != true || !mounted) return;
-    // A release may complete the job (last milestone) — the job stream on
+    // A release may complete the job (last milestone) - the job stream on
     // the detail screen picks that up on its own.
     await _run(
       milestone,
@@ -320,6 +323,10 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         '$step.result',
         data: {'milestoneId': milestone.id, 'outcome': 'ok'},
       );
+      // One central confirmation for fund / deliver / release: money has
+      // moved, so acknowledge it in the hand too. Never awaited - a haptic
+      // failure must not be caught below and reported as a payment failure.
+      unawaited(HapticFeedback.mediumImpact());
       if (!mounted) return;
       if (refreshBalance) await context.read<AuthController>().refreshUser();
     } on FirebaseFunctionsException catch (e, st) {
@@ -329,6 +336,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         error: e,
         stackTrace: st,
       );
+      unawaited(HapticFeedback.heavyImpact());
       if (!mounted) return;
       var message = e.message ?? 'Something went wrong. Please try again.';
       final insufficientBalance = message.startsWith('Insufficient');
@@ -442,7 +450,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       milestones.isNotEmpty &&
       !milestones.any((m) => m.status == MilestoneStatus.proposed);
 
-  /// `'plan'`, a milestone id, or `'complete'` — the step that's dominant
+  /// `'plan'`, a milestone id, or `'complete'` - the step that's dominant
   /// right now. See the class doc for the rule.
   String _currentStepId(List<Milestone> milestones, bool planApproved) {
     if (!planApproved) return 'plan';
@@ -768,7 +776,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
 
     // `Border` can't mix a coloured left accent with a differently-coloured
     // frame and a borderRadius in one go (Flutter's non-uniform-border paint
-    // path only supports a single visible colour) — so the accent is a
+    // path only supports a single visible colour) - so the accent is a
     // separate opaque strip inside a uniformly-bordered, clipped box instead
     // of one four-sided Border.
     return Semantics(
@@ -989,7 +997,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
 }
 
 /// Gutter circle shape per state (WCAG 1.4.1: shape carries the state, not
-/// just colour) — filled-with-check (done), ring-with-lock (in escrow),
+/// just colour) - filled-with-check (done), ring-with-lock (in escrow),
 /// hollow (upcoming), filled-with-`!` (disputed).
 enum _CircleState { done, inEscrow, upcoming, disputed }
 
@@ -1000,14 +1008,14 @@ _CircleState _circleStateFor(MilestoneStatus s) => switch (s) {
   MilestoneStatus.proposed || MilestoneStatus.pending => _CircleState.upcoming,
 };
 
-/// Status-chip colour per state — [FairBidColors.warningText] (not the raw
+/// Status-chip colour per state - [FairBidColors.warningText] (not the raw
 /// `warning` fill) so the pill's text/icon keeps readable contrast.
 Color _statusAccent(BuildContext context, MilestoneStatus s) => switch (s) {
   MilestoneStatus.proposed ||
   MilestoneStatus.pending ||
   MilestoneStatus.submitted => context.fairbid.warningText,
   MilestoneStatus.funded => context.fairbid.verified,
-  MilestoneStatus.released => context.fairbid.success,
+  MilestoneStatus.released => context.fairbid.successText,
   MilestoneStatus.disputed => context.fairbid.danger,
   MilestoneStatus.resolved => Theme.of(context).colorScheme.onSurfaceVariant,
 };
@@ -1080,8 +1088,11 @@ class _StepCircle extends StatelessWidget {
     final fairbid = context.fairbid;
     final theme = Theme.of(context);
     return switch (state) {
+      // successText, not success: a white tick on the brighter fill sits at
+      // 2.02:1, so the "this milestone is paid out" state was carried by
+      // shape alone at the exact moment money had moved.
       _CircleState.done => _circle(
-        fill: fairbid.success,
+        fill: fairbid.successText,
         icon: Icons.check,
         iconColor: Colors.white,
       ),
@@ -1126,7 +1137,7 @@ class _StepCircle extends StatelessWidget {
   }
 }
 
-/// "Your turn" (accent-filled) vs "Waiting on {name}" (neutral outline) —
+/// "Your turn" (accent-filled) vs "Waiting on {name}" (neutral outline) -
 /// the highest-value single addition to the tracker: whoever is looking
 /// immediately knows if the ball is in their court.
 class _TurnPill extends StatelessWidget {
@@ -1322,7 +1333,7 @@ class _PlanSummaryCard extends StatelessWidget {
               _legend(
                 context,
                 icon: Icons.check_circle_outline,
-                color: context.fairbid.success,
+                color: context.fairbid.successText,
                 label: 'Paid out ${formatRm(paidOutSen)}',
               ),
               _legend(

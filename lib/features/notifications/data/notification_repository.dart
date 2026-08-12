@@ -32,7 +32,7 @@ abstract interface class NotificationRepository {
 
 /// Firebase-backed [NotificationRepository]. Notifications live at
 /// `users/{uid}/notifications`; tokens in the `fcmTokens` array on the user
-/// doc (owner-writable — the field is not in the protected list).
+/// doc (owner-writable - the field is not in the protected list).
 class FirebaseNotificationRepository implements NotificationRepository {
   FirebaseNotificationRepository({
     FirebaseFirestore? firestore,
@@ -48,7 +48,7 @@ class FirebaseNotificationRepository implements NotificationRepository {
 
   @override
   Stream<List<AppNotification>> watchMine(String uid) {
-    // Single-field orderBy inside one subcollection — no composite index.
+    // Single-field orderBy inside one subcollection - no composite index.
     return _notifications(uid)
         .orderBy('createdAt', descending: true)
         .limit(50)
@@ -61,7 +61,7 @@ class FirebaseNotificationRepository implements NotificationRepository {
   @override
   Stream<int> watchUnreadCount(String uid) {
     // Derived from the same stream the list uses (like ChatRepository's
-    // watchTotalUnread) — one Firestore listener serves both surfaces.
+    // watchTotalUnread) - one Firestore listener serves both surfaces.
     return watchMine(uid).map(
         (items) => items.where((n) => !n.read).length);
   }

@@ -116,7 +116,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 /// The profile-photo control at the top of the form: the current avatar (or
 /// the placeholder, via [UserAvatar]) with a "Change photo" / "Add photo"
 /// action beneath it. Picking a photo uploads it immediately and saves the
-/// resulting URL, rather than waiting for the form's own Save button —
+/// resulting URL, rather than waiting for the form's own Save button -
 /// mirroring how the other upload boxes in the app behave.
 class _AvatarPicker extends StatefulWidget {
   const _AvatarPicker({required this.photoUrl});

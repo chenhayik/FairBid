@@ -10,7 +10,7 @@ import '../domain/user_role.dart';
 import 'auth_controller.dart';
 import 'validators.dart';
 
-/// "Welcome to FairBid" — email/password + Google sign-in, with the
+/// "Welcome to FairBid" - email/password + Google sign-in, with the
 /// Log In / Sign Up tab strip from the design mock.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});

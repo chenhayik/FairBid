@@ -7,7 +7,7 @@ import '../data/user_admin_repository.dart';
 import '../domain/managed_user.dart';
 
 /// Admin Home › Users tab: search every user and suspend / reinstate them.
-/// Suspension is a soft ban applied by the `setUserSuspended` Cloud Function —
+/// Suspension is a soft ban applied by the `setUserSuspended` Cloud Function -
 /// the user keeps their account but is frozen out of all actions and locked to
 /// the "account suspended" screen until reinstated. Admins are never listed
 /// (they can't be suspended). Hosted (Scaffold and all) by AdminHomeScreen.
@@ -29,7 +29,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
 
   /// Opens the reason sheet; on confirm applies the suspension. The sheet
   /// returns the reason string (possibly empty) on Suspend, or null when
-  /// cancelled/dismissed — so it owns and disposes its own controller.
+  /// cancelled/dismissed - so it owns and disposes its own controller.
   Future<void> _suspend(ManagedUser user) async {
     final reason = await showModalBottomSheet<String>(
       context: context,

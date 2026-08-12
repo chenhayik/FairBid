@@ -68,7 +68,7 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
   }
 
   /// Admin override: cancels the whole job. Refused server-side while any
-  /// milestone still holds escrow — so in practice the admin rules on (and
+  /// milestone still holds escrow - so in practice the admin rules on (and
   /// thereby settles) the open disputes first, then cancels an otherwise
   /// unworkable job. The clear server message is surfaced when it's blocked.
   Future<void> _cancelJob() async {
@@ -405,8 +405,8 @@ class _RulingBar extends StatelessWidget {
   }
 }
 
-/// Ruling-note dialog. The note is required — it explains the decision to
-/// both parties — so confirm stays disabled until something is typed.
+/// Ruling-note dialog. The note is required - it explains the decision to
+/// both parties - so confirm stays disabled until something is typed.
 class _RulingNoteDialog extends StatefulWidget {
   const _RulingNoteDialog({required this.resolution});
 

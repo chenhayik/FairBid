@@ -35,10 +35,8 @@ class JobCard extends StatelessWidget {
     final theme = Theme.of(context);
     final budget = job.budget?.label;
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: AppCard(
+    return AppCard(
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -134,8 +132,7 @@ class JobCard extends StatelessWidget {
             ],
           ],
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -162,7 +159,7 @@ class _DeadlineChip extends StatelessWidget {
           deadlineLabel(deadline),
           style: theme.textTheme.bodySmall?.copyWith(
               color: urgent
-                  ? context.fairbid.warning
+                  ? context.fairbid.warningText
                   : theme.colorScheme.onSurfaceVariant),
         ),
       ],

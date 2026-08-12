@@ -6,8 +6,8 @@ import '../theme/app_theme.dart';
 /// standard `person_outline` placeholder. If the network image fails to
 /// load, falls back to the placeholder rather than showing a broken image.
 ///
-/// Used everywhere a user's photo appears — the profile header, bids, job
-/// cards and the conversation list — so the fallback behaviour stays
+/// Used everywhere a user's photo appears - the profile header, bids, job
+/// cards and the conversation list - so the fallback behaviour stays
 /// consistent across the app.
 class UserAvatar extends StatefulWidget {
   const UserAvatar({super.key, this.photoUrl, this.radius, this.iconSize});

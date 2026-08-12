@@ -6,7 +6,7 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/requestor_onboarding_data.dart';
 import '../requestor_onboarding_controller.dart';
 
-/// Stage 1 — how the requestor hires: as an individual or as a business.
+/// Stage 1 - how the requestor hires: as an individual or as a business.
 class AccountTypeStep extends StatelessWidget {
   const AccountTypeStep({super.key});
 

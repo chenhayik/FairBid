@@ -105,7 +105,7 @@ class _FullScreenVideoPlayerState extends State<_FullScreenVideoPlayer> {
   void dispose() {
     // Chewie 1.14.1's ChewieController.dispose() doesn't touch the
     // underlying VideoPlayerController, and that controller is shared with
-    // (and owned by) the JobVideoPreview below this route — so without this,
+    // (and owned by) the JobVideoPreview below this route - so without this,
     // popping the full-screen player leaves the video playing, with audio,
     // behind a thumbnail that's supposed to be a static first frame. Pause
     // and rewind it before releasing Chewie's controls; these are

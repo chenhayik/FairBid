@@ -46,7 +46,7 @@ class AuthController extends ChangeNotifier {
 
   bool get isSignedIn => _user != null;
 
-  /// Runs just before sign-out, while the session is still authenticated —
+  /// Runs just before sign-out, while the session is still authenticated -
   /// the app wires this to detach the device's push token so the next account
   /// on this device can't receive the previous user's notifications.
   Future<void> Function(String uid)? onBeforeSignOut;

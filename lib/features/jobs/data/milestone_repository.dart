@@ -5,13 +5,13 @@ import '../domain/milestone.dart';
 
 /// Reads and writes escrow milestones. Money-free writes (propose, submit)
 /// go straight to Firestore; the money-moving ones (fund, release) call the
-/// Cloud Functions that own `walletBalanceSen` — Firestore rules reject any
+/// Cloud Functions that own `walletBalanceSen` - Firestore rules reject any
 /// client write to it, mirroring how `recomputeTrustScore` protects the Trust
 /// Score. UI/controllers depend on this interface so tests can use a fake.
 abstract interface class MilestoneRepository {
   /// Provider proposes (or amends) the milestone plan for an in-progress job
   /// via the `proposeMilestonePlan` Cloud Function, which enforces the amounts
-  /// total the accepted bid and writes each milestone `proposed` — fundable
+  /// total the accepted bid and writes each milestone `proposed` - fundable
   /// only once the requestor approves.
   Future<void> proposeMilestones(String jobId, List<Milestone> milestones);
 
@@ -30,7 +30,7 @@ abstract interface class MilestoneRepository {
   /// first), for the Earnings screen's In Escrow / Total Earnings figures.
   Stream<List<Milestone>> watchProviderMilestones(String providerId);
 
-  /// Provider marks a funded milestone as delivered. Plain guarded write —
+  /// Provider marks a funded milestone as delivered. Plain guarded write -
   /// rules enforce funded → submitted only, by the accepted provider.
   Future<void> submitMilestone(String jobId, String milestoneId,
       {String? note});
@@ -39,8 +39,8 @@ abstract interface class MilestoneRepository {
   /// `fundMilestone` Cloud Function).
   Future<void> fundMilestone(String jobId, String milestoneId);
 
-  /// Credits the provider's wallet, releases the milestone and — when it was
-  /// the job's last unreleased one — completes the job, unlocking reviews
+  /// Credits the provider's wallet, releases the milestone and - when it was
+  /// the job's last unreleased one - completes the job, unlocking reviews
   /// (the `releaseMilestone` Cloud Function).
   Future<void> releaseMilestone(String jobId, String milestoneId);
 }

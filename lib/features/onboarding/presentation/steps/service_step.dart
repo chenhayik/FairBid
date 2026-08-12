@@ -25,7 +25,7 @@ const kServiceCategories = [
   'Other',
 ];
 
-/// Stage 5 — "Define Your Services": category, coverage area, rate, portfolio.
+/// Stage 5 - "Define Your Services": category, coverage area, rate, portfolio.
 class ServiceStep extends StatefulWidget {
   const ServiceStep({super.key});
 
@@ -183,6 +183,10 @@ class _ServiceStepState extends State<ServiceStep> {
                           url,
                           width: 40,
                           height: 40,
+                          // Decode at display size, not the full upload size.
+                          cacheWidth: (40 *
+                                  MediaQuery.devicePixelRatioOf(context))
+                              .round(),
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => Icon(
                             Icons.broken_image_outlined,

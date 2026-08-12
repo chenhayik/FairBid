@@ -77,7 +77,7 @@ class RequestorOnboardingController extends ChangeNotifier {
   // The profile photo goes to `avatars/{uid}/...` (world-readable to any
   // signed-in user, see storage.rules) rather than `verification/{uid}/...`,
   // so it can be shown to counterparties on bids/jobs/chats. Photos from
-  // before this change are still stored under `verification/` — they keep
+  // before this change are still stored under `verification/` - they keep
   // resolving fine via their tokened download URLs, they just aren't
   // re-uploaded on re-save.
   Future<void> pickProfilePhoto() => _pickAndUpload(

@@ -3,8 +3,8 @@ import 'package:go_router/go_router.dart';
 
 import 'user_avatar.dart';
 
-/// A tappable user identity — avatar, name and an optional subtitle (e.g.
-/// `★4.8 (12) · Verified`) — that pushes `/users/{uid}` on tap. The app's one
+/// A tappable user identity - avatar, name and an optional subtitle (e.g.
+/// `★4.8 (12) · Verified`) - that pushes `/users/{uid}` on tap. The app's one
 /// reusable entry point into a public profile, used from a bid card's
 /// identity row, a chat thread's app-bar title and a review's author name.
 ///

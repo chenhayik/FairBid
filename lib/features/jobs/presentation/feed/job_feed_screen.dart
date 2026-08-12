@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
@@ -8,6 +10,7 @@ import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
+import '../../../../core/widgets/keyed_stream_builder.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../../../onboarding/presentation/steps/service_step.dart';
 import '../../data/job_repository.dart';
@@ -30,10 +33,27 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   int? _maxBudgetSen; // null = any
   double? _radiusKm; // null = any
 
+  /// Debounces the search field. Every rebuild re-runs the whole filter pass
+  /// (including a haversine per job) and, until the feed's stream is hoisted
+  /// out of build(), also tears down and re-creates the Firestore listener -
+  /// so typing "plumber" cost seven of each.
+  Timer? _searchDebounce;
+
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _search.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged(String _) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 300),
+      () {
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   Future<void> _setBaseLocation() async {
@@ -101,7 +121,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
               padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
               child: TextField(
                 controller: _search,
-                onChanged: (_) => setState(() {}),
+                onChanged: _onSearchChanged,
                 decoration: const InputDecoration(
                   hintText: 'Search for jobs...',
                   prefixIcon: Icon(Icons.search),
@@ -131,10 +151,14 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                 ),
               ),
             Expanded(
-              child: StreamBuilder<List<Job>>(
-                stream: repo.watchOpenJobs(),
+              child: KeyedStreamBuilder<List<Job>>(
+                create: repo.watchOpenJobs,
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
+                  // hasData rather than the connection state: a resubscribe
+                  // resets to `waiting` while retaining the previous results,
+                  // and blanking the list in that case is what made searching
+                  // and filtering feel broken.
+                  if (!snapshot.hasData && !snapshot.hasError) {
                     return const Center(child: CircularProgressIndicator());
                   }
                   if (snapshot.hasError) {
@@ -250,7 +274,7 @@ class _FilterBar extends StatelessWidget {
 
 /// Wraps a menu value so a `null` selection (e.g. the "All categories" reset,
 /// whose value is `null`) isn't swallowed by [PopupMenuButton]'s `onCanceled`
-/// path — a non-null wrapper is always distinguishable from a dismissed menu.
+/// path - a non-null wrapper is always distinguishable from a dismissed menu.
 class _MenuOption<T> {
   const _MenuOption(this.value);
   final T value;

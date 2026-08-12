@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../util/motion.dart';
 
 /// Full-width filled action button that shows a spinner while [busy].
 class PrimaryButton extends StatelessWidget {
@@ -19,14 +20,25 @@ class PrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FilledButton(
-      onPressed: busy ? null : onPressed,
+    // While busy the button must keep its *enabled* colours. Passing null to
+    // onPressed would render it disabled, fading the fill to 35%-alpha brand
+    // blue, against which the white spinner sits at 1.78:1 and is effectively
+    // invisible - so every commitment action in the app looked unresponsive
+    // exactly while it was working. A no-op keeps the fill, and AbsorbPointer
+    // below blocks the repeat tap that null was there to prevent.
+    final button = FilledButton(
+      onPressed: busy ? () {} : onPressed,
       child: busy
-          ? const SizedBox(
-              height: 22,
-              width: 22,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: Colors.white),
+          ? Semantics(
+              label: label,
+              child: SizedBox(
+                height: 22,
+                width: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Theme.of(context).colorScheme.onPrimary,
+                ),
+              ),
             )
           : Row(
               mainAxisSize: MainAxisSize.min,
@@ -39,6 +51,7 @@ class PrimaryButton extends StatelessWidget {
               ],
             ),
     );
+    return busy ? AbsorbPointer(child: button) : button;
   }
 }
 
@@ -247,27 +260,57 @@ class PillBadge extends StatelessWidget {
 
 /// White card with the standard hairline border and 12px radius (L1 surface).
 class AppCard extends StatelessWidget {
-  const AppCard({super.key, required this.child, this.padding});
+  const AppCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.onTap,
+    this.color,
+  });
 
   final Widget child;
   final EdgeInsetsGeometry? padding;
 
+  /// Makes the whole card tappable, *with* a ripple.
+  ///
+  /// Always prefer this over wrapping an [AppCard] in an [InkWell]. Ink
+  /// features are painted into the nearest [Material] before its descendants
+  /// are drawn, so the card's own opaque fill covered the splash completely:
+  /// every job card, conversation row and queue row in the app registered as a
+  /// dead tap. Rendering the fill *as* the Material puts the ink above it.
+  final VoidCallback? onTap;
+
+  /// Card fill, defaulting to white. Exists so the handful of tinted cards
+  /// (an unread notification, say) can reuse this instead of hand-rolling the
+  /// same decoration.
+  final Color? color;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
+    final radius = BorderRadius.circular(12);
+    final content = Padding(
       padding: padding ?? const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: context.fairbid.borderSubtle),
-      ),
       child: child,
+    );
+    return Material(
+      color: color ?? Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: radius,
+        side: BorderSide(color: context.fairbid.borderSubtle),
+      ),
+      // So the splash is clipped to the rounded corners.
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        width: double.infinity,
+        child: onTap == null
+            ? content
+            : InkWell(onTap: onTap, child: content),
+      ),
     );
   }
 }
 
-/// Card that can be tapped to select it — role cards, provider-type cards.
+/// Card that can be tapped to select it - role cards, provider-type cards.
 /// Selected: blue 2px border on a subtle blue fill, per the mock.
 class SelectableCard extends StatelessWidget {
   const SelectableCard({
@@ -288,7 +331,7 @@ class SelectableCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+        duration: motion(context, const Duration(milliseconds: 150)),
         width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(

@@ -9,7 +9,7 @@ engine, so they prove the rules deny/allow what they claim to.
 
 - Node.js (developed/tested with Node 22).
 - **Java**, required by the Firestore emulator (`firebase emulators:exec`
-  shells out to a JVM). If `java -version` fails, install a JDK first —
+  shells out to a JVM). If `java -version` fails, install a JDK first -
   there is no pure-JS fallback for the emulator.
 
 ## Install
@@ -35,7 +35,7 @@ on port 8080) and sets `FIRESTORE_EMULATOR_HOST` for the test process, which
 To iterate faster while writing tests, you can instead leave the emulator
 running in one terminal (`npx firebase-tools emulators:start --only
 firestore`, from the repo root or here) and just re-run `npm test` in
-another — `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
+another - `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
 `firebase.json`.
 
 ## What's covered
@@ -56,21 +56,21 @@ another — `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
   fields (`trustScore`, `ratingSum`, `ratingCount`, `jobsCompleted`,
   `disputesLost`, `trust`, `walletBalanceSen`, `escrowLockedSen`) or the
   public-profile client-history counters (`jobsPosted`, `jobsAssigned`,
-  `hireRate`) — all Cloud-Function-only; a create is denied if it carries a
+  `hireRate`) - all Cloud-Function-only; a create is denied if it carries a
   nonzero wallet balance, any trust field, or a forged `jobsPosted`/
   `hireRate`.
 - **Conversations** (`conversations/{id}`): an update can only touch the
-  message-preview/unread-counter fields — writing `chatClosesAt` (the
+  message-preview/unread-counter fields - writing `chatClosesAt` (the
   chat-reopen hole) or changing `participantIds` is denied.
 - **Server-only collections**: `transactions/{id}` and `disputes/{id}` deny
   every client write; a `milestones` doc `create` is denied even for the
-  job's own requestor/accepted provider — all three are Cloud-Function-only.
+  job's own requestor/accepted provider - all three are Cloud-Function-only.
 - **Service address privacy** (`jobs/{jobId}/private/address`): only the
   job's owner (read + write), its accepted provider (read only) and admins
-  (read only) may read it — a signed-in non-participant is denied read; a
+  (read only) may read it - a signed-in non-participant is denied read; a
   suspended owner is denied write; delete is always denied.
 - **Private payout doc** (`users/{uid}/private/payout`): payout bank details
-  and the phone number, moved off the world-readable `users/{uid}` doc —
+  and the phone number, moved off the world-readable `users/{uid}` doc -
   only the owner (read + write) and admins (read only) may read it; another
   signed-in user is denied.
 
@@ -83,5 +83,5 @@ another — `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
 - `afterEach` calls `testEnv.clearFirestore()` so tests don't leak state
   into each other.
 - This suite intentionally does **not** touch `firestore.rules`,
-  `functions/`, or any Dart code — it only reads the rules file and asserts
+  `functions/`, or any Dart code - it only reads the rules file and asserts
   against it.

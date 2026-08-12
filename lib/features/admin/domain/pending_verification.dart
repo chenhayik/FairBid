@@ -15,7 +15,7 @@ class VerificationDocument {
 /// snapshot built from the raw Firestore map rather than the full [AppUser]
 /// (which the app builds only for the signed-in person). Provider onboarding
 /// nests its fields under an `onboarding` map; requestor fields live at the top
-/// level — [fromMap] reads from both.
+/// level - [fromMap] reads from both.
 class PendingVerification {
   const PendingVerification({
     required this.uid,
@@ -84,7 +84,7 @@ class PendingVerification {
   /// Builds a snapshot from a raw `users/{uid}` document map, or null when the
   /// document is missing. [payoutData] is the applicant's owner+admin-only
   /// `private/payout` doc (phone and payout bank details, which moved off
-  /// this public doc — see firestore.rules); `VerificationRepository.
+  /// this public doc - see firestore.rules); `VerificationRepository.
   /// watchPending` loads it per applicant and passes it in here, mirroring
   /// `AuthRepository._mapUser`'s merge. Null (missing/unreadable doc) falls
   /// back to the legacy public-doc locations below, so applicants who

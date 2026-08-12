@@ -16,7 +16,7 @@ abstract interface class StatsRepository {
 }
 
 /// Firestore-backed [StatsRepository] built on server-side aggregation
-/// queries — `count()`/`sum()` return a single number per query instead of
+/// queries - `count()`/`sum()` return a single number per query instead of
 /// downloading every document, which is the correct way to count at scale.
 class FirestoreStatsRepository implements StatsRepository {
   FirestoreStatsRepository(

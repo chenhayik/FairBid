@@ -148,7 +148,7 @@ class StageHeader extends StatelessWidget {
 /// Dashed-border upload area: icon, "Click to upload" and a hint line.
 /// Shows the picked file name with a green check once [pickedName] is set.
 /// While [busy] (a pick/upload this box triggered is in flight), shows an
-/// in-place spinner instead of the icon and disables the tap target — so
+/// in-place spinner instead of the icon and disables the tap target - so
 /// per-upload progress is obvious right where the user is looking, as
 /// opposed to a screen-wide overlay.
 class UploadBox extends StatelessWidget {
@@ -173,8 +173,10 @@ class UploadBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final picked = pickedName != null;
+    // successText: `accent` colours the label text and the 28px glyph, not
+    // just the border, so it has to clear AA against the white box.
     final accent =
-        picked ? context.fairbid.success : context.fairbid.verified;
+        picked ? context.fairbid.successText : context.fairbid.verified;
 
     return InkWell(
       onTap: busy ? null : onTap,
@@ -272,7 +274,7 @@ class CheckBullet extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(Icons.check_circle_outline,
-              size: 18, color: context.fairbid.success),
+              size: 18, color: context.fairbid.successText),
           const SizedBox(width: 8),
           Expanded(
             child: Text(text, style: Theme.of(context).textTheme.bodyMedium),

@@ -71,7 +71,7 @@ abstract interface class AuthRepository {
   });
 
   /// Toggles whether [jobId] is on [uid]'s watchlist (the bookmark on a job
-  /// card / feed / "Jobs near you"). Not a protected field — the self-update
+  /// card / feed / "Jobs near you"). Not a protected field - the self-update
   /// rule already permits it.
   Future<void> setJobSaved({
     required String uid,
@@ -108,7 +108,7 @@ class FirebaseAuthRepository implements AuthRepository {
   CollectionReference<Map<String, dynamic>> get _users =>
       _firestore.collection('users');
 
-  /// Owner+admin-only doc holding payout bank details and the phone number —
+  /// Owner+admin-only doc holding payout bank details and the phone number -
   /// see `firestore.rules`' `private/{doc}` block. Shared by both onboarding
   /// flows and [updateProfile].
   DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
@@ -116,7 +116,7 @@ class FirebaseAuthRepository implements AuthRepository {
 
   /// Best-effort read of [uid]'s private payout doc: a missing doc (every
   /// legacy user who hasn't saved since the migration) or a read failure
-  /// degrades to `null`, never throws — the caller falls back to the legacy
+  /// degrades to `null`, never throws - the caller falls back to the legacy
   /// public-doc locations for those fields.
   Future<Map<String, dynamic>?> _payoutData(String uid) async {
     try {
@@ -129,7 +129,7 @@ class FirebaseAuthRepository implements AuthRepository {
   @override
   Stream<AppUser?> authStateChanges() {
     // Re-emit not only when the Firebase Auth state changes (sign in/out), but
-    // also whenever the signed-in user's Firestore profile changes — so an
+    // also whenever the signed-in user's Firestore profile changes - so an
     // admin approving their verification, or any other profile edit, reflects
     // live in the app without forcing a re-login.
     late final StreamController<AppUser?> controller;
@@ -276,7 +276,7 @@ class FirebaseAuthRepository implements AuthRepository {
     // on the world-readable public profile); write it there and explicitly
     // delete the public copy so legacy accounts migrate as they save. A
     // one-off backfill Cloud Function is still needed for users who never
-    // save again — deliberately out of scope here.
+    // save again - deliberately out of scope here.
     final batch = _firestore.batch()
       ..set(_users.doc(uid), {
         'displayName': displayName.trim(),
@@ -406,7 +406,7 @@ class FirebaseAuthRepository implements AuthRepository {
 
   /// Builds an [AppUser] from a Firebase auth [user], its Firestore profile
   /// [data] (null when the doc doesn't exist yet, e.g. mid-registration) and
-  /// [payoutData], its owner-only private/payout doc (null when missing —
+  /// [payoutData], its owner-only private/payout doc (null when missing -
   /// every legacy user who hasn't saved since the migration, or when the read
   /// failed; either way this degrades to nulls rather than throwing).
   AppUser _mapUser(

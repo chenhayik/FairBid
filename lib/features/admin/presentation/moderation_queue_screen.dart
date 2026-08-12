@@ -10,7 +10,7 @@ import '../data/moderation_repository.dart';
 import '../domain/flagged_review.dart';
 
 /// Admin Home › Reviews tab: every review reported as unfair/abusive. Each is
-/// small enough to moderate inline — Hide removes it from public display and
+/// small enough to moderate inline - Hide removes it from public display and
 /// recomputes the reviewee's Trust Score without it; Keep clears the flag.
 class ModerationQueueScreen extends StatefulWidget {
   const ModerationQueueScreen({super.key});

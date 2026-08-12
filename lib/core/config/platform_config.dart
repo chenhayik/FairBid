@@ -1,8 +1,16 @@
+import 'package:flutter/foundation.dart';
+
 /// Platform-wide tunables that the plan (§3.2.3, §3.4.3) treats as a future
 /// "platform configuration document". Kept in one place so the bid-ranking and
 /// Trust Score code share a single source of truth and tests can pin the maths.
 class PlatformConfig {
   const PlatformConfig._();
+
+  /// Whether the wallet offers the demo top-up shortcut. It credits a real
+  /// balance through `topUpWallet` without taking payment, so it must never be
+  /// reachable in a release build: a free-money button next to the real one
+  /// either gets used or destroys confidence that the payments are real.
+  static const bool demoTopUpEnabled = kDebugMode;
 
   /// "Best Value" composite weights. Price and trust each contribute a
   /// normalised 0–1 score; the weights (summing to 1) balance them.
@@ -31,7 +39,7 @@ class PlatformConfig {
   /// review data. With no reviews this is the prior baseline (700); each review
   /// pulls it toward that reviewer's rating. See plan §3.4.3.
   ///
-  /// Since Trust Score v2 this is no longer the headline score — it survives
+  /// Since Trust Score v2 this is no longer the headline score - it survives
   /// as the ancestor of [TrustBreakdown.reviewScore], one of four weighted
   /// sub-scores blended by [trustBreakdownFor].
   static int trustScoreFor({required int ratingSum, required int ratingCount}) {
@@ -41,7 +49,7 @@ class PlatformConfig {
   }
 
   // -------------------------------------------------------------------------
-  // Trust Score v2 — a multi-signal composite. The authoritative computation
+  // Trust Score v2 - a multi-signal composite. The authoritative computation
   // runs in Cloud Functions (functions/index.js `computeTrust`, kept in sync
   // with this file via test/fixtures/trust_vectors.json); this Dart mirror
   // exists for tests and documentation. Weights are integer percents so both
@@ -68,7 +76,7 @@ class PlatformConfig {
   static const int minJobsForVisibleScore = 3;
 
   /// Computes the full v2 trust breakdown. Mirrors `computeTrust` in
-  /// functions/index.js — change both together and extend the shared vectors
+  /// functions/index.js - change both together and extend the shared vectors
   /// in test/fixtures/trust_vectors.json.
   static TrustBreakdown trustBreakdownFor({
     required int ratingSum,

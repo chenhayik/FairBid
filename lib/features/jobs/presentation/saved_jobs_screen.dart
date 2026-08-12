@@ -3,12 +3,13 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../data/job_repository.dart';
 import '../domain/job.dart';
 import 'widgets/job_card.dart';
 
-/// The signed-in user's bookmarked jobs — fed by the bookmark toggle on
+/// The signed-in user's bookmarked jobs - fed by the bookmark toggle on
 /// [JobCard] across the feed and "Jobs near you".
 class SavedJobsScreen extends StatelessWidget {
   const SavedJobsScreen({super.key});
@@ -21,10 +22,15 @@ class SavedJobsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Saved Jobs')),
       body: SafeArea(
-        child: StreamBuilder<List<Job>>(
-          stream: context.read<JobRepository>().watchSavedJobs(watchlist),
+        child: KeyedStreamBuilder<List<Job>>(
+          // The watchlist really does change here (bookmarking from this very
+          // screen), so key on its contents: re-create the query when the ids
+          // change, and only then.
+          cacheKey: watchlist.join(','),
+          create: () =>
+              context.read<JobRepository>().watchSavedJobs(watchlist),
           builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
+            if (!snapshot.hasData && !snapshot.hasError) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {

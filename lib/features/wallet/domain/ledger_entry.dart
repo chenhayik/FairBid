@@ -27,7 +27,7 @@ enum LedgerType {
 }
 
 /// One immutable entry in the top-level `transactions` ledger. Read-only on
-/// the client — only the wallet Cloud Functions (admin SDK) append entries,
+/// the client - only the wallet Cloud Functions (admin SDK) append entries,
 /// so there is no `toMap()`.
 class LedgerEntry {
   const LedgerEntry({

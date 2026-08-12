@@ -27,7 +27,7 @@ enum JobViewerRole {
 }
 
 /// The single thing [JobDetailViewModel.primaryAction] does when tapped.
-/// The widget layer owns the actual callback for each kind — this only
+/// The widget layer owns the actual callback for each kind - this only
 /// names *what* happens, keeping the view model itself widget-free.
 enum JobActionKind {
   /// Scrolls to the bid list (owner) or the viewer's own bid (bidder).
@@ -67,8 +67,8 @@ enum JobActionKind {
 }
 
 /// A role-resolved call to action: a label, what it does ([kind]), an
-/// optional short money/context line shown alongside it, and — for the
-/// bidder's "Your bid RM X" — an optional secondary label (Withdraw).
+/// optional short money/context line shown alongside it, and - for the
+/// bidder's "Your bid RM X" - an optional secondary label (Withdraw).
 class NextAction {
   const NextAction({
     required this.label,
@@ -86,7 +86,7 @@ class NextAction {
 /// The pure, widget-free result of looking at one job as one viewer: what
 /// role they're in, a one-sentence summary of whose turn it is, the single
 /// action they can take right now (if any), and which body slots apply to
-/// them. Built by [buildJobDetailVm] — see that function for how the
+/// them. Built by [buildJobDetailVm] - see that function for how the
 /// role/status matrix maps onto these fields.
 class JobDetailViewModel {
   const JobDetailViewModel({
@@ -113,7 +113,7 @@ class JobDetailViewModel {
   final NextAction? primaryAction;
 
   /// A muted status line for the bottom bar when it's the other party's
-  /// move — shown instead of [primaryAction], never both.
+  /// move - shown instead of [primaryAction], never both.
   final String? waitingLine;
 
   /// Slot 7: the bid list (owner) or the submit/withdraw bid action
@@ -142,7 +142,7 @@ class JobDetailViewModel {
 
 /// Builds the [JobDetailViewModel] for [me] looking at [job], with [myBid]
 /// set when they're a provider who has already bid on it. Pure and
-/// widget-free — safe to unit test directly over the role × status matrix
+/// widget-free - safe to unit test directly over the role × status matrix
 /// without pumping any widgets.
 JobDetailViewModel buildJobDetailVm(Job job, AppUser? me, Bid? myBid) {
   switch (_resolveRole(job, me, myBid)) {
@@ -299,8 +299,8 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
         showCancel: false,
       );
     case JobStatus.open:
-      // Unreachable in practice — an accepted provider implies the job left
-      // `open` — but every JobStatus needs a branch, so fail safe rather
+      // Unreachable in practice - an accepted provider implies the job left
+      // `open` - but every JobStatus needs a branch, so fail safe rather
       // than throw.
       return const JobDetailViewModel(
         role: JobViewerRole.acceptedProvider,

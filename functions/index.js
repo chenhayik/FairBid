@@ -22,16 +22,16 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
 // can vector-check it against the Dart mirror); producers below (review
 // triggers, job completion, dispute rulings) write only raw aggregates, and
 // the single `recomputeTrustOnUserWrite` consumer turns them into the stored
-// `trustScore` + `trust` breakdown — no client, and no other function, ever
+// `trustScore` + `trust` breakdown - no client, and no other function, ever
 // computes the score.
 // ---------------------------------------------------------------------------
 
 const {computeTrust} = require("./trust");
 
 /**
- * The single trust-score consumer: whenever a user document is written —
+ * The single trust-score consumer: whenever a user document is written -
  * profile creation, a profile edit, an admin verification decision, or a
- * counter bump from one of the producers below — recompute the breakdown and
+ * counter bump from one of the producers below - recompute the breakdown and
  * store it. Writes only when the result actually changed, which both saves
  * writes and terminates the self-trigger loop (our own write recomputes to an
  * identical breakdown and stops).
@@ -39,7 +39,7 @@ const {computeTrust} = require("./trust");
 exports.recomputeTrustOnUserWrite = functions.firestore
     .document("users/{uid}")
     .onWrite(async (change) => {
-      if (!change.after.exists) return; // deletion — nothing to score
+      if (!change.after.exists) return; // deletion - nothing to score
       const user = change.after.data();
       const trust = computeTrust(user);
 
@@ -62,7 +62,7 @@ exports.recomputeTrustOnUserWrite = functions.firestore
 /**
  * Producer: a new review bumps the reviewee's rating aggregates. The consumer
  * above folds them into the Trust Score. (Server-side so a client can't forge
- * ratings — rules deny client writes to these fields.)
+ * ratings - rules deny client writes to these fields.)
  *
  * Idempotent against at-least-once trigger retries: a `countedInTrust` marker
  * on the review doc itself (set in the same transaction as the increment)
@@ -103,7 +103,7 @@ exports.recomputeTrustScore = functions.firestore
  * marker is read and set on the job doc inside the same transaction as the
  * increments, so a replayed event sees it already true and returns without
  * double-counting. NOTE: that marker write is itself an update to this same
- * job doc, which re-fires this trigger and `closeChatOnJobEnd` — both no-op
+ * job doc, which re-fires this trigger and `closeChatOnJobEnd` - both no-op
  * on it: `before.status === "completed"` is already true here (the job's
  * status doesn't change again), so this trigger's own guard above returns
  * immediately on the replay; `closeChatOnJobEnd` no-ops because
@@ -136,10 +136,10 @@ exports.onJobCompleted = functions.firestore
     });
 
 // ---------------------------------------------------------------------------
-// Requestor job-posting counters (jobsPosted / hireRate) — power the public
+// Requestor job-posting counters (jobsPosted / hireRate) - power the public
 // profile's client-history strip (lib/features/profile/domain/
 // public_profile.dart). Both fields (plus the jobsAssigned they're derived
-// from) are server-owned, exactly like the Trust Score fields above — see
+// from) are server-owned, exactly like the Trust Score fields above - see
 // firestore.rules' trustFields().
 // ---------------------------------------------------------------------------
 
@@ -203,7 +203,7 @@ exports.bumpJobsAssignedOnAccept = functions.firestore
 // Firestore rules reject every client write to `walletBalanceSen`, to a
 // milestone's funded/released status and to the `transactions` ledger, so all
 // money movement flows through these callables (the admin SDK bypasses
-// rules) — exactly how `recomputeTrustScore` protects the Trust Score.
+// rules) - exactly how `recomputeTrustScore` protects the Trust Score.
 // ---------------------------------------------------------------------------
 
 /** `fromUid`/`toUid` sentinel for the escrow leg of a fund/release entry. */
@@ -268,8 +268,8 @@ async function assertNotSuspended(tx, db, uid) {
  * milestone is `released` (paid to the provider). A refunded dispute now
  * returns its milestone to `pending` for rework rather than ending it, so a
  * refund can no longer silently "complete" a job. `resolved` is retained here
- * solely so any pre-existing legacy document — the status a refund used to
- * write — can still complete.
+ * solely so any pre-existing legacy document - the status a refund used to
+ * write - can still complete.
  */
 const isTerminal = (status) => status === "released" || status === "resolved";
 
@@ -298,8 +298,8 @@ const isLocked = (status) =>
 /**
  * Requestor accepts a provider's bid: the winning bid becomes `accepted`,
  * every other still-pending bid on the job is `rejected`, and the job moves
- * to `in_progress` with the winner's fields set. No money moves yet — that
- * happens at `fundMilestone` — but the accepted amount becomes a commitment
+ * to `in_progress` with the winner's fields set. No money moves yet - that
+ * happens at `fundMilestone` - but the accepted amount becomes a commitment
  * against the requestor's wallet, tracked as `escrowLockedSen`, so a
  * requestor can't accept more work than their balance can eventually fund.
  * Server-side (this used to be a client Firestore transaction) because both
@@ -352,7 +352,7 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
           "failed-precondition", "This bid is no longer pending.",
           {reason: "race"});
     }
-    // Trust only the server-stored bid amount, never client input — but the
+    // Trust only the server-stored bid amount, never client input - but the
     // rules' own amountSen validation could in principle be bypassed by a
     // stale/legacy doc, so re-validate it here too (defense in depth) before
     // it drives the wallet debit below.
@@ -374,7 +374,7 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
     // Writes.
     tx.update(winnerRef, {status: "accepted"});
     for (let i = 0; i < otherRefs.length; i++) {
-      // Skip anything withdrawn/resolved since the pre-fetch — nothing to
+      // Skip anything withdrawn/resolved since the pre-fetch - nothing to
       // reject.
       if (otherSnaps[i].data()?.status === "pending") {
         tx.update(otherRefs[i], {status: "rejected"});
@@ -398,7 +398,7 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
  * requestor approves it (`approveMilestonePlan`), so every milestone is
  * written `proposed`. Server-owned because the amount split is the money
  * contract: it must total the accepted bid exactly (the check that used to
- * live only in the client), and locked milestones — already funded or beyond —
+ * live only in the client), and locked milestones - already funded or beyond -
  * can't be re-priced. Any amendment resets the un-locked tail to `proposed`,
  * forcing fresh approval.
  */
@@ -669,7 +669,7 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
 
 /**
  * Requestor releases a submitted milestone: the provider's wallet is credited
- * and, when this was the job's last unreleased milestone, the job completes —
+ * and, when this was the job's last unreleased milestone, the job completes -
  * the gate that unlocks reviews for both parties.
  */
 exports.releaseMilestone = functions.https.onCall(async (data, context) => {
@@ -749,7 +749,7 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
 // (lib/core/config/platform_config.dart), the source of truth.
 const MAX_TOPUP_SEN = 1000000; // RM 10,000
 
-// Cumulative cap on a single wallet's balance — otherwise a client could loop
+// Cumulative cap on a single wallet's balance - otherwise a client could loop
 // topUpWallet calls (each under the per-call cap) to mint unlimited balance.
 // Must stay in sync with PlatformConfig.maxWalletBalanceSen
 // (lib/core/config/platform_config.dart), the source of truth.
@@ -758,7 +758,7 @@ const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
 /**
  * Demo-only top-up that stands in for a payment gateway: credits the caller's
  * own wallet, capped per call (MAX_TOPUP_SEN) and capped in total
- * (MAX_WALLET_BALANCE_SEN) so a tampered — or merely looping — client can't
+ * (MAX_WALLET_BALANCE_SEN) so a tampered - or merely looping - client can't
  * mint absurd balances. A transaction (not a batch) is needed now: the total
  * cap is a balance precondition, so the current balance must be read and
  * checked atomically with the increment.
@@ -813,7 +813,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     const walletSnap = await tx.get(walletRef);
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
-    // Gate on the AVAILABLE balance — money locked against an accepted bid
+    // Gate on the AVAILABLE balance - money locked against an accepted bid
     // isn't free to withdraw, even though it hasn't left walletBalanceSen yet.
     const available = balance - (wallet.escrowLockedSen || 0);
     if (available < amountSen) {
@@ -830,7 +830,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
       type: "withdraw",
       participantIds: [uid],
     });
-    // A receipt to the actor is deliberate here — money leaving the wallet
+    // A receipt to the actor is deliberate here - money leaving the wallet
     // should always leave a visible trace.
     notify(tx, uid, {
       type: "payment",
@@ -843,11 +843,11 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
 });
 
 // ---------------------------------------------------------------------------
-// toyyibPay (sandbox) wallet top-up — the real payment-gateway path,
+// toyyibPay (sandbox) wallet top-up - the real payment-gateway path,
 // alongside the demo `topUpWallet` above (left untouched). A requestor
 // creates a bill here; toyyibPay's hosted page collects payment in a WebView;
 // and the money only ever moves in `creditToyyibpayTopup`, which never trusts
-// a caller-supplied status — it re-verifies against toyyibPay's own
+// a caller-supplied status - it re-verifies against toyyibPay's own
 // `getBillTransactions` API and credits the amount stored in OUR OWN
 // `topups/{billCode}` record, never the gateway's. Both `toyyibpayCallback`
 // (the webhook) and `reconcileToyyibpayTopup` (a client-driven safety net for
@@ -866,7 +866,7 @@ const TOYYIBPAY_CALLBACK_URL =
  * Requestor starts a real top-up: creates a toyyibPay sandbox bill for
  * `data.amountSen` and returns its hosted payment page for the client to open
  * in a WebView. Capped exactly like `topUpWallet` (per-call and cumulative),
- * so an over-cap top-up can't even be initiated — but no money moves here;
+ * so an over-cap top-up can't even be initiated - but no money moves here;
  * that only happens once the bill is independently confirmed paid.
  */
 exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
@@ -926,7 +926,7 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
       const parsed = await res.json().catch(() => null);
       const billCode = Array.isArray(parsed) ? parsed[0]?.BillCode : null;
       if (!billCode) {
-        // Never logs the secret — `parsed` is toyyibPay's own reply.
+        // Never logs the secret - `parsed` is toyyibPay's own reply.
         functions.logger.error("createToyyibpayBill: no BillCode", {parsed});
         throw new functions.https.HttpsError(
             "internal", "Could not start the payment. Please try again.");
@@ -944,7 +944,7 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     });
 
 /**
- * The authoritative verify-and-credit for one bill — the actual money path,
+ * The authoritative verify-and-credit for one bill - the actual money path,
  * shared by `toyyibpayCallback` and `reconcileToyyibpayTopup` so they can't
  * diverge. Always re-fetches the bill's transactions from toyyibPay itself
  * (never trusts a caller-supplied status), matches the paid amount against
@@ -981,7 +981,7 @@ async function creditToyyibpayTopup(billCode) {
   }
 
   // getBillTransactions reports the ringgit amount as a decimal string
-  // ("10.00") — convert to sen before comparing to our own stored amount.
+  // ("10.00") - convert to sen before comparing to our own stored amount.
   const paidSen = Math.round(parseFloat(paid.billpaymentAmount) * 100);
   if (paidSen !== topupSnap.data().amountSen) {
     functions.logger.error("toyyibpay amount mismatch", {
@@ -1009,7 +1009,7 @@ async function creditToyyibpayTopup(billCode) {
     const wallet = walletSnap.data() || {};
     const newBalance = (wallet.walletBalanceSen || 0) + rec.amountSen;
     if (newBalance > MAX_WALLET_BALANCE_SEN) {
-      // Genuinely-paid money is credited regardless — the cap is only ever
+      // Genuinely-paid money is credited regardless - the cap is only ever
       // pre-checked at bill creation, never a reason to refuse real funds.
       functions.logger.warn("toyyibpay credit exceeds wallet cap",
           {billCode, uid: rec.uid, newBalance});
@@ -1039,7 +1039,7 @@ async function creditToyyibpayTopup(billCode) {
 }
 
 /**
- * toyyibPay's server-to-server webhook — the money path. Answers 200 for
+ * toyyibPay's server-to-server webhook - the money path. Answers 200 for
  * every business-logic outcome (paid-but-forged-billcode, amount mismatch,
  * not yet paid, or a genuine credit) so toyyibPay stops retrying once we've
  * made a decision; only an actual failure to reach toyyibPay's API answers
@@ -1105,7 +1105,7 @@ exports.reconcileToyyibpayTopup =
 
 /**
  * Admin ruling on a flagged review. Hiding removes it from public display
- * AND reverses its rating out of the reviewee's aggregates — otherwise a
+ * AND reverses its rating out of the reviewee's aggregates - otherwise a
  * hidden abusive review would keep poisoning the Trust Score. Keeping just
  * clears the flag. Only this function may write `hidden` (rules forbid it).
  */
@@ -1160,8 +1160,8 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
 //
 // A soft ban: `setUserSuspended` flips the `suspended` flag on the target's
 // profile (an admin can suspend neither themselves nor another admin). The
-// flag is server-owned — Firestore rules deny every client write to it, so a
-// suspended user can't lift their own ban — and it gates both the client (the
+// flag is server-owned - Firestore rules deny every client write to it, so a
+// suspended user can't lift their own ban - and it gates both the client (the
 // router sends a suspended user to the "account suspended" screen) and the
 // money/work callables (`assertNotSuspended`). Reversible at any time.
 // ---------------------------------------------------------------------------
@@ -1307,11 +1307,11 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
 
 /**
  * Admin ruling on an open dispute. `release` pays the escrowed amount to the
- * provider and marks the milestone `released` — terminal, and if it was the
+ * provider and marks the milestone `released` - terminal, and if it was the
  * job's last one the job completes, unlocking reviews (mirrors
  * `releaseMilestone`). `refund` returns the money to the requestor and sends
  * the milestone back to `pending` for rework (carrying the ruling note), so
- * the worker can re-deliver instead of being stranded — the job stays in
+ * the worker can re-deliver instead of being stranded - the job stays in
  * progress and never auto-completes off a refund.
  */
 exports.resolveDispute = functions.https.onCall(async (data, context) => {
@@ -1360,7 +1360,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     };
     if (resolution === "refund") {
       // The milestone reopens to `pending` below (re-fundable), so this
-      // amount is a live commitment against the requestor's wallet again —
+      // amount is a live commitment against the requestor's wallet again -
       // re-lock it.
       beneficiaryUpdate.escrowLockedSen =
           (beneficiarySnap.data()?.escrowLockedSen || 0) + amountSen;
@@ -1379,7 +1379,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     } else {
       // Refund: the requestor gets their money back and the milestone reopens
       // for rework (re-fundable, re-deliverable) with the ruling note attached.
-      // The job stays in progress — a refund must never look like success.
+      // The job stays in progress - a refund must never look like success.
       tx.update(milestoneRef, {
         status: "pending",
         submissionNote: null,
@@ -1435,7 +1435,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
 /**
  * Admin-only, idempotent Trust Score v2 backfill: recounts every user's
  * `jobsCompleted` (as provider or requestor) and `disputesLost` from the
- * source collections and writes just those counters — the
+ * source collections and writes just those counters - the
  * `recomputeTrustOnUserWrite` consumer then rebuilds each user's breakdown.
  * Safe to re-run; also usable later as a "recount everything" repair tool.
  */
@@ -1480,7 +1480,7 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
 //
 // Cancelling an in-progress job is mutual: either party requests, the
 // counterparty accepts (an admin can override). The safety property is that
-// cancellation can never strand escrow — it is refused while any milestone
+// cancellation can never strand escrow - it is refused while any milestone
 // holds committed money (`funded`/`submitted`/`disputed`); that money must
 // first be released, or disputed and ruled on, through the paths above.
 // ---------------------------------------------------------------------------
@@ -1500,7 +1500,7 @@ const ESCROW_HELD_MESSAGE =
 /**
  * The still-locked portion of [job]'s accepted bid: the total minus whatever
  * has already been funded (which moved that slice from `escrowLockedSen`
- * into actual escrow at `fundMilestone`) — i.e. every terminal (released)
+ * into actual escrow at `fundMilestone`) - i.e. every terminal (released)
  * milestone. Cancellation is refused while any milestone is
  * funded/submitted/disputed, so those statuses never occur here.
  */
@@ -1669,7 +1669,7 @@ exports.respondToJobCancellation =
 
 /**
  * Admin override: cancels an in-progress job unilaterally (e.g. as the outcome
- * of an unworkable dispute). Still refused while escrow is held — the admin
+ * of an unworkable dispute). Still refused while escrow is held - the admin
  * resolves the dispute first, which settles the money.
  */
 exports.adminCancelJob = functions.https.onCall(async (data, context) => {
@@ -1717,7 +1717,7 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
 //
 // Firestore rules (jobBiddingOpen) already block a new/updated bid once a
 // job's deadline passes, but nothing flips the job's own status on its
-// own — an open job whose deadline lapsed with no bid accepted would
+// own - an open job whose deadline lapsed with no bid accepted would
 // otherwise sit "open" forever. This periodic sweep closes those out, reusing
 // `cancelled` rather than adding a new terminal status: the existing
 // `logJobStatusChange` timeline trigger already logs a cancellation, and
@@ -1728,7 +1728,7 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
 /**
  * Every 6 hours, cancels any still-open job whose bidding deadline has
  * passed. Requires the Blaze plan and the Cloud Scheduler API, plus the
- * `jobs` composite index on (status ASC, deadline ASC) — see
+ * `jobs` composite index on (status ASC, deadline ASC) - see
  * firestore.indexes.json.
  */
 exports.closeExpiredJobs = functions.pubsub
@@ -1751,7 +1751,7 @@ exports.closeExpiredJobs = functions.pubsub
     });
 
 // Grace window during which a completed/cancelled job's chat stays writable
-// for loose ends, after which it becomes read-only (never deleted — the
+// for loose ends, after which it becomes read-only (never deleted - the
 // history is dispute evidence).
 const CHAT_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -1759,7 +1759,7 @@ const CHAT_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
  * Closes a job's chat 14 days after the job ends. While the job is in progress
  * (which includes any period a dispute is open, since a disputed job can't
  * complete) the chat stays open. Sets `chatClosesAt` on the conversation, if
- * one exists — never creates the doc, and never deletes messages.
+ * one exists - never creates the doc, and never deletes messages.
  */
 exports.closeChatOnJobEnd = functions.firestore
     .document("jobs/{jobId}")
@@ -1790,7 +1790,7 @@ exports.closeChatOnJobEnd = functions.firestore
 // One pipeline feeds both surfaces: every event writes a doc to
 // `users/{uid}/notifications`, which the in-app list and bell badge stream
 // directly, and the single `onNotificationCreated` trigger fans out as an FCM
-// push. Business logic never talks to FCM itself — it just calls `notify()`
+// push. Business logic never talks to FCM itself - it just calls `notify()`
 // inside the transaction it already runs, so the notification is atomic with
 // the action it describes. Being a subcollection of the user doc, the
 // existing `cleanupUserDoc` recursive delete already covers cleanup.
@@ -1825,7 +1825,7 @@ function notify(txOrBatch, uid, {type, title, body, route = null}) {
  * The fan-out: a new notification doc becomes an FCM push to every device
  * token the user has registered. Tokens the platform reports as dead
  * (uninstall, cleared data, rotation) are pruned so the array can't grow
- * stale forever. Delivery is best-effort — the in-app list is the source of
+ * stale forever. Delivery is best-effort - the in-app list is the source of
  * truth and already has the doc.
  */
 exports.onNotificationCreated = functions.firestore
@@ -1889,7 +1889,7 @@ exports.onBidCreated = functions.firestore
 
 /**
  * Bid flipped to accepted → tell the winning provider (the bid doc id is
- * their uid). Rejected bids stay silent — one push per losing bidder on every
+ * their uid). Rejected bids stay silent - one push per losing bidder on every
  * acceptance would be noise, and the bid list already shows the outcome.
  */
 exports.onBidAccepted = functions.firestore
@@ -1985,11 +1985,11 @@ exports.onReviewCreated = functions.firestore
 // ---------------------------------------------------------------------------
 // Job activity timeline: a per-job, server-written event log shown on the job
 // detail. Events live at `jobs/{jobId}/events/{eventId}`, written only by the
-// triggers below (client writes are denied — see firestore.rules), so the
+// triggers below (client writes are denied - see firestore.rules), so the
 // timeline can't be forged. Deterministic event ids make at-least-once
 // trigger retries idempotent (overwrite instead of duplicate), at the cost of
 // collapsing a rare repeat of the same transition (e.g. a re-fund after a
-// refund) — acceptable here.
+// refund) - acceptable here.
 // ---------------------------------------------------------------------------
 
 /** Writes (or, on a retried trigger, overwrites) one timeline entry. */
@@ -2006,8 +2006,8 @@ exports.logJobPosted = functions.firestore.document("jobs/{jobId}")
 
 /**
  * Logs the job-level transitions worth surfacing on the timeline. Guarded on
- * an actual `status` change, so the many non-status writes on this doc —
- * bidCount, completionCounted, cancellation request fields — are ignored.
+ * an actual `status` change, so the many non-status writes on this doc -
+ * bidCount, completionCounted, cancellation request fields - are ignored.
  */
 exports.logJobStatusChange = functions.firestore
     .document("jobs/{jobId}")
@@ -2033,7 +2033,7 @@ exports.logJobStatusChange = functions.firestore
     });
 
 /**
- * Logs the meaningful milestone-status transitions on the timeline — skips
+ * Logs the meaningful milestone-status transitions on the timeline - skips
  * `proposed`/`pending` from the plan/approve flow (noise), and only logs a
  * `pending` transition when it follows `disputed` (a dispute refund reopening
  * the milestone for rework).
@@ -2073,7 +2073,7 @@ exports.logMilestoneStatusChange = functions.firestore
 // ---------------------------------------------------------------------------
 // Gemini posting assistant (plan §3.4.5).
 //
-// Proxied through this callable so the API key never ships in the APK — it
+// Proxied through this callable so the API key never ships in the APK - it
 // lives in Cloud Secret Manager (`firebase functions:secrets:set GEMINI_KEY`),
 // the same reasoning that keeps wallet writes server-side. Both assists are
 // advisory: every failure path returns null rather than throwing, so the
@@ -2139,7 +2139,7 @@ const PRICE_SCHEMA = {
 /**
  * Parses the model's price reply. `PRICE_SCHEMA` constrains the model to
  * clean JSON, but a truncated body can still throw, so this stays
- * try/catch. Returns `{minSen, maxSen}` (integer sen — the client never
+ * try/catch. Returns `{minSen, maxSen}` (integer sen - the client never
  * handles floating ringgit) or null when unusable.
  */
 function parsePriceJson(text) {
@@ -2180,7 +2180,7 @@ async function fetchInlineImage(photoUrl) {
  * One callable serving both post-a-job assists, keyed by `kind`
  * ('description' | 'price') so the prompt/parse/guard logic lives in one
  * place. Returns `{description}` / `{minSen, maxSen}`, or null for
- * "no suggestion" — the client treats null as a soft miss, never an error.
+ * "no suggestion" - the client treats null as a soft miss, never an error.
  */
 exports.suggestJobDetails = functions
     .runWith({secrets: [geminiKey]})
@@ -2253,6 +2253,6 @@ exports.suggestJobDetails = functions
           functions.logger.info("assist soft-miss (quota/offline/transient)",
               {status, kind});
         }
-        return null; // advisory only — never a hard failure
+        return null; // advisory only - never a hard failure
       }
     });

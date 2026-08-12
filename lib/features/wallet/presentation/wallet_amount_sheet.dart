@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/util/money.dart';
@@ -85,13 +88,14 @@ class _WalletAmountSheetState extends State<WalletAmountSheet> {
     final amountSen = parseRmToSen(_amount.text)!;
     try {
       await widget.onSubmit(amountSen);
+      unawaited(HapticFeedback.mediumImpact());
       if (mounted) Navigator.of(context).pop(true);
     } on FirebaseFunctionsException catch (e, st) {
       logPayment('wallet_amount_sheet.submit.error',
           data: {'amountSen': amountSen, 'code': e.code},
           error: e,
           stackTrace: st);
-      // The wallet functions raise user-readable messages — but fall back
+      // The wallet functions raise user-readable messages - but fall back
       // rather than leaving the sheet with no explanation when one isn't set.
       if (mounted) {
         setState(() =>

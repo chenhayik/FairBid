@@ -6,7 +6,7 @@ import '../../../auth/presentation/validators.dart';
 import '../../domain/service_address.dart';
 
 /// Modal form to add or edit a job's private [ServiceAddress]. Only shared
-/// with the job's hired provider — never with other bidders (see
+/// with the job's hired provider - never with other bidders (see
 /// `firestore.rules` and `job_address_card.dart`).
 class ServiceAddressSheet extends StatelessWidget {
   const ServiceAddressSheet({super.key, this.initial, this.defaultCity});

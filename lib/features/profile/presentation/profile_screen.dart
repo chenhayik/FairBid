@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../../core/config/platform_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../../core/widgets/user_avatar.dart';
 import '../../admin/data/verification_repository.dart';
 import '../../admin/domain/pending_verification.dart';
@@ -45,7 +46,7 @@ class ProfileScreen extends StatelessWidget {
             _Header(user: user),
             const SizedBox(height: 24),
             // Admins are platform staff, not marketplace participants, so the
-            // Trust Score / earnings / client bio / reviews don't apply — show
+            // Trust Score / earnings / client bio / reviews don't apply - show
             // their access and account details instead.
             if (isAdmin) ...[
               const _AdminAccessCard(),
@@ -235,8 +236,8 @@ class _AdminActivityCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<PendingVerification>>(
-      stream: context.read<VerificationRepository>().watchPending(),
+    return KeyedStreamBuilder<List<PendingVerification>>(
+      create: context.read<VerificationRepository>().watchPending,
       builder: (context, snapshot) {
         final count = snapshot.data?.length;
         return StatCard(
@@ -354,7 +355,7 @@ class _TrustScoreCard extends StatelessWidget {
   }
 }
 
-/// Navigation card to the wallet screen — Earnings & Payouts for providers,
+/// Navigation card to the wallet screen - Earnings & Payouts for providers,
 /// My Wallet (with the demo top-up) for requestors.
 class _EarningsNavCard extends StatelessWidget {
   const _EarningsNavCard({required this.isProvider});
@@ -363,10 +364,8 @@ class _EarningsNavCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InkWell(
-      onTap: () => context.push('/profile/earnings'),
-      borderRadius: BorderRadius.circular(12),
-      child: AppCard(
+    return AppCard(
+        onTap: () => context.push('/profile/earnings'),
         child: Row(
           children: [
             CircleAvatar(
@@ -394,8 +393,7 @@ class _EarningsNavCard extends StatelessWidget {
             Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
           ],
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -515,10 +513,11 @@ class _ReviewsCard extends StatelessWidget {
     final reviews = context.read<ReviewRepository>();
 
     return AppCard(
-      child: StreamBuilder<List<Review>>(
+      child: KeyedStreamBuilder<List<Review>>(
         // Only 3 are ever shown below (.take(3)), so there's no need to
         // stream more than that.
-        stream: reviews.watchReviews(user.uid, limit: 3),
+        cacheKey: user.uid,
+        create: () => reviews.watchReviews(user.uid, limit: 3),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return const EmptyState(

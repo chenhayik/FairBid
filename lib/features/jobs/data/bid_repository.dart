@@ -4,7 +4,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../domain/bid.dart';
 
 /// Thrown by [BidRepository.acceptBid] when the job is no longer open or the
-/// bid is no longer pending — e.g. a second accept, or the bid was withdrawn,
+/// bid is no longer pending - e.g. a second accept, or the bid was withdrawn,
 /// raced this one.
 class BidAcceptRaceException implements Exception {
   const BidAcceptRaceException();
@@ -12,7 +12,7 @@ class BidAcceptRaceException implements Exception {
 
 /// Thrown by [BidRepository.acceptBid] when the requestor's available balance
 /// (wallet balance minus what's already locked against other accepted bids)
-/// can't cover this bid's amount — the server-side gate in the `acceptBid`
+/// can't cover this bid's amount - the server-side gate in the `acceptBid`
 /// Cloud Function.
 class InsufficientBalanceException implements Exception {
   const InsufficientBalanceException({
@@ -27,7 +27,7 @@ class InsufficientBalanceException implements Exception {
 }
 
 /// Thrown by [BidRepository.withdrawBid] when the bid is no longer pending
-/// — e.g. it was just accepted or rejected by a concurrent [acceptBid].
+/// - e.g. it was just accepted or rejected by a concurrent [acceptBid].
 class BidNotPendingException implements Exception {
   const BidNotPendingException();
 }
@@ -35,7 +35,7 @@ class BidNotPendingException implements Exception {
 /// Thrown by [BidRepository.submitBid] when the backend rejects the write
 /// (`permission-denied`). The usual cause is a stale snapshot: the bid carries
 /// the provider's Trust Score as the sheet saw it, and the security rules pin
-/// that to the profile's current value — so if the score was recomputed
+/// that to the profile's current value - so if the score was recomputed
 /// server-side after the sheet opened, the write is refused. It can also mean
 /// the job stopped accepting bids. Either way the fix is to reopen the sheet
 /// (which reloads the fresh profile) and submit again, so the sheet's captured
@@ -55,14 +55,14 @@ abstract interface class BidRepository {
   Future<void> withdrawBid(String jobId, String providerId);
 
   /// Streams all bids on a job (requestor view). Sorting by price or Trust
-  /// Score is done client-side — a job only ever has a handful of bids.
+  /// Score is done client-side - a job only ever has a handful of bids.
   Stream<List<Bid>> watchBids(String jobId);
 
   /// Streams the provider's own bids across all jobs (newest first), for the
   /// "Pending Bids" list on the provider side.
   Stream<List<Bid>> watchMyBids(String providerId);
 
-  /// Streams the provider's existing bid on one job, or null — used by the
+  /// Streams the provider's existing bid on one job, or null - used by the
   /// job detail to decide between "Submit a bid" and "Withdraw".
   Stream<Bid?> watchMyBid(String jobId, String providerId);
 
@@ -71,7 +71,7 @@ abstract interface class BidRepository {
   Future<void> acceptBid(Bid bid);
 }
 
-/// Firestore-backed [BidRepository]. Bids live at `jobs/{jobId}/bids/{uid}` —
+/// Firestore-backed [BidRepository]. Bids live at `jobs/{jobId}/bids/{uid}` -
 /// the provider's uid as the doc id enforces one bid per provider per job.
 class FirestoreBidRepository implements BidRepository {
   FirestoreBidRepository(
@@ -118,7 +118,7 @@ class FirestoreBidRepository implements BidRepository {
     final bidRef = _bids(jobId).doc(providerId);
     // Only decrement when a bid actually existed, so a double-withdraw can't
     // push the count below the real number of bids. Refuse to withdraw a bid
-    // that's already been accepted/rejected — deleting it would orphan the
+    // that's already been accepted/rejected - deleting it would orphan the
     // job's winner fields.
     return _firestore.runTransaction((tx) async {
       final existing = await tx.get(bidRef);
@@ -179,7 +179,7 @@ class FirestoreBidRepository implements BidRepository {
         );
       }
       // `reason: 'race'` (job no longer open / bid no longer pending), or any
-      // other failed-precondition — surface as the race case either way.
+      // other failed-precondition - surface as the race case either way.
       throw const BidAcceptRaceException();
     }
   }

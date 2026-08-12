@@ -35,7 +35,7 @@ enum DisputeResolution {
 }
 
 /// One dispute over a funded/delivered milestone, stored at
-/// `disputes/{disputeId}`. Read-only on the client — the `raiseDispute` and
+/// `disputes/{disputeId}`. Read-only on the client - the `raiseDispute` and
 /// `resolveDispute` Cloud Functions own every write, so there is no `toMap()`
 /// (same pattern as `LedgerEntry`).
 class Dispute {
@@ -70,7 +70,7 @@ class Dispute {
 
   final String raisedByUid;
 
-  /// `'requestor'` or `'provider'` — who opened the dispute.
+  /// `'requestor'` or `'provider'` - who opened the dispute.
   final String raisedByRole;
 
   final String requestorId;

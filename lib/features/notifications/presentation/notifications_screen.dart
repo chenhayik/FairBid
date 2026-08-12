@@ -116,17 +116,14 @@ class _NotificationTile extends StatelessWidget {
     final theme = Theme.of(context);
     final unread = !notification.read;
 
-    return InkWell(
+    // AppCard rather than a hand-rolled Container: it reproduced AppCard's
+    // decoration exactly but only to vary the fill, and being opaque it also
+    // swallowed the InkWell's ripple.
+    return AppCard(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: unread ? context.fairbid.subtleBlue : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: context.fairbid.borderSubtle),
-        ),
-        child: Row(
+      color: unread ? context.fairbid.subtleBlue : null,
+      padding: const EdgeInsets.all(16),
+      child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(notification.type.icon,
@@ -168,7 +165,6 @@ class _NotificationTile extends StatelessWidget {
               ),
             ),
           ],
-        ),
       ),
     );
   }

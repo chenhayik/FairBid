@@ -16,7 +16,7 @@ abstract interface class PushService {
   });
 
   /// Asks the user for notification permission (Android 13+ shows a system
-  /// prompt). Safe to call repeatedly — the OS only prompts once.
+  /// prompt). Safe to call repeatedly - the OS only prompts once.
   Future<void> requestPermission();
 }
 

@@ -1,7 +1,7 @@
 /// The role a person signs up as. Stored on their `users/{uid}` profile and
 /// used to route them to the correct home experience after login.
 ///
-/// `admin` is never chosen during registration — admins are created manually
+/// `admin` is never chosen during registration - admins are created manually
 /// in the Firebase console (see the technical plan, §3.1.1).
 enum UserRole {
   requestor,

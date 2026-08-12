@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -87,6 +90,7 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
       await context
           .read<ReviewRepository>()
           .leaveReview(revieweeId: widget.revieweeId, review: review);
+      unawaited(HapticFeedback.mediumImpact());
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } on ReviewAlreadyExistsException {
@@ -160,7 +164,7 @@ class _StarSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gold = context.fairbid.warning;
+    final gold = context.fairbid.warningText;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

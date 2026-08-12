@@ -1,7 +1,7 @@
 /// One entry in a job's server-written activity timeline, stored at
 /// `jobs/{jobId}/events/{eventId}` (see the `logJobPosted`/`logJobStatusChange`/
-/// `logMilestoneStatusChange` Cloud Functions — the client never writes here).
-/// Framework-agnostic — the repository handles the Firestore ↔ [JobEvent]
+/// `logMilestoneStatusChange` Cloud Functions - the client never writes here).
+/// Framework-agnostic - the repository handles the Firestore ↔ [JobEvent]
 /// mapping (incl. Timestamp conversion).
 class JobEvent {
   const JobEvent({
@@ -14,7 +14,7 @@ class JobEvent {
   /// The document's id (its path, not a stored field).
   final String id;
 
-  /// The event kind, e.g. `posted`, `assigned`, `funded`, `completed` — used
+  /// The event kind, e.g. `posted`, `assigned`, `funded`, `completed` - used
   /// to pick a leading icon in the UI.
   final String type;
 

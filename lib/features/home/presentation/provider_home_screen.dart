@@ -7,6 +7,7 @@ import '../../../core/location/geo.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../jobs/data/bid_repository.dart';
 import '../../jobs/data/job_repository.dart';
@@ -119,8 +120,9 @@ class _ActiveJobsStat extends StatelessWidget {
     if (uid == null) {
       return const StatCard(label: 'Active Jobs', value: '0');
     }
-    return StreamBuilder<List<Job>>(
-      stream: context.read<JobRepository>().watchAssignedJobs(uid!),
+    return KeyedStreamBuilder<List<Job>>(
+      cacheKey: uid,
+      create: () => context.read<JobRepository>().watchAssignedJobs(uid!),
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
@@ -145,8 +147,9 @@ class _PendingBidsStat extends StatelessWidget {
     if (uid == null) {
       return const StatCard(label: 'Pending Bids', value: '0');
     }
-    return StreamBuilder<List<Bid>>(
-      stream: context.read<BidRepository>().watchMyBids(uid!),
+    return KeyedStreamBuilder<List<Bid>>(
+      cacheKey: uid,
+      create: () => context.read<BidRepository>().watchMyBids(uid!),
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
@@ -172,8 +175,9 @@ class _TotalEarningsStat extends StatelessWidget {
     if (uid == null) {
       return const StatCard(label: 'Total Earnings', value: '-');
     }
-    return StreamBuilder<List<Milestone>>(
-      stream:
+    return KeyedStreamBuilder<List<Milestone>>(
+      cacheKey: uid,
+      create: () =>
           context.read<MilestoneRepository>().watchProviderMilestones(uid!),
       builder: (context, snapshot) {
         if (snapshot.hasError ||
@@ -212,9 +216,29 @@ class _NearbyJobs extends StatelessWidget {
     }
 
     final base = LatLng(user.baseLat!, user.baseLng!);
-    return StreamBuilder<List<Job>>(
-      stream: repo.watchOpenJobs(),
+    return KeyedStreamBuilder<List<Job>>(
+      create: repo.watchOpenJobs,
       builder: (context, snapshot) {
+        // Loading and error both used to fall through to "No jobs yet", so a
+        // provider was told there was no work near them while the query was
+        // still running, or whenever it failed.
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const AppCard(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return const AppCard(
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: "Couldn't load nearby jobs",
+              message: 'Please check your connection and try again.',
+            ),
+          );
+        }
         final jobs = snapshot.data ?? [];
         if (jobs.isEmpty) {
           return const AppCard(
@@ -265,14 +289,14 @@ class _VerificationBadge extends StatelessWidget {
       'pending' => (
           'Verification Pending',
           Icons.hourglass_top_rounded,
-          context.fairbid.warning
+          context.fairbid.warningText
         ),
       'rejected' => (
           'Verification Rejected',
           Icons.error_outline,
           context.fairbid.danger
         ),
-      _ => ('Unverified', Icons.info_outline, context.fairbid.warning),
+      _ => ('Unverified', Icons.info_outline, context.fairbid.warningText),
     };
     return Align(
       alignment: Alignment.centerLeft,

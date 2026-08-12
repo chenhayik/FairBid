@@ -60,7 +60,7 @@ class FirestoreVerificationRepository implements VerificationRepository {
   }
 
   /// Merges in the applicant's private/payout doc (phone and payout bank
-  /// details) before building the snapshot — mirrors
+  /// details) before building the snapshot - mirrors
   /// `AuthRepository._mapUser`'s merge. A missing/unreadable private doc
   /// degrades to null (applicants who haven't saved since the
   /// payout-privacy migration keep showing those fields from the legacy

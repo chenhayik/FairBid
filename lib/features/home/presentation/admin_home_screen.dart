@@ -7,8 +7,8 @@ import '../../admin/presentation/verification_queue_screen.dart';
 import '../../disputes/presentation/dispute_queue_screen.dart';
 import 'home_app_bar.dart';
 
-/// Admin Home: the admin surfaces from the technical plan §9 — verification
-/// queue, dispute queue, review moderation and platform statistics — plus user
+/// Admin Home: the admin surfaces from the technical plan §9 - verification
+/// queue, dispute queue, review moderation and platform statistics - plus user
 /// management, as Material tabs under the shared app bar.
 class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key});

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// What a notification is about — drives its leading icon in the list.
+/// What a notification is about - drives its leading icon in the list.
 enum NotificationType {
   bidReceived,
   bidAccepted,
@@ -37,7 +37,7 @@ enum NotificationType {
       };
 }
 
-/// One entry in `users/{uid}/notifications`. Read-only on the client — the
+/// One entry in `users/{uid}/notifications`. Read-only on the client - the
 /// Cloud Functions write them (see `notify()` in functions/index.js), so
 /// there is no `toMap()`; the only client-writable field is `read`.
 class AppNotification {

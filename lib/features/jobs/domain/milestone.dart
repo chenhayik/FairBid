@@ -47,7 +47,7 @@ enum MilestoneStatus {
 
 /// One escrow milestone of a job, stored at `jobs/{jobId}/milestones/{id}`.
 /// The accepted provider proposes them; the requestor funds and releases them
-/// (via Cloud Functions — see MilestoneRepository). Framework-agnostic — the
+/// (via Cloud Functions - see MilestoneRepository). Framework-agnostic - the
 /// repository handles the Firestore ↔ [Milestone] mapping.
 class Milestone {
   const Milestone({
@@ -79,7 +79,7 @@ class Milestone {
   final String description;
   final int amountSen;
 
-  /// Position in the proposed plan (0-based) — milestones in one plan share a
+  /// Position in the proposed plan (0-based) - milestones in one plan share a
   /// server timestamp, so this keeps their order stable.
   final int order;
 

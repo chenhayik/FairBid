@@ -8,7 +8,7 @@ import 'dart:developer' as developer;
 /// filtered on it.
 ///
 /// NEVER pass an auth token, the toyyibPay secret key, or a full bank
-/// account number in [data] — sen amounts, bill codes, ids and short
+/// account number in [data] - sen amounts, bill codes, ids and short
 /// outcome/status strings only.
 void logPayment(
   String step, {

@@ -5,7 +5,7 @@ import 'penang.dart';
 /// [districtCode] (required) and [town] (optional) vary.
 ///
 /// The district is decided by offline point-in-polygon against the shipped
-/// boundaries (see `PenangDistricts`) — never by the device geocoder, which
+/// boundaries (see `PenangDistricts`) - never by the device geocoder, which
 /// is only ever used to suggest a [town] label.
 class Region {
   const Region({
@@ -21,7 +21,7 @@ class Region {
   final String districtCode;
   final String districtName;
 
-  /// Optional — the picker leaves this unset when the geocoder couldn't
+  /// Optional - the picker leaves this unset when the geocoder couldn't
   /// suggest one of [kPenangTowns] and the user didn't pick one either.
   final String? town;
 
@@ -43,7 +43,7 @@ class Region {
   };
 
   /// Rebuilds a [Region] from a stored map. Tolerates legacy data that has no
-  /// structured region at all — returns `null` when [map] is null or is
+  /// structured region at all - returns `null` when [map] is null or is
   /// missing a district code, so callers can fall back to a raw address
   /// string instead of crashing.
   static Region? fromMap(Map<String, dynamic>? map) {

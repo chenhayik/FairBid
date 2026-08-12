@@ -10,7 +10,7 @@ import '../domain/user_role.dart';
 import 'auth_controller.dart';
 import 'validators.dart';
 
-/// "Join FairBid" — create account with Hire / Work role cards, terms
+/// "Join FairBid" - create account with Hire / Work role cards, terms
 /// agreement, and Google sign-up, matching the design mock.
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});

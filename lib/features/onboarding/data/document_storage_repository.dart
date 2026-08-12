@@ -4,7 +4,7 @@ import 'package:image_picker/image_picker.dart';
 /// Uploads images and returns their public download URLs. Verification docs go
 /// under owner-only `verification/{uid}/...`; job photos and avatars go under
 /// `jobs/{uid}/...` and `avatars/{uid}/...` respectively (both readable by any
-/// signed-in user) — see `storage.rules`.
+/// signed-in user) - see `storage.rules`.
 abstract interface class DocumentStorageRepository {
   /// Uploads a verification image (ID, selfie, certificate, portfolio).
   /// [purpose] becomes part of the file name.

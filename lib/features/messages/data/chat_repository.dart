@@ -15,7 +15,7 @@ abstract interface class ChatRepository {
   /// Streams the user's conversations, most recently active first.
   Stream<List<Conversation>> watchConversations(String uid);
 
-  /// Streams one conversation — null until it has been created.
+  /// Streams one conversation - null until it has been created.
   Stream<Conversation?> watchConversation(String conversationId);
 
   /// Streams the newest 50 messages, newest first (the thread renders them
@@ -42,7 +42,7 @@ abstract interface class ChatRepository {
 /// Firestore-backed [ChatRepository]. Conversations live at
 /// `conversations/{jobId}_{providerId}` with their messages in a
 /// subcollection. Counter updates use dotted-path atomic increments in the
-/// same batch as the message write — not a transaction, since the unread
+/// same batch as the message write - not a transaction, since the unread
 /// counter is a UI hint, not an invariant-critical value.
 class FirestoreChatRepository implements ChatRepository {
   FirestoreChatRepository({FirebaseFirestore? firestore})

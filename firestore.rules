@@ -20,7 +20,7 @@ service cloud.firestore {
 
     // A suspended account keeps read access but is frozen out of every write
     // (posting, bidding, reviewing, chatting, editing its profile). The
-    // `suspended` flag is server-owned — set only by the setUserSuspended
+    // `suspended` flag is server-owned - set only by the setUserSuspended
     // Cloud Function; the users write rules below forbid any client from
     // setting or clearing it, so a suspended user can't lift their own ban.
     function isSuspended() {
@@ -32,7 +32,7 @@ service cloud.firestore {
     // User profiles. Any signed-in user may read a profile (needed to show
     // names/ratings on jobs, bids and chats). A user may create/edit their own
     // document, except for the Trust Score fields (score, breakdown and its
-    // raw inputs) and the wallet balance — those are only ever written by
+    // raw inputs) and the wallet balance - those are only ever written by
     // Cloud Functions (admin SDK, bypasses rules), so they can't be forged by
     // a client write, at creation time or later. An admin may additionally
     // record a verification decision on any user (only the verification
@@ -43,12 +43,12 @@ service cloud.firestore {
     // here too (any signed-in user can read another user's wallet balance).
     // They're written by Cloud Functions and read by the escrow logic, so
     // moving them under private/ is a larger change than the payout/phone
-    // move below — deliberately left alone for now.
+    // move below - deliberately left alone for now.
     match /users/{userId} {
       // 'jobsPosted'/'jobsAssigned'/'hireRate' are the requestor job-posting
       // counters behind the public profile's client-history strip
       // (functions/index.js's bumpJobsPostedOnCreate /
-      // bumpJobsAssignedOnAccept) — server-owned exactly like the Trust
+      // bumpJobsAssignedOnAccept) - server-owned exactly like the Trust
       // Score fields, so a client can't forge a higher hire rate.
       function trustFields() {
         return ['trustScore', 'ratingSum', 'ratingCount', 'jobsCompleted',
@@ -87,7 +87,7 @@ service cloud.firestore {
       // Reviews left on a user's profile after a completed job. Readable by
       // any signed-in user; a reviewer may only create a review as themselves,
       // never on their own profile, and only once the named job is completed
-      // and both parties were its participants — this ensures the
+      // and both parties were its participants - this ensures the
       // `recomputeTrustScore` Cloud Function only ever fires for genuine
       // completed-job reviews. Reviews are immutable once written.
       match /reviews/{reviewId} {
@@ -105,7 +105,7 @@ service cloud.firestore {
                           in [request.auth.uid, userId]
                       && jobData(request.resource.data.jobId).acceptedProviderId
                           in [request.auth.uid, userId]
-                      // Ratings must be a genuine 1–5 star value — otherwise a
+                      // Ratings must be a genuine 1–5 star value - otherwise a
                       // forged rating corrupts the reviewee's Trust Score.
                       && request.resource.data.rating is int
                       && request.resource.data.rating >= 1
@@ -135,7 +135,7 @@ service cloud.firestore {
       // `verification`) and, since payout bank details (bankName,
       // accountHolder, accountLast4, branchCode) and the phone number used to
       // sit on the world-readable doc above, those too (doc id `payout`). The
-      // owner writes it; only the owner and admins may read it — so a Storage
+      // owner writes it; only the owner and admins may read it - so a Storage
       // download URL (whose token bypasses Storage rules) can't be harvested
       // from another user's world-readable profile, and neither can a payout
       // bank detail or phone number.
@@ -163,7 +163,7 @@ service cloud.firestore {
     }
 
     // The caller's own stored Trust Score snapshot, used to pin a bid's
-    // `providerTrustScore`/`providerScoreVisible` fields to reality — so a
+    // `providerTrustScore`/`providerScoreVisible` fields to reality - so a
     // provider can't forge a higher score on their own bid to top the
     // requestor's Best Value ranking.
     function callerTrustScore() {
@@ -177,7 +177,7 @@ service cloud.firestore {
     }
 
     // The caller's own stored avatar, used to pin a bid's `providerPhotoUrl`
-    // to reality — so a provider can't put someone else's (or an arbitrary
+    // to reality - so a provider can't put someone else's (or an arbitrary
     // external) image on their bid. `.get(..., null)` means a provider with
     // no photo yet still passes (both sides read as null).
     function callerPhotoUrl() {
@@ -196,7 +196,7 @@ service cloud.firestore {
     }
 
     // Bidding is open while the job's status is 'open' AND its optional
-    // deadline hasn't passed — even if the closeExpiredJobs sweep hasn't yet
+    // deadline hasn't passed - even if the closeExpiredJobs sweep hasn't yet
     // flipped an expired job to 'cancelled', so a late bid can't sneak in
     // during that lag.
     function jobBiddingOpen(jobId) {
@@ -213,7 +213,7 @@ service cloud.firestore {
     // The only `status` transition a client may write: cancelling a still-open
     // job (open → cancelled). Accepting a bid (open → in_progress) now goes
     // through the acceptBid Cloud Function (it gates on wallet balance), and
-    // every other transition — completion, mid-flight cancellation — is
+    // every other transition - completion, mid-flight cancellation - is
     // likewise owned by a Cloud Function (admin SDK bypasses rules), so a
     // requestor can't self-accept, self-complete or strand escrow by a direct
     // write.
@@ -243,7 +243,7 @@ service cloud.firestore {
 
     // Jobs. Readable by any signed-in user (providers browse). Only a
     // requestor may create their own job; only the owner may edit it (subject
-    // to the status/cancellation guards above) — except `bidCount`, which any
+    // to the status/cancellation guards above) - except `bidCount`, which any
     // signed-in user may bump so a provider's bid submit/withdraw batch can
     // keep the counter in sync.
     match /jobs/{jobId} {
@@ -283,19 +283,19 @@ service cloud.firestore {
                               && request.resource.data.amountSen > 0
                               && request.resource.data.amountSen <= 100000000
                               // The Trust Score snapshot must match the
-                              // caller's own stored profile — never a value
+                              // caller's own stored profile - never a value
                               // the client made up.
                               && request.resource.data.providerTrustScore
                                   == callerTrustScore()
                               && request.resource.data
                                   .get('providerScoreVisible', false)
                                   == callerScoreVisible()
-                              // Same pin for the photo snapshot — a bid that
+                              // Same pin for the photo snapshot - a bid that
                               // omits it entirely (no photo) still passes.
                               && request.resource.data
                                   .get('providerPhotoUrl', null)
                                   == callerPhotoUrl();
-        // Withdraw own bid — but only while it's still pending, so a provider
+        // Withdraw own bid - but only while it's still pending, so a provider
         // can't delete a bid the requestor just accepted and orphan the job's
         // winner fields.
         allow delete: if isSignedIn() && request.auth.uid == bidId
@@ -325,7 +325,7 @@ service cloud.firestore {
 
       // Per-job activity timeline: a server-written event log (job posted,
       // status transitions, milestone transitions). Written only by Cloud
-      // Functions (admin SDK bypasses rules) — like `transactions` and
+      // Functions (admin SDK bypasses rules) - like `transactions` and
       // `disputes`, this keeps the log from being forged by a client write.
       // Readable by the job's two participants and admins, mirroring the
       // milestones sub-block above.
@@ -337,7 +337,7 @@ service cloud.firestore {
 
       // The requestor's precise service address (street, postcode, access
       // notes), kept private: readable only by the job's owner, its
-      // accepted provider and admins — never by other bidders. Written by
+      // accepted provider and admins - never by other bidders. Written by
       // the owner.
       match /private/{docId} {
         allow read: if isSignedIn()
@@ -347,7 +347,7 @@ service cloud.firestore {
       }
     }
 
-    // Collection-group reads for a provider's own cross-job listings — their
+    // Collection-group reads for a provider's own cross-job listings - their
     // bids ("Pending Bids") and their milestones (the Earnings figures).
     // Rules v2 only applies `match /{path=**}` rules to collectionGroup
     // queries, so the per-job rules above don't cover these; both queries
@@ -367,14 +367,14 @@ service cloud.firestore {
 
     // Chat between a job's requestor and its accepted provider. The doc id is
     // `{jobId}_{providerId}`; either participant may lazily create it. Reads
-    // and updates are participant-only — updates carry the last-message
+    // and updates are participant-only - updates carry the last-message
     // preview and unread counters, and like the plan's other client-side
     // counter writes, rules can't cross-check them against the sibling
     // message write. The participant list itself is immutable.
     match /conversations/{conversationId} {
       // Admins may read (not write) so they can review the job's chat
       // history when ruling on a dispute. `resource == null` permits a `get`
-      // on a not-yet-created conversation — the client checks existence
+      // on a not-yet-created conversation - the client checks existence
       // (openConversation) before lazily creating it, and a non-existent doc
       // exposes no data. Without this, that existence check is denied
       // (null `resource.data`) and the very first chat-open always fails.
@@ -410,7 +410,7 @@ service cloud.firestore {
         }
         // The chat is open while `chatClosesAt` is unset or still in the
         // future; a Cloud Function sets it 14 days after the job ends. History
-        // stays readable regardless — only new sends are gated.
+        // stays readable regardless - only new sends are gated.
         function chatIsOpen(conv) {
           return !('chatClosesAt' in conv)
               || conv.chatClosesAt == null
@@ -431,7 +431,7 @@ service cloud.firestore {
     // Append-only wallet ledger; only the Cloud Functions (admin SDK) write
     // it. `participantIds` holds the entry's real uids (never the escrow
     // sentinel), so each party reads only their own history. Admins may read
-    // it all — the platform-stats released-volume aggregation needs it.
+    // it all - the platform-stats released-volume aggregation needs it.
     match /transactions/{transactionId} {
       allow read: if isSignedIn()
                   && (request.auth.uid in resource.data.participantIds

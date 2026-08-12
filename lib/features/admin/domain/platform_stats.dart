@@ -21,7 +21,7 @@ class PlatformStats {
   final int openDisputes;
 
   /// Total escrow ever released to providers (the `release` ledger rows), in
-  /// sen — the money the marketplace has actually moved.
+  /// sen - the money the marketplace has actually moved.
   final int releasedVolumeSen;
 
   int get totalUsers => requestors + providers;

@@ -1,4 +1,4 @@
-# FairBid — Security & Threat Model
+# FairBid - Security & Threat Model
 
 ## 1. Overview
 
@@ -7,7 +7,7 @@ stakes each provider's standing on a **Trust Score** that drives job ranking. A
 marketplace where money *and* reputation move is only as trustworthy as its
 weakest write path. This chapter documents FairBid's security model, the threats
 it defends against, an adversarial audit of the implementation, and the
-vulnerabilities that were found and fixed — each one now covered by an automated
+vulnerabilities that were found and fixed - each one now covered by an automated
 test.
 
 ## 2. Security architecture
@@ -15,9 +15,9 @@ test.
 Three principles underpin the design:
 
 1. **The client is never trusted with money or reputation.** Every field that
-   represents value or trust — `walletBalanceSen`, `escrowLockedSen`,
+   represents value or trust - `walletBalanceSen`, `escrowLockedSen`,
    `trustScore`, the `trust` breakdown, `ratingSum`/`ratingCount`,
-   `jobsCompleted`, `disputesLost` — is written **only** by Cloud Functions
+   `jobsCompleted`, `disputesLost` - is written **only** by Cloud Functions
    running with the Firebase Admin SDK (which bypasses security rules). Firestore
    rules **deny every client write** to these fields, at both creation and
    update time.
@@ -29,8 +29,8 @@ Three principles underpin the design:
    live in Google Cloud Secret Manager and are read only inside Cloud Functions;
    the distributed APK contains none.
 
-Every money movement — accept-bid escrow lock, milestone fund/release, dispute
-resolution, top-up and withdrawal — runs inside a **Firestore transaction** in a
+Every money movement - accept-bid escrow lock, milestone fund/release, dispute
+resolution, top-up and withdrawal - runs inside a **Firestore transaction** in a
 Cloud Function, so concurrent requests cannot interleave to double-spend, and
 **all reads precede all writes** as the API requires.
 
@@ -38,18 +38,18 @@ Cloud Function, so concurrent requests cannot interleave to double-spend, and
 
 Adversaries considered:
 
-- **Malicious provider** — wants to win jobs unfairly, forge reputation, or
+- **Malicious provider** - wants to win jobs unfairly, forge reputation, or
   extract money.
-- **Malicious requestor** — wants free work, or to drain/forge their own wallet.
-- **Colluding pair** — a provider *and* requestor account controlled by one
+- **Malicious requestor** - wants free work, or to drain/forge their own wallet.
+- **Colluding pair** - a provider *and* requestor account controlled by one
   attacker (the most powerful realistic adversary).
-- **Forged server callbacks** — a third party POSTing to public webhook
+- **Forged server callbacks** - a third party POSTing to public webhook
   endpoints (relevant to the payment integration).
-- **Concurrent / replayed requests** — race conditions, and at-least-once
+- **Concurrent / replayed requests** - race conditions, and at-least-once
   Cloud Function trigger retries.
 - **Prompt-injection / SSRF** via the AI assist features.
 
-## 4. Adversarial audit — vulnerabilities found and fixed
+## 4. Adversarial audit - vulnerabilities found and fixed
 
 An adversarial review of the shipped implementation surfaced the following
 defects. Each was fixed and is locked in by an automated test.
@@ -65,7 +65,7 @@ was never deposited.
 
 **Fix:** the bid create/update rule now requires
 `amountSen is int && > 0 && <= 100_000_000`, and `acceptBid` re-validates the
-stored amount server-side before locking escrow — defence in depth, so even a
+stored amount server-side before locking escrow - defence in depth, so even a
 legacy or forged document fails safely rather than corrupting the ledger.
 
 ### 4.2 [HIGH] Trust-Score forgery and review spam
@@ -73,7 +73,7 @@ legacy or forged document fails safely rather than corrupting the ledger.
 The review-create rule checked the two parties but not the rating value, nor a
 one-review-per-job constraint. A colluding pair could spam unlimited 5★ reviews
 (each firing the score recompute) to max a provider's Trust Score, and a single
-`rating: 100000` — or a non-numeric rating — could poison or `NaN` the stored
+`rating: 100000` - or a non-numeric rating - could poison or `NaN` the stored
 aggregate.
 
 **Fix:** the rule now requires `rating is int && rating >= 1 && rating <= 5` and
@@ -85,7 +85,7 @@ reviewer per job at the authorization boundary (not just in client code).
 Each bid carries a `providerTrustScore` snapshot that the requestor's "Best
 Value" ranking blends with price. A provider could write
 `providerTrustScore: 1000` on their own bid to top the ranking regardless of
-their real score — directly defeating the platform's core fairness promise.
+their real score - directly defeating the platform's core fairness promise.
 
 **Fix:** the bid rule *pins* `providerTrustScore` (and `providerScoreVisible`)
 to the caller's own stored profile value via a rules `get()`, so the snapshot
@@ -112,7 +112,7 @@ transaction as the increment, so a replayed event is a no-op.
 ### 4.6 [MEDIUM] Chat re-open via a permissive update rule
 
 The conversation update rule allowed writing *any* field, including
-`chatClosesAt` — so a participant could reopen a chat the server had closed
+`chatClosesAt` - so a participant could reopen a chat the server had closed
 after a job ended.
 
 **Fix:** the update rule allowlists only the last-message-preview and unread-
@@ -130,8 +130,8 @@ eventually fund, and cancellation never strands or leaks escrow.
 ### 4.8 Bidding-deadline enforcement
 
 A job's optional bidding deadline is enforced **server-side**: the bid rule
-(`jobBiddingOpen`) denies a bid once the deadline has passed — even before the
-scheduled `closeExpiredJobs` sweep flips the job's status — rather than merely
+(`jobBiddingOpen`) denies a bid once the deadline has passed - even before the
+scheduled `closeExpiredJobs` sweep flips the job's status - rather than merely
 hiding the button in the UI.
 
 ### 4.9 SSRF guard on AI image analysis
@@ -147,7 +147,7 @@ erroring.
 
 - **Rules *and* server re-validation.** Critical invariants are checked at the
   rules boundary and re-checked inside the Cloud Function that acts on them.
-- **Deterministic document ids as idempotency keys** — reviews
+- **Deterministic document ids as idempotency keys** - reviews
   (`{jobId}_{reviewerId}`), milestones (`m{n}`), timeline events, and (for the
   payment integration) the gateway bill code.
 - **Transactions, reads-before-writes**, for every balance mutation.
@@ -157,7 +157,7 @@ erroring.
 
 Security properties are held in place by automated tests, not manual checking:
 
-- **A Firestore-emulator rules suite** (`@firebase/rules-unit-testing`) — 38
+- **A Firestore-emulator rules suite** (`@firebase/rules-unit-testing`) - 38
   tests asserting the denials and allows above: negative / zero / over-cap /
   non-integer bids, forged trust snapshots, review rating and doc-id gating,
   the bidding-deadline gate, client writes to trust/wallet fields, and the
@@ -170,7 +170,7 @@ Security properties are held in place by automated tests, not manual checking:
 ## 7. Limitations and future work
 
 - **Payments.** Wallet top-up is being moved from a demo stand-in to a sandbox
-  payment gateway (toyyibPay — FPX / DuitNow QR). Credit remains
+  payment gateway (toyyibPay - FPX / DuitNow QR). Credit remains
   server-authoritative: a verified webhook re-queries the gateway before
   crediting, and a deterministic bill-code idempotency key prevents
   double-credit. Production compliance (PCI-DSS, merchant onboarding) is out of

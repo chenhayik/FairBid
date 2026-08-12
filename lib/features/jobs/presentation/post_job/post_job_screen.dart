@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
@@ -110,7 +113,7 @@ class _PostJobViewState extends State<_PostJobView> {
 
   /// Opens the address sheet, pre-filling the town from the picked map
   /// location if any, else the requestor's saved default town. Fully
-  /// optional — posting still works without one.
+  /// optional - posting still works without one.
   Future<void> _pickAddress() async {
     final controller = context.read<PostJobController>();
     final user = context.read<AuthController>().user;
@@ -125,7 +128,7 @@ class _PostJobViewState extends State<_PostJobView> {
 
   /// Opens a date picker for the optional bidding deadline (tomorrow through
   /// ~90 days out). The picked date is normalised to end-of-day (23:59:59) so
-  /// choosing "today" — the day after tomorrow's midnight boundary aside —
+  /// choosing "today" - the day after tomorrow's midnight boundary aside -
   /// never reads as already expired.
   Future<void> _pickDeadline() async {
     final tomorrow = DateTime.now().add(const Duration(days: 1));
@@ -181,7 +184,8 @@ class _PostJobViewState extends State<_PostJobView> {
     );
     final id = await controller.submit(job);
     if (id != null && mounted) {
-      _snack('Job posted!');
+      unawaited(HapticFeedback.mediumImpact());
+      _snack(controller.addressWarning ?? 'Job posted!');
       context.pop(); // back to home; the job shows in Active Jobs
     }
   }
@@ -190,7 +194,7 @@ class _PostJobViewState extends State<_PostJobView> {
       .showSnackBar(SnackBar(content: Text(message)));
 
   /// Gemini description helper: expands whatever rough note is in the
-  /// description field into an editable draft. Failures are soft — the form
+  /// description field into an editable draft. Failures are soft - the form
   /// works identically without the assist.
   Future<void> _suggestDescription() async {
     final controller = context.read<PostJobController>();
@@ -214,7 +218,7 @@ class _PostJobViewState extends State<_PostJobView> {
   }
 
   /// Gemini fair-price guide: fetches an indicative RM range shown beside the
-  /// budget fields. Nothing is auto-filled — the user taps "Use this".
+  /// budget fields. Nothing is auto-filled - the user taps "Use this".
   Future<void> _suggestPrice() async {
     final controller = context.read<PostJobController>();
     if (controller.category == null) {
@@ -316,7 +320,7 @@ class _PostJobViewState extends State<_PostJobView> {
                 const SizedBox(height: 24),
                 const _SectionHeader('Photos & video (optional)'),
                 const SizedBox(height: 8),
-                // No optional toggle left to expand — tapping opens the
+                // No optional toggle left to expand - tapping opens the
                 // photo picker directly, same as the "Add photo" box below.
                 _PhotoAssistHint(
                   hasPhoto: controller.photoUrls.isNotEmpty,
@@ -414,8 +418,8 @@ class _PostJobViewState extends State<_PostJobView> {
                 const SizedBox(height: 24),
                 PrimaryButton(
                   label: 'Post Job',
-                  // Its own spinner reflects submitting only — the screen-wide
-                  // overlay already covers that — but stays disabled during a
+                  // Its own spinner reflects submitting only - the screen-wide
+                  // overlay already covers that - but stays disabled during a
                   // photo/video upload too, so the job can't be created before
                   // an in-flight upload finishes.
                   busy: controller.isSubmitting,
@@ -537,7 +541,7 @@ class _DeadlineField extends StatelessWidget {
 
 /// Optional precise service-address affordance, modelled on
 /// [_DeadlineField]'s tappable row: shows a prompt or the entered address's
-/// one-line summary. Fully optional — posting works without one.
+/// one-line summary. Fully optional - posting works without one.
 class _AddressField extends StatelessWidget {
   const _AddressField({required this.address, required this.onTap});
 
@@ -679,7 +683,7 @@ class _BudgetFields extends StatelessWidget {
 }
 
 /// Nudges the requestor to attach a photo so the Gemini assists (description
-/// and price) can analyse it — the assists pass the first photo to the model,
+/// and price) can analyse it - the assists pass the first photo to the model,
 /// so a photo of the actual problem yields a sharper draft and estimate. Once
 /// a photo is attached it flips to a confirmation.
 class _PhotoAssistHint extends StatelessWidget {
@@ -765,6 +769,8 @@ class _PhotoThumb extends StatelessWidget {
             url,
             width: 80,
             height: 80,
+            // Decode at display size, not the full upload size.
+            cacheWidth: (80 * MediaQuery.devicePixelRatioOf(context)).round(),
             fit: BoxFit.cover,
             loadingBuilder: (context, child, loadingProgress) {
               if (loadingProgress == null) return child;

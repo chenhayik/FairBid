@@ -19,7 +19,7 @@ enum ProviderType {
 /// Persisted as one `onboarding` map on the `users/{uid}` document so progress
 /// survives app restarts.
 ///
-/// A deliberately simple mutable data class — the controller owns the single
+/// A deliberately simple mutable data class - the controller owns the single
 /// instance and saves it after each stage.
 class OnboardingData {
   OnboardingData();
@@ -31,21 +31,21 @@ class OnboardingData {
   static const lastStep = 6;
   static const totalStages = 6;
 
-  // Stage 2 — provider type.
+  // Stage 2 - provider type.
   ProviderType? providerType;
 
-  // Stage 3 — identity verification. Firebase Storage download URLs.
+  // Stage 3 - identity verification. Firebase Storage download URLs.
   String? idDocumentUrl;
   String? selfieUrl;
 
-  // Stage 4 — profile.
+  // Stage 4 - profile.
   String displayName = '';
   String bio = '';
   List<String> skills = [];
   List<String> certificateUrls = [];
   List<String> portfolioLinks = [];
 
-  // Stage 5 — service profile. `coverageArea` mirrors `Region.label` (kept as
+  // Stage 5 - service profile. `coverageArea` mirrors `Region.label` (kept as
   // a plain string for backward-compatible display); `districtCode`/`town`/
   // `lat`/`lng` are the structured pick behind it, from the Penang-scoped
   // location picker.
@@ -58,20 +58,20 @@ class OnboardingData {
   String hourlyRate = '';
   List<String> portfolioImageUrls = [];
 
-  // Stage 6 — payout details. `accountNumber` is held only in memory while the
+  // Stage 6 - payout details. `accountNumber` is held only in memory while the
   // form is open; only its last 4 digits are ever persisted (see toMap).
   String bankName = '';
   String accountHolder = '';
   String accountNumber = '';
   String branchCode = '';
 
-  /// The only part of the account number we store — the full number never
+  /// The only part of the account number we store - the full number never
   /// reaches Firestore (the `users` doc is readable by any signed-in user).
   String get accountLast4 => accountNumber.length >= 4
       ? accountNumber.substring(accountNumber.length - 4)
       : '';
 
-  /// Sensitive identity photos — stored in the owner+admin-only
+  /// Sensitive identity photos - stored in the owner+admin-only
   /// `users/{uid}/private/verification` doc, never in the world-readable
   /// `onboarding` map.
   Map<String, dynamic> privateMap() => {
@@ -79,7 +79,7 @@ class OnboardingData {
         'selfieUrl': selfieUrl,
       };
 
-  /// Payout bank details — stored in the owner+admin-only
+  /// Payout bank details - stored in the owner+admin-only
   /// `users/{uid}/private/payout` doc, never in the world-readable
   /// `onboarding` map (the full account number never reaches Firestore at
   /// all; only its last 4 digits are persisted).

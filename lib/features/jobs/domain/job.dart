@@ -31,7 +31,7 @@ enum JobStatus {
 
 /// A map-picked location: coordinates plus a human-readable label. [address]
 /// is the composed `Region.label` for locations picked with the structured
-/// picker, or a raw legacy string for older jobs that predate it — either way
+/// picker, or a raw legacy string for older jobs that predate it - either way
 /// it's always safe to display as-is. [districtCode]/[districtName]/[town]
 /// are null on that legacy data.
 class JobLocation {
@@ -94,7 +94,7 @@ class JobBudget {
       );
 }
 
-/// A job posted by a requestor. Framework-agnostic — the repository handles the
+/// A job posted by a requestor. Framework-agnostic - the repository handles the
 /// Firestore ↔ [Job] mapping (incl. Timestamp conversion).
 class Job {
   const Job({
@@ -130,7 +130,7 @@ class Job {
 
   /// Snapshot of the requestor's `profilePhotoUrl` at posting time,
   /// denormalised so providers see a face without loading the requestor's
-  /// profile — mirrors how [requestorName] is already denormalised. Null if
+  /// profile - mirrors how [requestorName] is already denormalised. Null if
   /// the requestor had no photo when they posted. A future Cloud Function
   /// could refresh this snapshot if the requestor later changes their photo.
   final String? requestorPhotoUrl;
@@ -162,7 +162,7 @@ class Job {
   final String? cancellationReason;
   final DateTime? cancellationRequestedAt;
 
-  /// Set when the job is actually cancelled — the audit trail a bare status
+  /// Set when the job is actually cancelled - the audit trail a bare status
   /// flip never had. `cancelledBy` is a uid, or `'admin'` for an admin
   /// override.
   final DateTime? cancelledAt;

@@ -1,6 +1,6 @@
 /// A chat thread between a job's requestor and its accepted provider, stored
 /// at `conversations/{jobId}_{providerId}`. The deterministic id means either
-/// side opening the chat lazily creates (or finds) the same document — no
+/// side opening the chat lazily creates (or finds) the same document - no
 /// duplicate threads for one job. Framework-agnostic; the repository handles
 /// the Firestore ↔ [Conversation] mapping.
 class Conversation {
@@ -32,7 +32,7 @@ class Conversation {
 
   /// Snapshots of each party's `profilePhotoUrl` at conversation-creation
   /// time, denormalised so the thread and list show faces without loading
-  /// either profile — mirrors how [requestorName]/[providerName] are already
+  /// either profile - mirrors how [requestorName]/[providerName] are already
   /// denormalised. Null if that party had no photo yet. A future Cloud
   /// Function could refresh these snapshots on a later photo change.
   final String? requestorPhotoUrl;
@@ -61,7 +61,7 @@ class Conversation {
   bool isOpenAt(DateTime now) =>
       chatClosesAt == null || now.isBefore(chatClosesAt!);
 
-  /// Both participants' uids — mirrors the stored `participantIds` array that
+  /// Both participants' uids - mirrors the stored `participantIds` array that
   /// backs the "my conversations" query.
   List<String> get participantIds => [requestorId, providerId];
 

@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
-import '../../auth/presentation/auth_controller.dart';
 
 /// Shown after submitting onboarding: "You're almost there." with the admin
 /// review status, per the design mock.
@@ -19,7 +17,11 @@ class PendingReviewScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Onboarding'),
         leading: BackButton(
-          onPressed: () => context.read<AuthController>().signOut(),
+          // Submission is done and the account is usable while review is
+          // pending, so back leaves for the dashboard. It used to sign the
+          // user out, which is not what a back arrow promises.
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/home'),
         ),
       ),
       body: SafeArea(
@@ -57,7 +59,7 @@ class PendingReviewScreen extends StatelessWidget {
                   const SizedBox(height: 24),
                   _StatusTile(
                     icon: Icons.check_circle,
-                    iconColor: context.fairbid.success,
+                    iconColor: context.fairbid.successText,
                     title: 'Profile Completed',
                     subtitle: 'All details submitted.',
                   ),
@@ -84,7 +86,13 @@ class PendingReviewScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   SecondaryButton(
                     label: 'Explore Jobs',
-                    onPressed: () => context.go('/home'),
+                    // The feed lives outside the shell, so seed the dashboard
+                    // beneath it: that keeps the back arrow and bottom nav
+                    // working, exactly as pushing the feed from home does.
+                    onPressed: () {
+                      context.go('/home');
+                      context.push('/jobs');
+                    },
                   ),
                 ],
               ),

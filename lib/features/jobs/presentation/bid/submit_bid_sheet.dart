@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/util/money.dart';
@@ -69,6 +72,12 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
   String? _duration;
   bool _escrowAcknowledged = false;
 
+  /// Set when submit is blocked by the unticked escrow box. This used to be a
+  /// snackbar, which anchors to the underlying route's Scaffold and therefore
+  /// renders *behind* this bottom sheet: the provider tapped Submit, saw
+  /// nothing at all happen, and abandoned their only revenue action.
+  bool _showEscrowError = false;
+
   @override
   void dispose() {
     _amount.dispose();
@@ -77,12 +86,12 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (!_escrowAcknowledged) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please acknowledge the escrow terms.')));
-      return;
-    }
+    // Evaluate both gates before returning so the field errors and the escrow
+    // error appear together, rather than the user fixing one and discovering
+    // the other.
+    final formValid = _formKey.currentState!.validate();
+    setState(() => _showEscrowError = !_escrowAcknowledged);
+    if (!formValid || !_escrowAcknowledged) return;
     final controller = context.read<SubmitBidController>();
     final ok = await controller.submit(Bid(
       jobId: widget.job.id,
@@ -96,6 +105,9 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
       message: _message.text.trim(),
     ));
     if (ok && mounted) {
+      // Fire-and-forget: awaiting a haptic would put an async gap in front of
+      // the pop below, leaving the sheet up for an extra frame.
+      unawaited(HapticFeedback.mediumImpact());
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Bid submitted!')));
@@ -165,14 +177,27 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
               value: _escrowAcknowledged,
-              onChanged: (v) =>
-                  setState(() => _escrowAcknowledged = v ?? false),
+              onChanged: (v) => setState(() {
+                _escrowAcknowledged = v ?? false;
+                if (_escrowAcknowledged) _showEscrowError = false;
+              }),
               title: Text(
                 'I understand FairBid uses milestone escrow: the client '
-                'funds the job and payment is released as work is approved.',
+                'funds the job and payment is released as work is approved. '
+                'Your money is held by FairBid, not paid out, until the '
+                'client approves the work.',
                 style: theme.textTheme.bodyMedium,
               ),
             ),
+            if (_showEscrowError)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, top: 4),
+                child: Text(
+                  'Please tick this to confirm you understand, then submit.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.error),
+                ),
+              ),
             const SizedBox(height: 8),
             PrimaryButton(
               label: 'Submit Bid',

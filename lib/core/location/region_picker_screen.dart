@@ -10,12 +10,12 @@ import 'penang_districts.dart';
 import 'region.dart';
 
 /// Penang-bounded location picker: a District dropdown (required), an
-/// optional Town dropdown, and a map — all kept in two-way sync. Replaces the
+/// optional Town dropdown, and a map - all kept in two-way sync. Replaces the
 /// old free-text location fields across the app. Push it with
 /// [RegionPickerScreen.show].
 ///
 /// - Dragging the map re-classifies the centre pin's district via offline
-///   point-in-polygon ([PenangDistricts]) — the arbiter of record.
+///   point-in-polygon ([PenangDistricts]) - the arbiter of record.
 /// - Picking a District recentres the map to that district's seat.
 /// - Picking a Town best-effort forward-geocodes it to recentre precisely,
 ///   falling back to the district seat if that fails or lands outside Penang.
@@ -106,7 +106,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     setState(() {
       _center = camera.center;
       // Before the classifier has loaded, isInPenang(_center) already reads
-      // false everywhere else, so there's nothing useful to sync yet — and
+      // false everywhere else, so there's nothing useful to sync yet - and
       // doing so would wipe out an explicit district pick (see [_ready]).
       if (_ready) _syncDistrictForCenter();
     });
@@ -137,7 +137,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
 
   /// Best-effort forward geocode; returns `null` on any failure (no matches,
   /// no geocoder available, etc.) so the caller can fall back to the district
-  /// seat. Convenience only — never the source of district truth.
+  /// seat. Convenience only - never the source of district truth.
   Future<LatLng?> _forwardGeocode(String address) async {
     try {
       final results = await Geocoding().locationFromAddress(address);
@@ -149,7 +149,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
   }
 
   /// Best-effort reverse geocode to SUGGEST a town label when the user hasn't
-  /// picked one — only accepted if it matches one of [kPenangTowns], so the
+  /// picked one - only accepted if it matches one of [kPenangTowns], so the
   /// stored town is always one of the fixed, known options.
   Future<String?> _suggestTown(String districtCode) async {
     final towns = kPenangTowns[districtCode];
@@ -170,7 +170,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
         }
       }
     } catch (_) {
-      // best-effort only — leave the town unset.
+      // best-effort only - leave the town unset.
     }
     return null;
   }

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// Full-screen photo viewer: swipe between [photoUrls] (`PageView`), pinch to
-/// zoom and pan each one (`InteractiveViewer`) — built entirely from Flutter
+/// zoom and pan each one (`InteractiveViewer`) - built entirely from Flutter
 /// SDK widgets, no new dependency. Pushed as a full-screen dialog route by
 /// [show], which `job_detail_screen.dart`'s Photos list calls on tap.
 class PhotoViewerScreen extends StatefulWidget {

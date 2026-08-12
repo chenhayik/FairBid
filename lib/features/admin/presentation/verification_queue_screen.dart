@@ -5,13 +5,14 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/domain/user_role.dart';
 import '../data/verification_repository.dart';
 import '../domain/pending_verification.dart';
 
 /// Admin Home › Verifications tab: the live verification queue. Lists every
 /// user awaiting review so an admin can open each one, inspect their
-/// documents, and approve or reject — the gate that lets an approved provider
+/// documents, and approve or reject - the gate that lets an approved provider
 /// start bidding. Hosted (Scaffold and all) by AdminHomeScreen's tabs.
 class VerificationQueueScreen extends StatelessWidget {
   const VerificationQueueScreen({super.key});
@@ -19,8 +20,8 @@ class VerificationQueueScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return StreamBuilder<List<PendingVerification>>(
-      stream: context.read<VerificationRepository>().watchPending(),
+    return KeyedStreamBuilder<List<PendingVerification>>(
+      create: context.read<VerificationRepository>().watchPending,
       builder: (context, snapshot) {
         final items = snapshot.data;
         return ListView(
@@ -88,10 +89,8 @@ class _QueueCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: AppCard(
+    return AppCard(
+        onTap: onTap,
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
@@ -139,8 +138,7 @@ class _QueueCard extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant),
           ],
         ),
-      ),
-    );
+      );
   }
 }
 

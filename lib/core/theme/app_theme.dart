@@ -14,6 +14,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
     required this.subtleBlue,
     required this.borderSubtle,
     required this.warningText,
+    required this.successText,
   });
 
   final Color verified; // #0052FF brand / verified
@@ -24,6 +25,13 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
   final Color borderSubtle; // #E2E8F0 hairline border
   final Color warningText; // #B07B00 dark amber icon/accent on tinted fills
 
+  /// #087F3F dark green for text and glyphs on light fills. [success] is a
+  /// fill colour: at 2.2:1 on white and 2.05:1 on its own 10% tint it fails
+  /// AA as a foreground, which is why "BEST VALUE" and the paid-out milestone
+  /// tick were the hardest things on their cards to read. Pair fills with
+  /// [success] and anything readable with this.
+  final Color successText;
+
   @override
   FairBidColors copyWith({
     Color? verified,
@@ -33,6 +41,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
     Color? subtleBlue,
     Color? borderSubtle,
     Color? warningText,
+    Color? successText,
   }) {
     return FairBidColors(
       verified: verified ?? this.verified,
@@ -42,6 +51,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
       subtleBlue: subtleBlue ?? this.subtleBlue,
       borderSubtle: borderSubtle ?? this.borderSubtle,
       warningText: warningText ?? this.warningText,
+      successText: successText ?? this.successText,
     );
   }
 
@@ -56,6 +66,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
       subtleBlue: Color.lerp(subtleBlue, other.subtleBlue, t)!,
       borderSubtle: Color.lerp(borderSubtle, other.borderSubtle, t)!,
       warningText: Color.lerp(warningText, other.warningText, t)!,
+      successText: Color.lerp(successText, other.successText, t)!,
     );
   }
 
@@ -67,6 +78,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
     subtleBlue: Color(0xFFF0F5FF),
     borderSubtle: Color(0xFFE2E8F0),
     warningText: Color(0xFFB07B00),
+    successText: Color(0xFF087F3F),
   );
 }
 
@@ -90,6 +102,13 @@ class AppTheme {
       onPrimaryContainer: Color(0xFFDFE3FF),
       secondary: Color(0xFF006E2A),
       onSecondary: Color(0xFFFFFFFF),
+      // Material 3 paints the NavigationBar's selected pill and the selected
+      // SegmentedButton segment from secondaryContainer, which falls back to
+      // `secondary` when unset - so leaving these out rendered the selected
+      // tab, the most persistent chrome in the app, in a dark green that
+      // appears nowhere in the brand. A brand-blue tint at 5.3:1 instead.
+      secondaryContainer: Color(0xFFF0F5FF),
+      onSecondaryContainer: brandBlue,
       tertiary: Color(0xFF654900),
       onTertiary: Color(0xFFFFFFFF),
       error: Color(0xFFBA1A1A),
@@ -153,7 +172,7 @@ class AppTheme {
   // Typography scale from DESIGN.md §2 (mapped onto Material's TextTheme slots).
   //
   // Use copyWith on the base styles (never a fresh `TextStyle`) so the text
-  // colours Flutter already resolved from the colorScheme are preserved — a
+  // colours Flutter already resolved from the colorScheme are preserved - a
   // colourless override makes typed input render invisible on white fields.
   static TextTheme _textTheme(TextTheme base) {
     return base.copyWith(

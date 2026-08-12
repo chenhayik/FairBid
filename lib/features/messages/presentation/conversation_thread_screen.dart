@@ -90,7 +90,7 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
           appBar: AppBar(
             toolbarHeight: 72,
             // Tapping the chat header opens the counterparty's public
-            // profile — the strongest convention for "who am I talking to".
+            // profile - the strongest convention for "who am I talking to".
             title: conversation == null || myUid == null
                 ? const Text('Chat')
                 : UserChip(
@@ -106,7 +106,13 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
             child: Column(
               children: [
                 Expanded(child: _MessageList(stream: _messages, myUid: myUid)),
-                if (conversation != null &&
+                // A failed conversation stream leaves `conversation` null
+                // forever, which used to render the composer disabled with no
+                // explanation at all: a dead text box the user could not type
+                // in and had no way to understand.
+                if (snapshot.hasError)
+                  const _ChatUnavailableFooter()
+                else if (conversation != null &&
                     !conversation.isOpenAt(DateTime.now()))
                   const _ClosedChatFooter()
                 else
@@ -226,6 +232,41 @@ class _MessageBubble extends StatelessWidget {
 
 /// Shown in place of the composer once a job has ended and its chat grace
 /// window has passed. The history above stays readable.
+/// Shown in place of the composer when the conversation stream failed. The
+/// stream is terminal once it errors, so the instruction is to reopen the
+/// chat rather than to wait.
+class _ChatUnavailableFooter extends StatelessWidget {
+  const _ChatUnavailableFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: context.fairbid.borderSubtle)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.cloud_off, size: 18, color: theme.colorScheme.error),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              "Couldn't load this conversation. Check your connection, then "
+              'go back and open it again.',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ClosedChatFooter extends StatelessWidget {
   const _ClosedChatFooter();
 

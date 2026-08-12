@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../../core/widgets/form_widgets.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/requestor_onboarding_data.dart';
+import 'onboarding_exit.dart';
 import 'requestor_onboarding_controller.dart';
 import 'requestor_steps/account_type_step.dart';
 import 'requestor_steps/details_step.dart';
@@ -56,9 +57,9 @@ class _RequestorFlowScreenState extends State<RequestorFlowScreen> {
         leading: BackButton(
           onPressed: () {
             final onboarding = context.read<RequestorOnboardingController>();
-            // Back one stage; from the first stage, back out to sign-in.
+            // Back one stage; from the first stage, leave the flow entirely.
             if (!onboarding.goBack()) {
-              context.read<AuthController>().signOut();
+              exitOnboarding(context);
             }
           },
         ),

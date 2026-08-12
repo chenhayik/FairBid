@@ -1,6 +1,6 @@
 /// A review left on a user's profile after a completed job. Stored at
 /// `users/{revieweeId}/reviews/{reviewId}`; the reviewee's uid is the path, so
-/// it is not a stored field. Framework-agnostic — the repository handles the
+/// it is not a stored field. Framework-agnostic - the repository handles the
 /// Firestore ↔ [Review] mapping.
 class Review {
   const Review({
@@ -25,7 +25,7 @@ class Review {
   final String reviewerName;
 
   /// Snapshot of the reviewer's `profilePhotoUrl` at review time, denormalised
-  /// so the review list shows a face without loading the reviewer's profile —
+  /// so the review list shows a face without loading the reviewer's profile -
   /// mirrors how [reviewerName] is already denormalised. Null if the reviewer
   /// had no photo when they reviewed. A future Cloud Function could refresh
   /// this snapshot if the reviewer later changes their photo.

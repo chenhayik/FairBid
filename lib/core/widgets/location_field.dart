@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
 /// Tappable row showing a picked location's label (or a [placeholder]),
-/// styled to match [AppTextField] — used to launch `RegionPickerScreen`.
+/// styled to match [AppTextField] - used to launch `RegionPickerScreen`.
 /// Shared by the post-job form and the onboarding steps that capture a
 /// Penang-scoped location.
 class LocationField extends StatelessWidget {

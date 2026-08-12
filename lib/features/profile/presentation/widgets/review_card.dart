@@ -14,7 +14,7 @@ class ReviewCard extends StatelessWidget {
 
   final Review review;
 
-  /// When set, a small "Report" action appears — used on the owner's own
+  /// When set, a small "Report" action appears - used on the owner's own
   /// profile to flag an unfair review for admin moderation. Null elsewhere.
   final VoidCallback? onFlag;
 
@@ -27,7 +27,7 @@ class ReviewCard extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              // Empty reviewerId only happens on malformed legacy data — fall
+              // Empty reviewerId only happens on malformed legacy data - fall
               // back to plain, non-tappable text rather than pushing
               // `/users/` with no id.
               child: review.reviewerId.isEmpty
@@ -68,7 +68,7 @@ class ReviewCard extends StatelessWidget {
               ),
             ] else if (review.flagged) ...[
               const SizedBox(width: 4),
-              Icon(Icons.flag, size: 16, color: context.fairbid.warning),
+              Icon(Icons.flag, size: 16, color: context.fairbid.warningText),
             ],
           ],
         ),
@@ -96,7 +96,7 @@ class StarRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gold = context.fairbid.warning;
+    final gold = context.fairbid.warningText;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

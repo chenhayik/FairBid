@@ -37,7 +37,7 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
   /// Fields whose public home moved to [_payoutDoc]; explicitly deleted from
   /// the public `onboarding` map on every subsequent save so legacy accounts
   /// migrate organically. A one-off backfill Cloud Function is still needed
-  /// for providers who never save again — deliberately out of scope here.
+  /// for providers who never save again - deliberately out of scope here.
   static final _legacyPayoutDeletes = {
     'onboarding.bankName': FieldValue.delete(),
     'onboarding.accountHolder': FieldValue.delete(),

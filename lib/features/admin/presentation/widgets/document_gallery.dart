@@ -50,10 +50,8 @@ class _DocumentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InkWell(
-      onTap: () => _DocumentViewer.show(context, document),
-      borderRadius: BorderRadius.circular(12),
-      child: AppCard(
+    return AppCard(
+        onTap: () => _DocumentViewer.show(context, document),
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
@@ -90,8 +88,7 @@ class _DocumentTile extends StatelessWidget {
                 size: 18, color: context.fairbid.verified),
           ],
         ),
-      ),
-    );
+      );
   }
 
   Widget _thumbPlaceholder(BuildContext context, Widget child) => Container(

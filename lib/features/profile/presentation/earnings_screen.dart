@@ -17,10 +17,10 @@ import '../../wallet/domain/ledger_entry.dart';
 import '../../wallet/presentation/toyyibpay_webview_screen.dart';
 import '../../wallet/presentation/wallet_amount_sheet.dart';
 
-/// The wallet screen. Providers see Earnings & Payouts — Available (with
+/// The wallet screen. Providers see Earnings & Payouts - Available (with
 /// Withdraw), In Escrow and Total Earnings from their milestones, and their
 /// payout method. Requestors see their wallet with a real toyyibPay
-/// (sandbox) Top Up — plus a demo top-up kept around for testing without the
+/// (sandbox) Top Up - plus a demo top-up kept around for testing without the
 /// gateway. Both share the transaction history.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
@@ -77,8 +77,8 @@ class _EarningsScreenState extends State<EarningsScreen> {
 
   /// Real top-up: asks for an amount, creates a toyyibPay (sandbox) bill and
   /// opens its hosted payment page in a WebView. The wallet balance only
-  /// updates once the server independently confirms the bill was paid — the
-  /// WebView returning is just a UX cue, never trusted on its own — so this
+  /// updates once the server independently confirms the bill was paid - the
+  /// WebView returning is just a UX cue, never trusted on its own - so this
   /// reconciles with the server immediately after, as a backstop for a
   /// webhook toyyibPay hasn't delivered yet. The WebView's return status is
   /// only ever used to pick which copy to show below (cancelled vs.
@@ -115,7 +115,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
 
     // The user backed out before the browser ever reached toyyibPay's return
     // URL: most likely nothing was attempted, so there is nothing to
-    // reconcile — reconciling anyway would just report "not paid" and read
+    // reconcile - reconciling anyway would just report "not paid" and read
     // as a false alarm.
     if (status == null || status == ToyyibpayReturnStatus.cancelled) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -132,17 +132,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
           e.message ??
-              "Couldn't confirm your payment. If you were charged, it'll "
-                  'show up in your transaction history once processed, '
-                  'pull to refresh to check.')));
+              "Couldn't confirm your payment. If you were charged, it will "
+                  'appear in your transaction history automatically once '
+                  "processed. Don't pay again.")));
       return;
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text(
-              "Couldn't confirm your payment. If you were charged, it'll "
-              'show up in your transaction history once processed, pull to '
-              'refresh to check.')));
+              "Couldn't confirm your payment. If you were charged, it will "
+              'appear in your transaction history automatically once '
+              "processed. Don't pay again.")));
       return;
     }
 
@@ -154,8 +154,8 @@ class _EarningsScreenState extends State<EarningsScreen> {
     } else if (status == ToyyibpayReturnStatus.failed) {
       message = 'Payment failed. No funds were added. You can try again.';
     } else {
-      message = "Payment not confirmed yet. It'll appear in your "
-          'transaction history once processed, pull to refresh to check.';
+      message = 'Payment not confirmed yet. It will appear in your '
+          "transaction history automatically once processed. Don't pay again.";
     }
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
@@ -198,9 +198,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
       appBar:
           AppBar(title: Text(isProvider ? 'Earnings & Payouts' : 'My Wallet')),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
+        // The top-up failure copy tells users their payment will show up here,
+        // and people reach for a pull-to-refresh at exactly that moment. The
+        // balance and ledger are live streams so this is mostly reassurance,
+        // but an unresponsive pull right after paying reads as "my money is
+        // gone". AlwaysScrollable so the gesture works on a short list too.
+        child: RefreshIndicator(
+          onRefresh: _refreshBalance,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(24),
+            children: [
             _AvailableCard(
               balanceSen: user.walletBalanceSen,
               actionLabel: isProvider ? 'Withdraw' : 'Top Up',
@@ -208,7 +216,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   ? () => _withdraw(user.walletBalanceSen)
                   : _topUp,
             ),
-            if (!isProvider) ...[
+            if (!isProvider && PlatformConfig.demoTopUpEnabled) ...[
               const SizedBox(height: 8),
               Align(
                 alignment: Alignment.centerRight,
@@ -229,7 +237,8 @@ class _EarningsScreenState extends State<EarningsScreen> {
             ],
             const SizedBox(height: 16),
             _TransactionHistoryCard(stream: _transactions, myUid: user.uid),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -300,6 +309,22 @@ class _EscrowStats extends StatelessWidget {
               title: "Couldn't load earnings",
               message: 'Please check your connection and try again.',
             ),
+          );
+        }
+        // Without this, the first frame renders "RM 0.00" for both figures,
+        // so a provider opening the wallet is briefly told their escrowed
+        // money is zero. Dashes match the stat cards on provider home.
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Column(
+            children: [
+              StatCard(
+                label: 'In Escrow',
+                value: '-',
+                icon: Icons.lock_outline,
+              ),
+              SizedBox(height: 12),
+              StatCard(label: 'Total Earnings', value: '-'),
+            ],
           );
         }
         final milestones = snapshot.data ?? [];
@@ -412,6 +437,14 @@ class _TransactionHistoryCard extends StatelessWidget {
                   message: 'Please check your connection and try again.',
                 );
               }
+              // Check loading before empty, otherwise "No transactions yet"
+              // is asserted as fact while the ledger is still arriving.
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
               final entries = snapshot.data ?? [];
               if (entries.isEmpty) {
                 return const EmptyState(
@@ -478,7 +511,7 @@ class _TransactionRow extends StatelessWidget {
             '${credit ? '+' : '−'}${formatRm(entry.amountSen)}',
             style: theme.textTheme.labelLarge?.copyWith(
               color: credit
-                  ? context.fairbid.success
+                  ? context.fairbid.successText
                   : theme.colorScheme.onSurface,
             ),
           ),

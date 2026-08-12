@@ -37,4 +37,4 @@ if (failures > 0) {
   console.error(`${failures} vector assertion(s) failed.`);
   process.exit(1);
 }
-console.log(`OK — ${vectors.length} trust vectors match.`);
+console.log(`OK - ${vectors.length} trust vectors match.`);

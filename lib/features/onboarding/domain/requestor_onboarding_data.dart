@@ -29,10 +29,10 @@ class RequestorOnboardingData {
   static const lastStep = 3;
   static const totalStages = 3;
 
-  // Stage 1 — account type.
+  // Stage 1 - account type.
   RequestorType? type;
 
-  // Stage 2 — details. `location` mirrors `Region.label` (kept as a plain
+  // Stage 2 - details. `location` mirrors `Region.label` (kept as a plain
   // string for backward-compatible display); `districtCode`/`town`/`lat`/
   // `lng` are the structured pick behind it, from the Penang-scoped location
   // picker.
@@ -47,13 +47,13 @@ class RequestorOnboardingData {
   String companyName = ''; // business only
   String ssmNumber = ''; // business only
 
-  // Stage 3 — optional verification document (ID or SSM certificate).
+  // Stage 3 - optional verification document (ID or SSM certificate).
   String? clientDocumentUrl;
 
   bool get isBusiness => type == RequestorType.business;
 
   /// Public fields to merge into the user document. The identity/SSM document
-  /// URL and phone number are intentionally excluded — see [privateMap] and
+  /// URL and phone number are intentionally excluded - see [privateMap] and
   /// [payoutMap] respectively.
   Map<String, dynamic> toMap() => {
         'requestorOnboardingStep': step,
@@ -69,14 +69,14 @@ class RequestorOnboardingData {
         'ssmNumber': ssmNumber,
       };
 
-  /// Sensitive identity document — stored in the owner+admin-only
+  /// Sensitive identity document - stored in the owner+admin-only
   /// `users/{uid}/private/verification` doc, never in the world-readable
   /// user document.
   Map<String, dynamic> privateMap() => {
         'clientDocumentUrl': clientDocumentUrl,
       };
 
-  /// Phone number — stored in the owner+admin-only `users/{uid}/private/payout`
+  /// Phone number - stored in the owner+admin-only `users/{uid}/private/payout`
   /// doc, never in the world-readable user document. Shares that doc with
   /// [OnboardingData]'s payout bank details (providers' twin of this class).
   Map<String, dynamic> payoutMap() => {'phone': phone};

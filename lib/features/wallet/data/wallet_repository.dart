@@ -5,7 +5,7 @@ import '../../../core/util/payment_log.dart';
 import '../domain/ledger_entry.dart';
 
 /// Moves money in and out of the simulated wallet and reads the transaction
-/// ledger. Both movements call Cloud Functions — Firestore rules reject any
+/// ledger. Both movements call Cloud Functions - Firestore rules reject any
 /// client write to `walletBalanceSen` or the `transactions` collection.
 /// UI/controllers depend on this interface so tests can use a fake.
 abstract interface class WalletRepository {
@@ -20,13 +20,13 @@ abstract interface class WalletRepository {
   /// Starts a real toyyibPay (sandbox) top-up for [amountSen]: creates a bill
   /// (the `createToyyibpayBill` Cloud Function) and returns its code and
   /// hosted payment page for the caller to open in a WebView. No money moves
-  /// yet — that only happens once the bill is confirmed paid server-side.
+  /// yet - that only happens once the bill is confirmed paid server-side.
   Future<({String billCode, String paymentUrl})> createTopUpBill(
       int amountSen);
 
   /// Asks the server to re-check [billCode] against toyyibPay and credit the
   /// wallet if it hasn't been already (the `reconcileToyyibpayTopup` Cloud
-  /// Function) — the safety net for a webhook toyyibPay never delivered.
+  /// Function) - the safety net for a webhook toyyibPay never delivered.
   /// Returns whether the bill is credited.
   Future<bool> reconcileTopUp(String billCode);
 

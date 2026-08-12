@@ -5,6 +5,7 @@ import '../../../core/widgets/form_widgets.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/onboarding_data.dart';
 import 'onboarding_controller.dart';
+import 'onboarding_exit.dart';
 import 'pending_review_screen.dart';
 import 'steps/identity_step.dart';
 import 'steps/payout_step.dart';
@@ -63,10 +64,10 @@ class _ProviderFlowScreenState extends State<ProviderFlowScreen> {
         title: const Text('Onboarding'),
         leading: BackButton(
           onPressed: () {
-            // Back one stage; from the first stage, back out to sign-in.
+            // Back one stage; from the first stage, leave the flow entirely.
             final onboarding = context.read<OnboardingController>();
             if (!onboarding.goBack()) {
-              context.read<AuthController>().signOut();
+              exitOnboarding(context);
             }
           },
         ),

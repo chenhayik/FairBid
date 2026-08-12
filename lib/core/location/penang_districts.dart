@@ -5,17 +5,17 @@ import 'package:latlong2/latlong.dart';
 
 /// Offline point-in-polygon classifier over Penang's 5 districts.
 ///
-/// Boundaries: geoBoundaries ADM2 (CC BY 4.0) — https://www.geoboundaries.org,
+/// Boundaries: geoBoundaries ADM2 (CC BY 4.0) - https://www.geoboundaries.org,
 /// filtered down to Penang's 5 districts and shipped as
 /// `assets/geo/penang_districts.geojson`.
 ///
 /// This is the SOURCE OF TRUTH for which district a point belongs to. The
-/// device geocoder is never used to decide district membership — only to
+/// device geocoder is never used to decide district membership - only to
 /// suggest a town label (see `RegionPickerScreen`).
 class PenangDistricts {
   PenangDistricts._();
 
-  /// Shared singleton — the GeoJSON is parsed once and cached for the life of
+  /// Shared singleton - the GeoJSON is parsed once and cached for the life of
   /// the app.
   static final PenangDistricts instance = PenangDistricts._();
 
@@ -24,7 +24,7 @@ class PenangDistricts {
   List<_DistrictGeometry>? _districts;
   Future<void>? _loading;
 
-  /// Loads and parses the bundled GeoJSON. Safe to call repeatedly —
+  /// Loads and parses the bundled GeoJSON. Safe to call repeatedly -
   /// subsequent calls await the same cached load. Must complete before
   /// [districtCodeAt] / [isInPenang] return meaningful results.
   Future<void> ensureLoaded() => _loading ??= _load();
@@ -37,7 +37,7 @@ class PenangDistricts {
   }
 
   /// The district code (`TL`/`BD`/`SPU`/`SPT`/`SPS`) containing [point], or
-  /// `null` if it's outside all 5 (e.g. open water) — or if [ensureLoaded]
+  /// `null` if it's outside all 5 (e.g. open water) - or if [ensureLoaded]
   /// hasn't completed yet.
   String? districtCodeAt(LatLng point) {
     final districts = _districts;
@@ -53,7 +53,7 @@ class PenangDistricts {
 }
 
 /// A single district's geometry: one or more polygons (a MultiPolygon has
-/// more than one), each a list of rings — ring 0 is the exterior, any further
+/// more than one), each a list of rings - ring 0 is the exterior, any further
 /// rings are holes.
 class _DistrictGeometry {
   const _DistrictGeometry(this.code, this._polygons);

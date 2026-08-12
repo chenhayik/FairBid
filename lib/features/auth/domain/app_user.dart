@@ -105,7 +105,7 @@ class AppUser {
 
   /// A requestor's saved default location (set during onboarding, stage 2),
   /// used to pre-fill the Post-a-Job form. Stored at the **top level** of the
-  /// `users/{uid}` document — see `RequestorOnboardingData.toMap`. Null for
+  /// `users/{uid}` document - see `RequestorOnboardingData.toMap`. Null for
   /// providers, and for requestors who onboarded before this existed.
   final double? defaultLat;
   final double? defaultLng;
@@ -134,7 +134,7 @@ class AppUser {
   /// plus [PlatformConfig.minJobsForVisibleScore] completed jobs).
   bool get scoreVisible => trustBreakdown?.scoreVisible ?? false;
 
-  /// True while the score is still hidden — the "New User" state.
+  /// True while the score is still hidden - the "New User" state.
   bool get isNewUser => !scoreVisible;
 
   /// 'none' → not submitted for admin review,
@@ -165,7 +165,7 @@ class AppUser {
 
   /// Whether an admin has suspended this account. A suspended user is frozen
   /// out of every action (posting, bidding, paying, chatting, reviewing) and
-  /// the router locks them to the "account suspended" screen. Server-owned —
+  /// the router locks them to the "account suspended" screen. Server-owned -
   /// set only by the `setUserSuspended` Cloud Function.
   final bool suspended;
 

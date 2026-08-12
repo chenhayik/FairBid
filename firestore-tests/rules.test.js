@@ -2,7 +2,7 @@
  * Security-rules test suite for `firestore.rules`.
  *
  * These tests exercise the *real* rules engine via the Firestore emulator
- * (through `@firebase/rules-unit-testing`) — unlike the Dart widget tests,
+ * (through `@firebase/rules-unit-testing`) - unlike the Dart widget tests,
  * which run against in-memory fakes and never evaluate a single rule. Every
  * `it()` below proves one specific ALLOW or DENY the rules claim to enforce.
  *
@@ -67,7 +67,7 @@ function dbAs(uid) {
 }
 
 // ---------------------------------------------------------------------------
-// Bids — jobs/{jobId}/bids/{bidId}, bidId == provider uid.
+// Bids - jobs/{jobId}/bids/{bidId}, bidId == provider uid.
 // ---------------------------------------------------------------------------
 describe("Bids", () => {
   const JOB_ID = "job1";
@@ -238,7 +238,7 @@ describe("Bids", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Reviews — users/{revieweeId}/reviews/{reviewId}, reviewId == {jobId}_{reviewerId}.
+// Reviews - users/{revieweeId}/reviews/{reviewId}, reviewId == {jobId}_{reviewerId}.
 // ---------------------------------------------------------------------------
 describe("Reviews", () => {
   const REQUESTOR = "requestor2";
@@ -340,7 +340,7 @@ describe("Reviews", () => {
 });
 
 // ---------------------------------------------------------------------------
-// User profile self-writes — users/{uid}.
+// User profile self-writes - users/{uid}.
 // ---------------------------------------------------------------------------
 describe("User profile self-writes", () => {
   const UID = "user1";
@@ -433,7 +433,7 @@ describe("User profile self-writes", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Conversations — conversations/{id}.
+// Conversations - conversations/{id}.
 // ---------------------------------------------------------------------------
 describe("Conversations", () => {
   const CONVERSATION_ID = "job4_provider4";
@@ -484,7 +484,7 @@ describe("Conversations", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Server-only collections — transactions, disputes, milestones (create).
+// Server-only collections - transactions, disputes, milestones (create).
 // ---------------------------------------------------------------------------
 describe("Server-only collections", () => {
   const JOB_ID = "job5";
@@ -544,7 +544,7 @@ describe("Server-only collections", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Service address privacy — jobs/{jobId}/private/address. The crux of this
+// Service address privacy - jobs/{jobId}/private/address. The crux of this
 // feature: the precise service address must never leak to a bidder who
 // isn't the job's accepted provider.
 // ---------------------------------------------------------------------------
@@ -621,7 +621,7 @@ describe("Service address privacy", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Private payout doc — users/{uid}/private/payout. Payout bank details and
+// Private payout doc - users/{uid}/private/payout. Payout bank details and
 // the phone number moved here off the world-readable users/{uid} doc; this
 // is the same owner+admin-only `private/{doc}` rule that already guards
 // users/{uid}/private/verification, applied to a different doc id.

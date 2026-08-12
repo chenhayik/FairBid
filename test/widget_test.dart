@@ -445,7 +445,7 @@ class FakeJobRepository implements JobRepository {
     _notify();
   }
 
-  /// No test currently seeds the activity timeline — an empty stream still
+  /// No test currently seeds the activity timeline - an empty stream still
   /// satisfies the interface.
   @override
   Stream<List<JobEvent>> watchJobEvents(String jobId) async* {
@@ -497,7 +497,7 @@ class FakeJobRepository implements JobRepository {
     _notify();
   }
 
-  /// Rebuilds [j] with overrides — the fake's stand-in for a Firestore update,
+  /// Rebuilds [j] with overrides - the fake's stand-in for a Firestore update,
   /// since [Job] is immutable and has no copyWith.
   Job _rebuild(
     Job j, {
@@ -538,7 +538,7 @@ class FakeJobRepository implements JobRepository {
 /// detail screen updates live, like Firestore snapshots would. [auth] backs
 /// the `acceptBid` wallet-balance gate: accepting is blocked when the bid
 /// amount exceeds the requestor's available balance, and a successful accept
-/// locks the amount away (bumping [FakeAuthRepository.escrowLockedSen]) —
+/// locks the amount away (bumping [FakeAuthRepository.escrowLockedSen]) -
 /// mirroring the `acceptBid` Cloud Function.
 class FakeBidRepository implements BidRepository {
   FakeBidRepository(this.jobs, this.auth, [List<Bid> bids = const []])
@@ -635,7 +635,7 @@ class FakeBidRepository implements BidRepository {
 }
 
 /// In-memory [MilestoneRepository]. Fund/release mimic the Cloud Functions'
-/// status flips — and, on the last release, completing the job via the fake
+/// status flips - and, on the last release, completing the job via the fake
 /// job repo. No wallet money moves in widget tests.
 class FakeMilestoneRepository implements MilestoneRepository {
   FakeMilestoneRepository(this.jobs, [List<Milestone> seed = const []])
@@ -795,7 +795,7 @@ class FakeMilestoneRepository implements MilestoneRepository {
     _maybeComplete(jobId);
   }
 
-  /// Completes the job when every milestone is terminal — `released`, or a
+  /// Completes the job when every milestone is terminal - `released`, or a
   /// legacy `resolved`, matching the production `isTerminal`.
   void _maybeComplete(String jobId) {
     final allTerminal = _milestones
@@ -811,7 +811,7 @@ class FakeMilestoneRepository implements MilestoneRepository {
 
 /// In-memory [WalletRepository]; records the amounts of top-up/withdraw calls
 /// so tests can assert them. The ledger stays empty. The toyyibPay methods
-/// return canned values — the live gateway is never exercised in widget
+/// return canned values - the live gateway is never exercised in widget
 /// tests.
 class FakeWalletRepository implements WalletRepository {
   final topUps = <int>[];
@@ -1220,7 +1220,7 @@ class FakeNotificationRepository implements NotificationRepository {
   Future<void> removeToken(String uid) async => registeredTokens.remove(uid);
 }
 
-/// [AssistRepository] returning canned suggestions (or, by default, null —
+/// [AssistRepository] returning canned suggestions (or, by default, null -
 /// proving the post-job form works with the assist entirely unavailable).
 class FakeAssistRepository implements AssistRepository {
   FakeAssistRepository({this.description, this.priceRange});
@@ -1243,7 +1243,7 @@ class FakeAssistRepository implements AssistRepository {
   }) async => priceRange;
 }
 
-/// No-op [PushService] — tests exercise the in-app surfaces only.
+/// No-op [PushService] - tests exercise the in-app surfaces only.
 class FakePushService implements PushService {
   int permissionRequests = 0;
 
@@ -1306,7 +1306,7 @@ class FakeChatRepository implements ChatRepository {
       .cast<Conversation?>()
       .firstWhere((c) => c!.id == id, orElse: () => null);
 
-  /// Rebuilds a conversation with overrides — the fake's stand-in for a
+  /// Rebuilds a conversation with overrides - the fake's stand-in for a
   /// Firestore update, since [Conversation] is immutable.
   Conversation _rebuild(
     Conversation c, {
@@ -1562,7 +1562,7 @@ Finder _fieldBelowLabel(WidgetTester tester, String label) {
 /// picker, selects [districtLabel] from the District dropdown and confirms.
 ///
 /// Deliberately avoids `pumpAndSettle` while the picker (and its map's
-/// network-fetched tiles) is on screen — that would otherwise wait
+/// network-fetched tiles) is on screen - that would otherwise wait
 /// indefinitely on the tile layer. Bounded `pump`s are enough to carry the
 /// route transition, the dropdown menu and `PenangDistricts.ensureLoaded()`
 /// (a local asset read) forward.
@@ -1577,7 +1577,7 @@ Future<void> pickPenangLocation(
 
   // The default map centre (George Town) already auto-classifies into a
   // district by this point, so the field may show its name instead of the
-  // "Select a district..." hint — and when the picker is pushed on top of a
+  // "Select a district..." hint - and when the picker is pushed on top of a
   // screen that has its own dropdown (e.g. ServiceStep's category picker),
   // that earlier dropdown is still mounted (just behind the new route), so
   // `.first` in tree order can't be trusted either. Target the District
@@ -1594,7 +1594,7 @@ Future<void> pickPenangLocation(
   await tester.pumpAndSettle();
 }
 
-/// Finds `RegionPickerScreen`'s District dropdown specifically — its nearest
+/// Finds `RegionPickerScreen`'s District dropdown specifically - its nearest
 /// enclosing [Column] (shared with the "District" label) disambiguates it
 /// from any other `DropdownButtonFormField` in the tree.
 Finder _districtDropdown() {
@@ -1614,7 +1614,7 @@ void main() {
   // Pre-warm the Penang districts GeoJSON asset load once, before any test
   // builds a real FlutterMap/TileLayer (RegionPickerScreen). Doing that first
   // `rootBundle` read while a tile layer's concurrent network fetches are in
-  // flight can leave the read hanging indefinitely (a flutter_test quirk) —
+  // flight can leave the read hanging indefinitely (a flutter_test quirk) -
   // which would then wedge every later PenangDistricts.ensureLoaded() call,
   // including the classifier's own unit test, since they all await the same
   // cached (never-completing) Future.
@@ -2048,7 +2048,7 @@ void main() {
       expect(profile.portfolioLinks, ['https://example.com/portfolio']);
       expect(profile.memberSince, DateTime(2025, 3, 1));
 
-      // Certificates are exposed only as a count, never the URLs — and
+      // Certificates are exposed only as a count, never the URLs - and
       // [PublicProfile] has no field/getter at all that could return them,
       // nor one for email/phone/wallet/payout/coordinates/suspension: the
       // type itself is the proof those values can never surface through
@@ -2433,7 +2433,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
 
       // George Town auto-classifies to Timur Laut by this point, so the
-      // field already shows a value rather than the hint — target the
+      // field already shows a value rather than the hint - target the
       // District dropdown by its label instead of assuming tree order.
       await tester.tap(_districtDropdown());
       await tester.pump(const Duration(milliseconds: 400));
@@ -2734,7 +2734,7 @@ void main() {
       await tester.tap(find.text('View all'));
       await tester.pumpAndSettle();
 
-      // Scoped to the job list — the feed's AppBar has its own (separate)
+      // Scoped to the job list - the feed's AppBar has its own (separate)
       // bookmark_border icon that opens the Saved Jobs screen.
       final list = find.byType(ListView);
       Finder cardBookmark(IconData icon) =>
@@ -2774,7 +2774,7 @@ void main() {
         await tester.binding.setSurfaceSize(const Size(500, 1600));
         addTearDown(() => tester.binding.setSurfaceSize(null));
 
-        // RM 100 available, but the sample bid is RM 150 — RM 50 short.
+        // RM 100 available, but the sample bid is RM 150 - RM 50 short.
         final auth = FakeAuthRepository()..walletBalanceSen = 10000;
         await tester.pumpWidget(
           buildApp(auth, jobs: [sampleJob()], bids: [sampleBid()]),
@@ -2816,7 +2816,7 @@ void main() {
 
     test('sequential overdraw guard: locking one bid blocks a second that no '
         'longer fits', () async {
-      // RM 200 available — enough for either bid alone, not both.
+      // RM 200 available - enough for either bid alone, not both.
       final auth = FakeAuthRepository()..walletBalanceSen = 20000;
       final jobRepo = FakeJobRepository([
         sampleJob(id: 'job-a', title: 'Job A'),
@@ -3030,7 +3030,7 @@ void main() {
 
       expect(find.text('New provider, no score yet'), findsOneWidget);
       expect(find.textContaining('Trust Score'), findsNothing);
-      // Still rankable / acceptable — the internal score just isn't surfaced.
+      // Still rankable / acceptable - the internal score just isn't surfaced.
       expect(find.widgetWithText(FilledButton, 'Accept Bid'), findsOneWidget);
     });
 
@@ -3124,7 +3124,7 @@ void main() {
         expect(find.text('Assigned Provider'), findsOneWidget);
         expect(find.text('1. Full repair'), findsOneWidget);
 
-        // Release the delivered milestone (with confirmation) — the last one,
+        // Release the delivered milestone (with confirmation) - the last one,
         // so the job completes.
         final releaseBtn = find.widgetWithText(FilledButton, 'Release Payment');
         await tester.ensureVisible(releaseBtn);
@@ -3575,7 +3575,7 @@ void main() {
           'role': 'provider',
           'displayName': 'Alex Rivera',
           // Legacy public locations, still present on a doc that hasn't
-          // fully migrated yet — the payout doc below must win.
+          // fully migrated yet - the payout doc below must win.
           'phone': '011-000 0000',
           'onboarding': {
             'bankName': 'Legacy Bank',
@@ -3909,7 +3909,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // The scrollable TabBar puts 'Stats' past the right edge in the wide
-      // Ahem test font — bring it on-screen first.
+      // Ahem test font - bring it on-screen first.
       await tester.ensureVisible(find.text('Stats'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Stats'));
@@ -4311,7 +4311,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // The Users tab is the last, scrollable-off-screen one in the wide test
-      // font — bring it on-screen first (same as the Stats tab test).
+      // font - bring it on-screen first (same as the Stats tab test).
       await tester.ensureVisible(find.text('Users'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Users'));

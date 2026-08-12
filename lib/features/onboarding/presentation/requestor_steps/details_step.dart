@@ -10,7 +10,7 @@ import '../../../../core/widgets/location_field.dart';
 import '../../../auth/presentation/validators.dart';
 import '../requestor_onboarding_controller.dart';
 
-/// Stage 2 — the requestor's contact details and (for businesses) company info.
+/// Stage 2 - the requestor's contact details and (for businesses) company info.
 class DetailsStep extends StatefulWidget {
   const DetailsStep({super.key});
 

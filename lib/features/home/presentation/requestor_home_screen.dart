@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../jobs/data/job_repository.dart';
 import '../../jobs/domain/job.dart';
@@ -43,8 +44,9 @@ class RequestorHomeScreen extends StatelessWidget {
             if (user == null)
               const SizedBox.shrink()
             else
-              StreamBuilder<List<Job>>(
-                stream: repo.watchMyJobs(user.uid),
+              KeyedStreamBuilder<List<Job>>(
+                cacheKey: user.uid,
+                create: () => repo.watchMyJobs(user.uid),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());

@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../data/dispute_repository.dart';
 import '../domain/dispute.dart';
 
@@ -17,8 +18,8 @@ class DisputeQueueScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return StreamBuilder<List<Dispute>>(
-      stream: context.read<DisputeRepository>().watchOpenDisputes(),
+    return KeyedStreamBuilder<List<Dispute>>(
+      create: context.read<DisputeRepository>().watchOpenDisputes,
       builder: (context, snapshot) {
         final items = snapshot.data;
         return ListView(
@@ -87,10 +88,8 @@ class _DisputeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final danger = context.fairbid.danger;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: AppCard(
+    return AppCard(
+        onTap: onTap,
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
@@ -142,7 +141,6 @@ class _DisputeCard extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant),
           ],
         ),
-      ),
-    );
+      );
   }
 }

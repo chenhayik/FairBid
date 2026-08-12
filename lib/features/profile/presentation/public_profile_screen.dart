@@ -17,13 +17,13 @@ import '../domain/public_profile.dart';
 import '../domain/review.dart';
 import 'widgets/review_card.dart';
 
-/// A read-only public view of another user's profile — reachable from a bid
+/// A read-only public view of another user's profile - reachable from a bid
 /// card's identity row, a chat thread's header and a review's author name.
 ///
 /// ONE screen with role-conditional sections rather than two screens: a
 /// provider and a requestor share the identity header, credibility strip,
 /// About and Reviews, so "a profile" reads as one concept everywhere it's
-/// opened from. The signed-in user's own uid never reaches this screen — the
+/// opened from. The signed-in user's own uid never reaches this screen - the
 /// router redirects `/users/{myUid}` to the canonical `/profile` instead.
 class PublicProfileScreen extends StatefulWidget {
   const PublicProfileScreen({super.key, required this.uid});
@@ -51,6 +51,17 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
+            }
+            // A failed stream also yields null, so without this the viewer
+            // was told the other party had deleted their account whenever the
+            // read merely failed.
+            if (snapshot.hasError) {
+              return const EmptyState(
+                icon: Icons.cloud_off,
+                title: "Couldn't load this profile",
+                message: 'Check your connection, then go back and open it '
+                    'again.',
+              );
             }
             final profile = snapshot.data;
             if (profile == null) {
@@ -129,7 +140,7 @@ class _ProfileBody extends StatelessWidget {
   }
 }
 
-/// Avatar, name, role-specific subtitle and location — identical structure
+/// Avatar, name, role-specific subtitle and location - identical structure
 /// for both roles so a profile always opens the same way.
 class _IdentityHeader extends StatelessWidget {
   const _IdentityHeader({required this.profile});
@@ -245,7 +256,7 @@ class _StatsGrid extends StatelessWidget {
 }
 
 /// The most-scanned element of a provider's profile: rating, jobs completed,
-/// Trust Score (once earned) and a Verified tile (once approved) — exactly
+/// Trust Score (once earned) and a Verified tile (once approved) - exactly
 /// what a requestor compares bids by.
 class _CredibilityStrip extends StatelessWidget {
   const _CredibilityStrip({required this.profile});
@@ -263,10 +274,10 @@ class _CredibilityStrip extends StatelessWidget {
             : '★ ${avg.toStringAsFixed(1)} (${profile.ratingCount})',
       ),
       _Stat('Jobs Completed', '${profile.jobsCompleted}'),
-      // Never a forged 0/100 — the numeric tile only appears once earned.
+      // Never a forged 0/100 - the numeric tile only appears once earned.
       if (profile.scoreVisible)
         _Stat('Trust Score', '${(profile.trustScore / 10).round()}/100'),
-      // Never a punitive "Unverified" — the tile only appears once approved.
+      // Never a punitive "Unverified" - the tile only appears once approved.
       if (profile.verificationStatus == 'approved')
         _Stat('Verification', 'Verified'),
     ];
@@ -305,7 +316,7 @@ class _ClientHistoryStrip extends StatelessWidget {
       if (profile.memberSince != null)
         _Stat('Member Since', _monthYear(profile.memberSince!)),
       _Stat('Jobs Posted', '${profile.jobsPosted}'),
-      // Never a forged 0% — omitted until at least one job has been posted.
+      // Never a forged 0% - omitted until at least one job has been posted.
       if (profile.hireRate != null)
         _Stat('Hire Rate', '${profile.hireRate}%'),
       _Stat('Jobs Completed', '${profile.jobsCompleted}'),
@@ -338,7 +349,7 @@ class _ClientHistoryStrip extends StatelessWidget {
     );
   }
 
-  /// "Aug 2026" — deliberately hand-rolled rather than pulling in `intl`'s
+  /// "Aug 2026" - deliberately hand-rolled rather than pulling in `intl`'s
   /// `DateFormat` for one label.
   String _monthYear(DateTime date) {
     const months = [
@@ -349,7 +360,7 @@ class _ClientHistoryStrip extends StatelessWidget {
   }
 }
 
-/// The neutral "still building a track record" badge — never a `0/100`
+/// The neutral "still building a track record" badge - never a `0/100`
 /// score and never a red "Unverified".
 class _NewToFairBidBadge extends StatelessWidget {
   const _NewToFairBidBadge();
@@ -454,7 +465,7 @@ class _IconLine extends StatelessWidget {
 
 /// Provider-only: a horizontal photo gallery (full-screen/zoom via the same
 /// [PhotoViewerScreen] the job detail Photos section uses), tappable
-/// portfolio links and a certificate count line — never the certificate
+/// portfolio links and a certificate count line - never the certificate
 /// files themselves (see [PublicProfile]'s doc comment).
 class _PortfolioCard extends StatelessWidget {
   const _PortfolioCard({required this.profile});
@@ -490,6 +501,10 @@ class _PortfolioCard extends StatelessWidget {
                       images[i],
                       width: 100,
                       height: 100,
+                      // Decode at display size, not the full upload size.
+                      cacheWidth: (100 *
+                              MediaQuery.devicePixelRatioOf(context))
+                          .round(),
                       fit: BoxFit.cover,
                       loadingBuilder: (context, child, loadingProgress) {
                         if (loadingProgress == null) return child;
@@ -538,7 +553,7 @@ class _PortfolioCard extends StatelessWidget {
 }
 
 /// A tappable portfolio link. There's no in-app browser or `url_launcher`
-/// dependency yet, so tapping copies the link instead of opening it — a
+/// dependency yet, so tapping copies the link instead of opening it - a
 /// harmless placeholder until a real "open externally" affordance exists.
 class _PortfolioLinkRow extends StatelessWidget {
   const _PortfolioLinkRow({required this.link});
@@ -582,7 +597,7 @@ class _PortfolioLinkRow extends StatelessWidget {
 }
 
 /// Provider-only: the four Trust Score sub-bars, without the own-profile's
-/// second-person coaching hints. Collapsed by default — the headline number
+/// second-person coaching hints. Collapsed by default - the headline number
 /// is already in the credibility strip above.
 class _TrustDetailCard extends StatefulWidget {
   const _TrustDetailCard({required this.profile});
@@ -709,7 +724,7 @@ class _ReviewsCard extends StatelessWidget {
                 for (final (i, review) in items.indexed) ...[
                   if (i > 0) const Divider(height: 24),
                   // Reporting a review is the reviewee's own affordance, not
-                  // a public viewer's — they get "Report this user" instead.
+                  // a public viewer's - they get "Report this user" instead.
                   ReviewCard(review: review, onFlag: null),
                 ],
                 if (ratingCount > items.length) ...[
@@ -730,7 +745,7 @@ class _ReviewsCard extends StatelessWidget {
   }
 }
 
-/// Low-emphasis "Report this user" footer — deliberately no Message button;
+/// Low-emphasis "Report this user" footer - deliberately no Message button;
 /// messaging opens through an existing job/bid/conversation, not from a cold
 /// profile view.
 class _ReportFooter extends StatelessWidget {
@@ -795,7 +810,7 @@ class _ReportFooter extends StatelessWidget {
 }
 
 /// Reason dialog for reporting a user. Returns the reason on confirm
-/// (required) or null on cancel — mirrors profile_screen.dart's
+/// (required) or null on cancel - mirrors profile_screen.dart's
 /// `_FlagReviewDialog`.
 class _ReportUserDialog extends StatefulWidget {
   const _ReportUserDialog({required this.name});

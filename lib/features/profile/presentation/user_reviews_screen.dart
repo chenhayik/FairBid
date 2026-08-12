@@ -6,7 +6,7 @@ import '../data/review_repository.dart';
 import '../domain/review.dart';
 import 'widgets/review_card.dart';
 
-/// The "See all N reviews" screen opened from [PublicProfileScreen] — pushed
+/// The "See all N reviews" screen opened from [PublicProfileScreen] - pushed
 /// full-screen with a back button. Pages of ~20 reviews at a time (newest
 /// first, loaded as the list scrolls near the end); no sort control and no
 /// ratings-distribution histogram (misleading under ~5 reviews, which is
@@ -66,7 +66,7 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
     if (_loadingMore || !_hasMore || _reviews.isEmpty) return;
     final cursor = _reviews.last.createdAt;
     if (cursor == null) {
-      // No timestamp to page from (shouldn't happen on a saved review) —
+      // No timestamp to page from (shouldn't happen on a saved review) -
       // stop rather than risk re-fetching the same page forever.
       setState(() => _hasMore = false);
       return;
@@ -125,7 +125,7 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
       itemBuilder: (context, i) {
         if (i >= _reviews.length) {
           // Building this trailing slot means the list has scrolled near the
-          // end — kick off the next page. Guarded by _loadingMore/_hasMore,
+          // end - kick off the next page. Guarded by _loadingMore/_hasMore,
           // so a rebuild of this same slot while a fetch is in flight is a
           // no-op.
           WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());

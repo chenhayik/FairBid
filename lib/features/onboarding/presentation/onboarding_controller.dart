@@ -82,7 +82,7 @@ class OnboardingController extends ChangeNotifier {
         apply: (url) => data.idDocumentUrl = url,
       );
 
-  /// [source] is chosen by the caller — a selfie is usually taken live, but an
+  /// [source] is chosen by the caller - a selfie is usually taken live, but an
   /// existing photo from the gallery is allowed too.
   Future<void> pickSelfie(ImageSource source) => _pickAndUpload(
         purpose: 'selfie',
@@ -103,7 +103,7 @@ class OnboardingController extends ChangeNotifier {
       );
 
   /// Removes the image from local state and best-effort deletes it from
-  /// Storage (failures are ignored — the file may already be gone).
+  /// Storage (failures are ignored - the file may already be gone).
   void removePortfolioImage(String url) {
     data.portfolioImageUrls.remove(url);
     notifyListeners();

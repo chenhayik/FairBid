@@ -6,7 +6,7 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 4 — "Build your profile": display name, bio, skills, trust boosters.
+/// Stage 4 - "Build your profile": display name, bio, skills, trust boosters.
 class ProfileStep extends StatefulWidget {
   const ProfileStep({super.key});
 

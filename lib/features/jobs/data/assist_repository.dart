@@ -3,7 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 /// Optional Gemini-backed suggestions for the Post-a-Job form, proxied
 /// through the `suggestJobDetails` Cloud Function so the API key never ships
 /// in the APK. Every method returns null when no suggestion is available
-/// (offline, quota reached, unparseable reply) — the form must work
+/// (offline, quota reached, unparseable reply) - the form must work
 /// unchanged without them. UI/controllers depend on this interface so tests
 /// can use a fake.
 abstract interface class AssistRepository {
@@ -38,7 +38,7 @@ class FirebaseAssistRepository implements AssistRepository {
     required String roughText,
     String? photoUrl,
   }) async {
-    // Advisory only: swallow every failure into "no suggestion" — a broken
+    // Advisory only: swallow every failure into "no suggestion" - a broken
     // assist must never surface as a form error.
     try {
       final result = await _functions

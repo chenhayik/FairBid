@@ -44,7 +44,7 @@ GoRouter buildRouter(AuthController auth) {
       // Signed out → only the auth screens are reachable.
       if (user == null) return onAuthScreen ? null : '/login';
 
-      // Suspended users (never admins) are locked to the suspended notice —
+      // Suspended users (never admins) are locked to the suspended notice -
       // above onboarding so a mid-onboarding suspension still applies.
       if (user.suspended && user.role != UserRole.admin) {
         return location == '/suspended' ? null : '/suspended';
@@ -69,7 +69,7 @@ GoRouter buildRouter(AuthController auth) {
           path: '/onboarding',
           builder: (_, _) => const OnboardingFlowScreen()),
 
-      // Jobs — pushed full-screen (outside the tab shell) with a back button.
+      // Jobs - pushed full-screen (outside the tab shell) with a back button.
       GoRoute(path: '/post-job', builder: (_, _) => const PostJobScreen()),
       GoRoute(path: '/jobs', builder: (_, _) => const JobFeedScreen()),
       GoRoute(
@@ -80,7 +80,7 @@ GoRouter buildRouter(AuthController auth) {
             JobDetailScreen(jobId: state.pathParameters['id']!),
       ),
 
-      // Admin — the verification review screen, pushed from the queue with the
+      // Admin - the verification review screen, pushed from the queue with the
       // selected applicant passed as `extra`.
       GoRoute(
         path: '/admin/verify',
@@ -88,7 +88,7 @@ GoRouter buildRouter(AuthController auth) {
             verification: state.extra as PendingVerification),
       ),
 
-      // Admin — the dispute ruling screen, pushed from the disputes queue with
+      // Admin - the dispute ruling screen, pushed from the disputes queue with
       // the selected dispute passed as `extra`.
       GoRoute(
         path: '/admin/dispute',
@@ -96,7 +96,7 @@ GoRouter buildRouter(AuthController auth) {
             DisputeDetailScreen(dispute: state.extra as Dispute),
       ),
 
-      // Chat thread — pushed full-screen (outside the tab shell) with a back
+      // Chat thread - pushed full-screen (outside the tab shell) with a back
       // button. `/messages` (no id) stays a tab inside the shell below.
       GoRoute(
         path: '/messages/:id',
@@ -104,7 +104,7 @@ GoRouter buildRouter(AuthController auth) {
             conversationId: state.pathParameters['id']!),
       ),
 
-      // Notification centre — pushed from the app bar bell; also the landing
+      // Notification centre - pushed from the app bar bell; also the landing
       // point for tapped push notifications.
       GoRoute(
           path: '/notifications',
@@ -115,14 +115,14 @@ GoRouter buildRouter(AuthController auth) {
       GoRoute(
           path: '/suspended', builder: (_, _) => const SuspendedScreen()),
 
-      // Profile — pushed full-screen (outside the tab shell) with a back button.
+      // Profile - pushed full-screen (outside the tab shell) with a back button.
       GoRoute(
           path: '/profile/edit', builder: (_, _) => const EditProfileScreen()),
       GoRoute(
           path: '/profile/earnings',
           builder: (_, _) => const EarningsScreen()),
 
-      // Public profile — pushed full-screen (outside the tab shell) with a
+      // Public profile - pushed full-screen (outside the tab shell) with a
       // back button, matching /jobs/:id. Viewing your own uid redirects to
       // the canonical /profile screen instead of a second copy of it.
       GoRoute(

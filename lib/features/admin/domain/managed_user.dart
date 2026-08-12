@@ -1,4 +1,4 @@
-/// A user as seen in the admin "Users" management list — the fields needed to
+/// A user as seen in the admin "Users" management list - the fields needed to
 /// identify someone and act on their account, nothing sensitive.
 class ManagedUser {
   const ManagedUser({

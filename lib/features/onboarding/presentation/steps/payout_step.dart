@@ -7,7 +7,7 @@ import '../../../auth/presentation/auth_controller.dart';
 import '../../../auth/presentation/validators.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 6 — "Secure Payout Information": bank details + final submission.
+/// Stage 6 - "Secure Payout Information": bank details + final submission.
 class PayoutStep extends StatefulWidget {
   const PayoutStep({super.key});
 
