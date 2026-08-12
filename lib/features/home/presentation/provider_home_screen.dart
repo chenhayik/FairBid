@@ -217,7 +217,12 @@ class _NearbyJobs extends StatelessWidget {
 
     final base = LatLng(user.baseLat!, user.baseLng!);
     return KeyedStreamBuilder<List<Job>>(
-      create: repo.watchOpenJobs,
+      // Only the three nearest are shown, but "nearest" is ranked in Dart, so
+      // the window has to be wide enough that a close-but-older job is not
+      // cut off by recency first. A wider bound than the feed's is the
+      // pragmatic middle ground; a proper fix needs geo-queries (geohash),
+      // which is a much larger change.
+      create: () => repo.watchOpenJobs(limit: 100),
       builder: (context, snapshot) {
         // Loading and error both used to fall through to "No jobs yet", so a
         // provider was told there was no work near them while the query was

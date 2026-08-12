@@ -39,6 +39,11 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   /// so typing "plumber" cost seven of each.
   Timer? _searchDebounce;
 
+  /// How many jobs the query currently asks for. Grown by "Load more" rather
+  /// than paged, so the feed remains a single live stream and newly posted
+  /// jobs still appear at the top.
+  int _limit = kOpenJobsPageSize;
+
   @override
   void dispose() {
     _searchDebounce?.cancel();
@@ -68,7 +73,9 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     final query = _search.text.trim().toLowerCase();
     final results = <(Job, double?)>[];
     for (final job in jobs) {
-      if (_category != null && job.category != _category) continue;
+      // Category is filtered server-side now (see watchOpenJobs), so it is
+      // deliberately absent here. Search, budget and radius still run locally
+      // against the loaded window.
       if (query.isNotEmpty &&
           !job.title.toLowerCase().contains(query) &&
           !job.description.toLowerCase().contains(query)) {
@@ -152,7 +159,11 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
               ),
             Expanded(
               child: KeyedStreamBuilder<List<Job>>(
-                create: repo.watchOpenJobs,
+                // Re-subscribe only when the query itself changes, i.e. a new
+                // category or a grown window. Typing in search must not.
+                cacheKey: '${_category ?? ''}:$_limit',
+                create: () =>
+                    repo.watchOpenJobs(category: _category, limit: _limit),
                 builder: (context, snapshot) {
                   // hasData rather than the connection state: a resubscribe
                   // resets to `waiting` while retaining the previous results,
@@ -168,19 +179,51 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                       message: 'Please check your connection and try again.',
                     );
                   }
-                  final results = _applyFilters(snapshot.data ?? [], base);
+                  final loaded = snapshot.data ?? [];
+                  final results = _applyFilters(loaded, base);
+                  // A full window means there is very likely more behind it.
+                  final canLoadMore = loaded.length >= _limit;
                   if (results.isEmpty) {
-                    return const EmptyState(
-                      icon: Icons.search_off_rounded,
-                      title: 'No jobs found',
-                      message: 'Try widening your filters or check back later.',
+                    // Search, budget and radius are applied to the loaded
+                    // window only, so "nothing matched" can simply mean the
+                    // matches are further down. Offering the next page here
+                    // keeps that from being a dead end.
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const EmptyState(
+                            icon: Icons.search_off_rounded,
+                            title: 'No jobs found',
+                            message: 'Try widening your filters, or load more '
+                                'jobs to keep looking.',
+                          ),
+                          if (canLoadMore)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 24, vertical: 12),
+                              child: SecondaryButton(
+                                label: 'Load more jobs',
+                                onPressed: () => setState(
+                                    () => _limit += kOpenJobsPageSize),
+                              ),
+                            ),
+                        ],
+                      ),
                     );
                   }
                   return ListView.separated(
                     padding: const EdgeInsets.all(24),
-                    itemCount: results.length,
+                    itemCount: results.length + (canLoadMore ? 1 : 0),
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (context, i) {
+                      if (i == results.length) {
+                        return SecondaryButton(
+                          label: 'Load more jobs',
+                          onPressed: () => setState(
+                              () => _limit += kOpenJobsPageSize),
+                        );
+                      }
                       final (job, distance) = results[i];
                       return JobCard(
                         job: job,

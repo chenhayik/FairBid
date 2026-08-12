@@ -29,6 +29,29 @@ Struck off the backlog below; kept here so the numbering still matches the audit
 
 Baseline held throughout: `flutter analyze` clean, 116/116 tests passing.
 
+## Also done in the Stage 3 pass
+
+- **`topUpWallet` closed.** It now refuses unless `FUNCTIONS_EMULATOR` is set, so
+  the demo top-up cannot mint spendable balance in production. The client flag
+  `PlatformConfig.demoTopUpEnabled` became an explicit
+  `--dart-define=FAIRBID_DEMO_TOPUP=true` opt-in rather than `kDebugMode`, because
+  the app has no emulator wiring and a debug build talks to the real project -
+  keying off debug mode would have shown a button the backend then rejected.
+- **D1, partly.** The category filter is now server-side, using the previously
+  unused `(status, category, createdAt)` index, and the feed is bounded to
+  `kOpenJobsPageSize` with a "Load more" control that grows the window rather than
+  paging (so the list stays live). `watchMyBids` / `watchProviderMilestones` are
+  still deliberately unbounded - see D1 above for why limiting them would corrupt
+  money totals. Denormalised counters remain the outstanding half.
+- **High-severity dependency patched** via `npm audit fix`. The remaining 8
+  moderates need `firebase-admin` 12 -> 14, two majors on the money backend with no
+  test exercising it; do that as its own change, not folded into something else.
+- **The two untested funnels now have tests** (+5, suite at 121). Writing them
+  surfaced a real bug: `PostJobController.setLocation` called `notifyListeners()`
+  from `initState`, tripping `'!_dirty'` for every requestor with a saved default
+  location. Fixed with a non-notifying `seedLocation`. Assertions are disabled in
+  release builds, which is why this had gone unnoticed.
+
 **Baseline to preserve:** `flutter analyze` clean, `flutter test` 116/116 passing.
 Re-run both after every item. The repo is *not* `dart format` clean (104 of 127 files
 differ from the formatter's style), so **do not run `dart format`** - match the

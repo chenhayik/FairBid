@@ -131,6 +131,18 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Seeds the location before the first build, without notifying.
+  ///
+  /// Called from `initState` to pre-fill "Where" from the requestor's saved
+  /// default. [setLocation] cannot be used there: notifying while the owning
+  /// `ChangeNotifierProvider` is still building trips a framework assertion
+  /// (`'!_dirty': is not true`), so opening Post-a-Job threw for every
+  /// requestor who had completed onboarding. No notification is needed here
+  /// anyway, since the first build reads this straight after.
+  void seedLocation(PickedLocation value) {
+    location = value;
+  }
+
   void setAddress(ServiceAddress? a) {
     pendingAddress = a;
     notifyListeners();

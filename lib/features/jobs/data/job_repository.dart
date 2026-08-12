@@ -5,15 +5,24 @@ import '../domain/job.dart';
 import '../domain/job_event.dart';
 import '../domain/service_address.dart';
 
+/// How many open jobs the feed loads at a time. The feed grows this window
+/// rather than paging through disjoint pages, so the list stays a live stream
+/// (new jobs still appear) while the query stays bounded.
+const int kOpenJobsPageSize = 30;
+
 /// Reads and writes jobs. UI/controllers depend on this interface so tests can
 /// use a fake without Firestore.
 abstract interface class JobRepository {
   /// Creates a new open job and returns its id.
   Future<String> create(Job job);
 
-  /// Streams open jobs (newest first). Category, budget and distance
-  /// filtering are all applied client-side by the caller.
-  Stream<List<Job>> watchOpenJobs();
+  /// Open jobs, newest first, bounded to [limit].
+  ///
+  /// Pass [category] to filter server-side. Doing it in the query rather than
+  /// in Dart is what makes the bound safe: filtering a limited window client
+  /// side would hide jobs simply because the newest [limit] happened to be in
+  /// other categories.
+  Stream<List<Job>> watchOpenJobs({String? category, int limit});
 
   /// Streams the jobs posted by [requestorId] (newest first).
   Stream<List<Job>> watchMyJobs(String requestorId);
@@ -90,10 +99,22 @@ class FirestoreJobRepository implements JobRepository {
   }
 
   @override
-  Stream<List<Job>> watchOpenJobs() {
-    return _jobs
-        .where('status', isEqualTo: JobStatus.open.storage)
+  Stream<List<Job>> watchOpenJobs({
+    String? category,
+    int limit = kOpenJobsPageSize,
+  }) {
+    // Both shapes are covered by declared composite indexes in
+    // firestore.indexes.json: (status, createdAt) and, when a category is
+    // given, (status, category, createdAt). The latter existed unused until
+    // now, because the category filter used to run in Dart.
+    Query<Map<String, dynamic>> query =
+        _jobs.where('status', isEqualTo: JobStatus.open.storage);
+    if (category != null) {
+      query = query.where('category', isEqualTo: category);
+    }
+    return query
         .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
         .map(_toJobs);
   }

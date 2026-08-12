@@ -83,6 +83,14 @@ class FakeAuthRepository implements AuthRepository {
   double? baseLng;
   String? baseDistrictCode;
   String? baseTown;
+
+  /// A requestor's saved default job location, distinct from the provider
+  /// [baseLat]/[baseLng] service base. Post-a-Job pre-fills "Where" from
+  /// these, so seeding them mirrors a requestor who finished onboarding.
+  double? defaultLat;
+  double? defaultLng;
+  String? defaultDistrictCode;
+  String? defaultTown;
   String displayName = 'Test User';
   String? phone;
   String? location;
@@ -143,6 +151,10 @@ class FakeAuthRepository implements AuthRepository {
       baseLng: baseLng,
       baseDistrictCode: baseDistrictCode,
       baseTown: baseTown,
+      defaultLat: defaultLat,
+      defaultLng: defaultLng,
+      defaultDistrictCode: defaultDistrictCode,
+      defaultTown: defaultTown,
       phone: phone,
       location: location,
       bio: bio,
@@ -376,8 +388,18 @@ class FakeJobRepository implements JobRepository {
   }
 
   @override
-  Stream<List<Job>> watchOpenJobs() async* {
-    yield _jobs.where((j) => j.status == JobStatus.open).toList();
+  Stream<List<Job>> watchOpenJobs({
+    String? category,
+    int limit = kOpenJobsPageSize,
+  }) async* {
+    // Mirrors the real query: status, then category server-side, then a
+    // bounded window - so a test that relies on the category filter is
+    // exercising the same shape the Firestore index serves.
+    yield _jobs
+        .where((j) => j.status == JobStatus.open)
+        .where((j) => category == null || j.category == category)
+        .take(limit)
+        .toList();
   }
 
   @override
@@ -2524,7 +2546,9 @@ void main() {
     }
 
     testWidgets('requestor home lists their posted jobs', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      // Keep the default 800 width - the region picker overflows narrower
+      // than that - and add height for the four-section form.
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       await tester.pumpWidget(
@@ -4355,6 +4379,8 @@ void main() {
       expect(find.widgetWithText(OutlinedButton, 'Sign Out'), findsOneWidget);
     });
   });
+
+  postJobAndOnboardingTests();
 }
 
 /// Opens the register screen, picks [roleLabel] ('Hire' or 'Work'), fills the
@@ -4376,4 +4402,126 @@ Future<void> openRegisterAs(WidgetTester tester, String roleLabel) async {
   await tester.ensureVisible(button);
   await tester.tap(button);
   await tester.pumpAndSettle();
+}
+
+// ---------------------------------------------------------------------------
+// Post a job, and leaving onboarding.
+//
+// Both funnels were previously unguarded: nothing exercised the post-a-job
+// form at all, and nothing pinned the onboarding back-arrow behaviour, which
+// used to sign the user out without asking.
+// ---------------------------------------------------------------------------
+
+/// Registered from [main]. Kept as a function rather than inlined so this
+/// file's newest groups are easy to find in a 4,000-line suite.
+void postJobAndOnboardingTests() {
+  group('Post a job', () {
+    /// Signs in a requestor and opens the post-a-job form.
+    Future<void> openPostJob(WidgetTester tester) async {
+      // The form is four sections tall; on the default test viewport the
+      // lower fields' centres stay off-screen even after ensureVisible, so
+      // taps land on nothing. Same trick the bidding tests use.
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      // Seed a default location, the way onboarding leaves a real requestor.
+      // The form then pre-fills "Where" (see _locationDefaulted), which is
+      // both the common path and keeps the map picker out of this test - the
+      // picker is already exercised by the onboarding tests.
+      final auth = FakeAuthRepository()
+        ..defaultLat = 5.4164
+        ..defaultLng = 100.3327
+        ..defaultDistrictCode = 'TL'
+        ..defaultTown = 'George Town'
+        ..seedSignedIn(UserRole.requestor);
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('+ Post a Job'));
+      await tester.pumpAndSettle();
+      expect(find.text('Post a New Job'), findsOneWidget);
+    }
+
+    testWidgets('an empty form reports every required field', (tester) async {
+      await openPostJob(tester);
+
+      final submit = find.widgetWithText(FilledButton, 'Post Job');
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      // All three sit in the first section, above the submit button.
+      expect(find.text('Pick a category.'), findsOneWidget);
+      expect(find.text('Title is required.'), findsOneWidget);
+      expect(find.text('Description is required.'), findsOneWidget);
+      // Nothing was posted, so the form is still up.
+      expect(find.text('Post a New Job'), findsOneWidget);
+    });
+
+    testWidgets('a complete form posts the job', (tester) async {
+      await openPostJob(tester);
+
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Plumbing').last);
+      await tester.pumpAndSettle();
+
+      await fillField(tester, 'Job Title', 'Fix the kitchen tap');
+      await fillField(tester, 'Description', 'It drips constantly.');
+
+      // "Where" is already satisfied by the seeded default location.
+
+      final submit = find.widgetWithText(FilledButton, 'Post Job');
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Job posted!'), findsOneWidget);
+    });
+  });
+
+  group('Leaving onboarding', () {
+    /// Registers a brand-new requestor, who the router sends into onboarding.
+    Future<void> openOnboarding(WidgetTester tester) async {
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository()..onboardingComplete = false),
+      );
+      await tester.pumpAndSettle();
+      await openRegisterAs(tester, 'Hire');
+      expect(find.text('How will you hire?'), findsOneWidget);
+    }
+
+    testWidgets('back on the first stage asks before signing out', (
+      tester,
+    ) async {
+      await openOnboarding(tester);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      // It must ask, not act: this used to sign the user out on one tap.
+      expect(find.text('Leave onboarding?'), findsOneWidget);
+    });
+
+    testWidgets('choosing Stay keeps the user in onboarding', (tester) async {
+      await openOnboarding(tester);
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Stay'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Leave onboarding?'), findsNothing);
+      expect(find.text('How will you hire?'), findsOneWidget);
+    });
+
+    testWidgets('choosing Sign out leaves onboarding', (tester) async {
+      await openOnboarding(tester);
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Sign out'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('How will you hire?'), findsNothing);
+    });
+  });
 }

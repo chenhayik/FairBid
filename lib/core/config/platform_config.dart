@@ -1,16 +1,28 @@
-import 'package:flutter/foundation.dart';
-
 /// Platform-wide tunables that the plan (§3.2.3, §3.4.3) treats as a future
 /// "platform configuration document". Kept in one place so the bid-ranking and
 /// Trust Score code share a single source of truth and tests can pin the maths.
 class PlatformConfig {
   const PlatformConfig._();
 
-  /// Whether the wallet offers the demo top-up shortcut. It credits a real
-  /// balance through `topUpWallet` without taking payment, so it must never be
-  /// reachable in a release build: a free-money button next to the real one
-  /// either gets used or destroys confidence that the payments are real.
-  static const bool demoTopUpEnabled = kDebugMode;
+  /// Whether the wallet offers the demo top-up shortcut, which credits a real
+  /// balance through `topUpWallet` without taking payment.
+  ///
+  /// Off unless explicitly switched on at build time:
+  ///
+  /// ```
+  /// flutter run --dart-define=FAIRBID_DEMO_TOPUP=true
+  /// ```
+  ///
+  /// Deliberately not `kDebugMode`. The app has no emulator wiring, so a debug
+  /// build still talks to the real project, and the matching server gate in
+  /// `topUpWallet` is emulator-only - keying this off debug mode would show a
+  /// button that the backend then refuses. An explicit define means the
+  /// developer opting in is the same one pointing at the emulator.
+  ///
+  /// This only hides the button. The real control is the server-side gate;
+  /// see the note on `exports.topUpWallet` in functions/index.js.
+  static const bool demoTopUpEnabled =
+      bool.fromEnvironment('FAIRBID_DEMO_TOPUP');
 
   /// "Best Value" composite weights. Price and trust each contribute a
   /// normalised 0–1 score; the weights (summing to 1) balance them.

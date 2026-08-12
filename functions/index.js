@@ -756,15 +756,39 @@ const MAX_TOPUP_SEN = 1000000; // RM 10,000
 const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
 
 /**
+ * True only when running under the Firebase emulator suite. Deployed
+ * instances never set this, so it is a reliable "not production" test.
+ */
+const isEmulator = () => process.env.FUNCTIONS_EMULATOR === "true";
+
+/**
  * Demo-only top-up that stands in for a payment gateway: credits the caller's
  * own wallet, capped per call (MAX_TOPUP_SEN) and capped in total
  * (MAX_WALLET_BALANCE_SEN) so a tampered - or merely looping - client can't
  * mint absurd balances. A transaction (not a batch) is needed now: the total
  * cap is a balance precondition, so the current balance must be read and
  * checked atomically with the increment.
+ *
+ * EMULATOR ONLY. The caps above bound how fast a caller can mint balance, but
+ * they do not stop them: this credits a real, spendable wallet with no payment
+ * taken, and any authenticated user could call it directly regardless of
+ * whether the client shows the button. Hiding the UI is not a control. The
+ * only real top-up path in production is createTopUpBill + reconcileTopUp,
+ * where toyyibPay is the arbiter of whether money actually moved.
+ *
+ * Keep in sync with PlatformConfig.demoTopUpEnabled, which gates the client
+ * button on the same condition.
  */
 exports.topUpWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
+  if (!isEmulator()) {
+    functions.logger.error(
+        "topUpWallet rejected: demo top-up is emulator-only", {uid});
+    throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Demo top-up is not available. Please top up with a card or " +
+        "online banking.");
+  }
   const amountSen = checkAmount(data.amountSen);
   functions.logger.info("topUpWallet requested", {uid, amountSen});
   if (amountSen > MAX_TOPUP_SEN) {

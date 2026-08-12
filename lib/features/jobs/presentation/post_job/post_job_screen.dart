@@ -76,7 +76,7 @@ class _PostJobViewState extends State<_PostJobView> {
       town: user.defaultTown,
     );
     final controller = context.read<PostJobController>();
-    controller.setLocation(PickedLocation(
+    controller.seedLocation(PickedLocation(
       lat: user.defaultLat!,
       lng: user.defaultLng!,
       address: region.label,
