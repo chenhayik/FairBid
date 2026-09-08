@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/util/service_categories.dart';
 import '../../../../core/location/geo.dart';
 import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -12,7 +13,6 @@ import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/keyed_stream_builder.dart';
 import '../../../auth/presentation/auth_controller.dart';
-import '../../../onboarding/presentation/steps/service_step.dart';
 import '../../data/job_repository.dart';
 import '../../domain/job.dart';
 import '../widgets/job_card.dart';

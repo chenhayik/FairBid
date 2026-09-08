@@ -84,13 +84,12 @@ class GoogleButton extends StatelessWidget {
         side: const BorderSide(color: Color(0xFFE2E8F0)),
         backgroundColor: Colors.white,
       ),
-      icon: const Text(
-        'G',
-        style: TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.w800,
-          color: Color(0xFF4285F4),
-        ),
+      icon: Image.asset(
+        'assets/images/google_g.png',
+        // Height only: the mark is 200x204, and Google's branding guidelines
+        // forbid distorting it, so let the width follow the aspect ratio.
+        height: 18,
+        excludeFromSemantics: true,
       ),
       label: const Text('Continue with Google'),
     );

@@ -78,6 +78,10 @@ class FirestoreDisputeRepository implements DisputeRepository {
     return _firestore
         .collection('disputes')
         .where('status', isEqualTo: DisputeStatus.open.storage)
+        // Bounded: "a handful of open disputes" is an assumption about the
+        // platform, not a constraint on it. The admin queue works through
+        // them oldest-first, so a cap cannot hide the ones needing attention.
+        .limit(100)
         .snapshots()
         .map((snapshot) => [
               for (final doc in snapshot.docs) _fromDoc(doc),

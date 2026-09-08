@@ -6,24 +6,13 @@ import '../../../../core/location/region.dart';
 import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
+import '../../../../core/util/service_categories.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/location_field.dart';
 import '../onboarding_controller.dart';
 
 /// Service categories offered on FairBid (Malaysian market).
-const kServiceCategories = [
-  'Cleaning',
-  'Plumbing',
-  'Electrical',
-  'Aircon Servicing',
-  'Home Repair',
-  'Moving & Delivery',
-  'Tutoring',
-  'IT & Tech Support',
-  'Design & Creative',
-  'Other',
-];
 
 /// Stage 5 - "Define Your Services": category, coverage area, rate, portfolio.
 class ServiceStep extends StatefulWidget {
@@ -40,8 +29,14 @@ class _ServiceStepState extends State<ServiceStep> {
   @override
   void initState() {
     super.initState();
-    final data = context.read<OnboardingController>().data;
+    final onboarding = context.read<OnboardingController>();
+    final data = onboarding.data;
     _rate = TextEditingController(text: data.hourlyRate);
+    // Suggested, never imposed: fills only a category the applicant has not
+    // already chosen, and the dropdown stays theirs to change. Null when the
+    // registered trade is not one this app covers, which is the common case.
+    data.category ??=
+        suggestedCategoryFor(onboarding.ssmExtract?.natureOfBusiness);
   }
 
   @override

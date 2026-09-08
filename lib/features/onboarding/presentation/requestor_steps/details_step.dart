@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../../core/location/region.dart';
 import '../../../../core/location/region_picker_screen.dart';
+import '../../../../core/util/ssm_number.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/location_field.dart';
@@ -80,11 +81,13 @@ class _DetailsStepState extends State<DetailsStep> {
           .showSnackBar(const SnackBar(content: Text('Please pick a location.')));
       return;
     }
+    final ssm = SsmNumber.parse(_ssmNumber.text);
     onboarding.data
       ..fullName = _fullName.text.trim()
       ..phone = _phone.text.trim()
       ..companyName = _companyName.text.trim()
-      ..ssmNumber = _ssmNumber.text.trim();
+      ..ssmNumber = _ssmNumber.text.trim()
+      ..ssmNumberNormalized = ssm?.normalized ?? '';
     onboarding.saveAndContinue();
   }
 
@@ -171,9 +174,10 @@ class _DetailsStepState extends State<DetailsStep> {
                 AppTextField(
                   controller: _ssmNumber,
                   label: 'SSM Registration Number',
-                  hint: 'e.g. 202301234567',
+                  hint: 'e.g. 201903350205 or 003058656-T',
                   prefixIcon: Icons.tag_outlined,
-                  validator: (v) => Validators.required(v, 'SSM number'),
+                  helperText: 'As printed on your SSM certificate',
+                  validator: SsmNumber.validate,
                 ),
               ],
             ],

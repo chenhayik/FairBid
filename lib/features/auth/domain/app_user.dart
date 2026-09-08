@@ -39,6 +39,7 @@ class AppUser {
     this.payoutBankName,
     this.payoutAccountLast4,
     this.isPasswordAccount = true,
+    this.emailVerified = false,
     this.watchlist = const [],
     this.suspended = false,
     this.suspensionReason,
@@ -89,6 +90,11 @@ class AppUser {
   /// Determines whether deleting the account needs a password confirmation
   /// or a fresh Google sign-in to satisfy Firebase's recent-login check.
   final bool isPasswordAccount;
+
+  /// Whether the user has confirmed the link in their verification email.
+  /// Google accounts arrive already verified. Set only via
+  /// [AuthRepository.reloadUser] - Firebase pushes nothing on its own.
+  final bool emailVerified;
 
   /// A provider's saved reference point, used to compute distance to jobs in
   /// "Jobs near you". Set via a map picker; null until chosen.

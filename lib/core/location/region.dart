@@ -1,3 +1,4 @@
+import 'address_hint.dart';
 import 'penang.dart';
 
 /// A structured country → state → district → town location. Scoped (for this
@@ -69,18 +70,25 @@ class Region {
 }
 
 /// The value returned by `RegionPickerScreen`: coordinates, a composed
-/// display [address] (== [region].label), and the structured [region] behind
-/// it.
+/// display [address] (== [region].label), the structured [region] behind it,
+/// and an optional street-level [addressHint].
 class PickedLocation {
   const PickedLocation({
     required this.lat,
     required this.lng,
     required this.address,
     required this.region,
+    this.addressHint,
   });
 
   final double lat;
   final double lng;
   final String address;
   final Region region;
+
+  /// A best-effort reverse geocode of the pin, used only to pre-fill the
+  /// private service-address form. Null whenever the geocoder gave nothing
+  /// useful, and never persisted - the public job location deliberately
+  /// carries no street-level detail.
+  final AddressHint? addressHint;
 }

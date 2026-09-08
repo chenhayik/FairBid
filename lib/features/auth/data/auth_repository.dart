@@ -36,6 +36,18 @@ abstract interface class AuthRepository {
     required UserRole role,
   });
 
+  /// Sends the "verify your email" message to the signed-in user's address.
+  Future<void> sendEmailVerification();
+
+  /// Re-reads the account from Firebase and reports whether the email is now
+  /// verified. Firebase pushes nothing when the link is clicked, so the app
+  /// has to ask.
+  Future<bool> reloadUser();
+
+  /// Re-proves the signed-in user's identity before a sensitive action.
+  /// [password] is required for email/password accounts; ignored for Google.
+  Future<void> reauthenticate({String? password});
+
   /// Signs in with Google. If this is a brand-new account, a profile is created
   /// using [roleIfNew]; existing accounts keep their stored role.
   Future<void> signInWithGoogle({required UserRole roleIfNew});
@@ -157,8 +169,13 @@ class FirebaseAuthRepository implements AuthRepository {
           profileSub = _users
               .doc(user.uid)
               .snapshots()
-              .asyncMap((snapshot) async =>
-                  _mapUser(user, snapshot.data(), await _payoutData(user.uid)))
+              .asyncMap((snapshot) async => _mapUser(
+                    // reload() swaps in a new currentUser; prefer that live
+                    // one over the frozen one captured at sign-in.
+                    _auth.currentUser ?? user,
+                    snapshot.data(),
+                    await _payoutData(user.uid),
+                  ))
               .listen(emit, onError: (_) => emit(_fallbackUser(user)));
         });
       },
@@ -190,6 +207,47 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<void> sendEmailVerification() {
+    // No ActionCodeSettings: the default link opens Firebase's own hosted
+    // "email verified" page, so no App Links / Hosting config is needed.
+    return _guard(() async {
+      await _auth.currentUser?.sendEmailVerification();
+    });
+  }
+
+  @override
+  Future<bool> reloadUser() async {
+    final user = _auth.currentUser;
+    if (user == null) return false;
+    try {
+      await user.reload();
+
+      // reload() swaps in a new currentUser rather than updating this one,
+      // so re-read it - `user.emailVerified` here would still be stale.
+      final refreshed = _auth.currentUser;
+      final verified = refreshed?.emailVerified ?? false;
+
+      // reload() doesn't refresh the ID token, so `email_verified` would
+      // stay false in rules/callables for up to an hour without this.
+      if (verified) await refreshed?.getIdToken(true);
+      return verified;
+    } on FirebaseAuthException catch (e) {
+      throw AuthException.fromFirebase(e);
+    }
+  }
+
+  @override
+  Future<void> reauthenticate({String? password}) {
+    return _guard(() async {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw const AuthException('Please sign in again to continue.');
+      }
+      await _reauthenticate(user, password);
+    });
+  }
+
+  @override
   Future<void> registerWithEmail({
     required String email,
     required String password,
@@ -205,6 +263,9 @@ class FirebaseAuthRepository implements AuthRepository {
       try {
         await user.updateDisplayName(displayName.trim());
         await _createProfileIfMissing(user, role, displayName.trim());
+        // Best-effort: a mail failure must not roll back a good account, so
+        // this deliberately swallows its error (the banner offers a resend).
+        await user.sendEmailVerification().catchError((_) {});
       } catch (_) {
         // The auth account exists but we failed to finish setting it up (e.g.
         // the profile write was denied). Roll it back so the email is free to
@@ -458,6 +519,7 @@ class FirebaseAuthRepository implements AuthRepository {
       payoutAccountLast4:
           accountLast4 == null || accountLast4.isEmpty ? null : accountLast4,
       isPasswordAccount: _isPasswordAccount(user),
+      emailVerified: user.emailVerified,
       watchlist:
           (data?['watchlist'] as List?)?.whereType<String>().toList() ??
               const [],
@@ -473,6 +535,7 @@ class FirebaseAuthRepository implements AuthRepository {
         displayName: user.displayName ?? user.email,
         role: UserRole.requestor,
         isPasswordAccount: _isPasswordAccount(user),
+        emailVerified: user.emailVerified,
       );
 
   bool _isPasswordAccount(User user) =>

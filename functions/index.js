@@ -1987,6 +1987,9 @@ exports.onVerificationDecided = functions.firestore
         route: "/home",
       });
       await batch.commit();
+      // The uploaded SSM document has served its purpose now that a human has
+      // ruled on it; it is not kept beyond the decision. See ssm.js.
+      await require("./ssm").deleteSsmDocument(context.params.uid);
     });
 
 /** New review → tell the reviewee. */
@@ -2280,3 +2283,10 @@ exports.suggestJobDetails = functions
         return null; // advisory only - never a hard failure
       }
     });
+
+// ---------------------------------------------------------------------------
+// SSM document extraction. Implemented in its own module (like trust.js) and
+// re-exported here so the Firebase CLI discovers the trigger.
+// ---------------------------------------------------------------------------
+
+exports.extractSsmDocument = require("./ssm").extractSsmDocument;

@@ -17,6 +17,7 @@ import '../../../../core/widgets/user_chip.dart';
 import '../../../auth/domain/app_user.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../../../messages/data/chat_repository.dart';
+import '../../../profile/data/public_profile_repository.dart';
 import '../../../profile/presentation/leave_review_sheet.dart';
 import '../../data/bid_repository.dart';
 import '../../data/job_repository.dart';
@@ -974,6 +975,33 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
   /// first call and got the confusing "this job changed" snackbar.
   String? _acceptingProviderId;
 
+  /// Live trust scores for the providers who have bid, keyed by uid.
+  ///
+  /// The bid documents carry a score copied at bid time, which drifts as the
+  /// provider earns reviews, completes jobs or loses a dispute. Ranking on the
+  /// stale copy meant Best Value ordered bids by old reputation while the
+  /// provider's own profile showed the current one. Resolved once per distinct
+  /// set of bidders and cached, so scrolling and re-sorting do not refetch.
+  Map<String, ProviderTrust> _liveTrust = const {};
+  String? _trustFetchedFor;
+
+  /// Fetches live trust for [bids] unless the same bidders were already
+  /// resolved. Safe to call from build: it no-ops once settled.
+  void _resolveTrust(List<Bid> bids) {
+    final key = (bids.map((b) => b.providerId).toList()..sort()).join(',');
+    if (key.isEmpty || key == _trustFetchedFor) return;
+    _trustFetchedFor = key;
+    context
+        .read<PublicProfileRepository>()
+        .fetchTrust(bids.map((b) => b.providerId))
+        .then((trust) {
+      if (mounted) setState(() => _liveTrust = trust);
+    }).catchError((_) {
+      // Fall back to the stored snapshot; a failed reputation lookup must
+      // never blank out the bid list.
+    });
+  }
+
   // Cached so changing the sort (a setState) re-orders the already-loaded bids
   // client-side instead of resubscribing to Firestore and flashing the spinner.
   late final Stream<List<Bid>> _bids = context.read<BidRepository>().watchBids(
@@ -1105,9 +1133,24 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
             ),
           );
         }
-        final bids = (snapshot.data ?? [])
+        final rawBids = (snapshot.data ?? [])
             .where((b) => b.status == BidStatus.pending)
             .toList();
+
+        // Kick off (or skip) the live reputation lookup, then apply whatever
+        // has resolved. Until it lands, the bid's own snapshot is used, so the
+        // list renders immediately rather than waiting on a second query.
+        _resolveTrust(rawBids);
+        final bids = [
+          for (final bid in rawBids)
+            if (_liveTrust[bid.providerId] case final t?)
+              bid.withTrust(
+                trustScore: t.trustScore,
+                scoreVisible: t.scoreVisible,
+              )
+            else
+              bid,
+        ];
 
         if (bids.isEmpty) {
           return const AppCard(
@@ -1411,7 +1454,10 @@ class _ActivityTimelineState extends State<_ActivityTimeline> {
             ),
           );
         }
-        final events = (snapshot.data ?? []).reversed.toList();
+        // Already newest-first: watchJobEvents orders descending so its limit
+        // keeps the recent tail. Reversing here again would put the oldest
+        // entry at the top and pick the wrong `latest`.
+        final events = snapshot.data ?? const <JobEvent>[];
         if (events.isEmpty) return const SizedBox.shrink();
         final latest = events.first;
 

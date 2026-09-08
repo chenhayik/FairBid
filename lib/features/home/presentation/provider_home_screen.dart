@@ -9,6 +9,7 @@ import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../auth/presentation/email_verification_banner.dart';
 import '../../jobs/data/bid_repository.dart';
 import '../../jobs/data/job_repository.dart';
 import '../../jobs/data/milestone_repository.dart';
@@ -37,6 +38,7 @@ class ProviderHomeScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
+            const EmailVerificationBanner(),
             _VerificationBadge(status: status),
             const SizedBox(height: 16),
             if (status == 'rejected') ...[

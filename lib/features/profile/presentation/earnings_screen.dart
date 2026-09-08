@@ -10,6 +10,7 @@ import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../auth/presentation/reauth_dialog.dart';
 import '../../jobs/data/milestone_repository.dart';
 import '../../jobs/domain/milestone.dart';
 import '../../wallet/data/wallet_repository.dart';
@@ -53,6 +54,19 @@ class _EarningsScreenState extends State<EarningsScreen> {
       context.read<AuthController>().refreshUser();
 
   Future<void> _withdraw(int balanceSen) async {
+    final user = context.read<AuthController>().user;
+    if (user == null) return;
+
+    // Step up before money leaves the account: a stolen unlocked phone
+    // shouldn't be enough to drain a wallet.
+    final confirmed = await ReauthDialog.show(
+      context,
+      user: user,
+      message: 'For your security, confirm your password before withdrawing.',
+      actionLabel: 'Continue',
+    );
+    if (!confirmed || !mounted) return;
+
     final wallet = context.read<WalletRepository>();
     int? amountSen;
     final ok = await WalletAmountSheet.show(

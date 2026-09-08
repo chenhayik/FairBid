@@ -79,6 +79,27 @@ class AuthController extends ChangeNotifier {
     return _run(() => _repository.sendPasswordReset(email));
   }
 
+  /// Sends (or re-sends) the verification email.
+  Future<bool> sendEmailVerification() =>
+      _run(() => _repository.sendEmailVerification());
+
+  /// Asks Firebase whether the email is verified yet, then refreshes [user]
+  /// so the banner disappears on its own. Skips [_run] (fires on every app
+  /// resume) and swallows errors (a failure just leaves the banner up).
+  Future<bool> refreshEmailVerified() async {
+    try {
+      final verified = await _repository.reloadUser();
+      await refreshUser();
+      return verified;
+    } catch (_) {
+      return _user?.emailVerified ?? false;
+    }
+  }
+
+  /// Re-proves the user's identity before a sensitive action.
+  Future<bool> reauthenticate({String? password}) =>
+      _run(() => _repository.reauthenticate(password: password));
+
   Future<void> signOut() => _run(() async {
         final uid = _user?.uid;
         final hook = onBeforeSignOut;

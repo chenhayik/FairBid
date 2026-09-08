@@ -38,6 +38,18 @@ class OnboardingData {
   String? idDocumentUrl;
   String? selfieUrl;
 
+  // Stage 3 (business providers only) - SSM registration. The number is
+  // deliberately NOT in [toMap]: `users/{uid}` is readable by any signed-in
+  // user, and for a sole proprietorship - which has no legal personality
+  // separate from its owner - the registration number is personal data. It
+  // lives in [privateMap] with the identity photos. The business *name* stays
+  // public: a business trading under a name expects it to be seen, and
+  // counterparties need it to know who they are hiring.
+  String businessName = '';
+  String ssmNumber = '';
+  String ssmNumberNormalized = '';
+  String? ssmDocumentUrl;
+
   // Stage 4 - profile.
   String displayName = '';
   String bio = '';
@@ -77,6 +89,9 @@ class OnboardingData {
   Map<String, dynamic> privateMap() => {
         'idDocumentUrl': idDocumentUrl,
         'selfieUrl': selfieUrl,
+        'ssmDocumentUrl': ssmDocumentUrl,
+        'ssmNumber': ssmNumber,
+        'ssmNumberNormalized': ssmNumberNormalized,
       };
 
   /// Payout bank details - stored in the owner+admin-only
@@ -93,6 +108,7 @@ class OnboardingData {
   Map<String, dynamic> toMap() => {
         'step': step,
         'providerType': providerType?.name,
+        'businessName': businessName,
         'displayName': displayName,
         'bio': bio,
         'skills': skills,
@@ -121,6 +137,7 @@ class OnboardingData {
       ..providerType = ProviderType.fromStorage(map['providerType'] as String?)
       ..idDocumentUrl = map['idDocumentUrl'] as String?
       ..selfieUrl = map['selfieUrl'] as String?
+      ..businessName = map['businessName'] as String? ?? ''
       ..displayName = map['displayName'] as String? ?? ''
       ..bio = map['bio'] as String? ?? ''
       ..skills = strings(map['skills'])

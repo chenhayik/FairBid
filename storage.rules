@@ -16,10 +16,26 @@ service firebase.storage {
     // Verification documents: ID photo, selfie, certificates, portfolio
     // images. The owner may read and write their own files; an admin may read
     // any of them so the in-app verification queue can display them for review.
+    // Images (ID, selfie, certificates, portfolio) plus PDF, for SSM
+    // documents downloaded straight from EzBiz/e-Info. The 10 MB cap matches
+    // the client-side check in `document_picker.dart`, so an oversized file is
+    // refused there with a message rather than here with an opaque 403.
+    //
+    // `contentType` is client-supplied metadata that Cloud Storage never
+    // sniffs, so this is an accident guard, NOT an authorisation boundary -
+    // the real file-type check is the magic-byte test in `extractSsmDocument`.
+    // The explicit null guard matters: `null.matches(...)` raises an
+    // evaluation error and denies the write with nothing to explain why.
     match /verification/{userId}/{allPaths=**} {
       allow read: if request.auth != null
                   && (request.auth.uid == userId || isAdmin());
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && request.resource.size > 0
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType != null
+                   && (request.resource.contentType == 'application/pdf'
+                       || request.resource.contentType.matches('image/.*'));
     }
 
     // Job photos and the optional job video: readable by any signed-in user

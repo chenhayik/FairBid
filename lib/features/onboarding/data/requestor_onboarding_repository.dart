@@ -43,7 +43,13 @@ class FirestoreRequestorOnboardingRepository
     final data = RequestorOnboardingData.fromMap(snapshot.data());
     final private = (await _privateDoc(uid).get()).data();
     if (private != null) {
-      data.clientDocumentUrl = private['clientDocumentUrl'] as String?;
+      data
+        ..clientDocumentUrl = private['clientDocumentUrl'] as String?
+        // Falls back to whatever fromMap read off the public document, for
+        // accounts that have not saved since the SSM-privacy migration below.
+        ..ssmNumber = private['ssmNumber'] as String? ?? data.ssmNumber
+        ..ssmNumberNormalized =
+            private['ssmNumberNormalized'] as String? ?? data.ssmNumberNormalized;
     }
     // Phone lives in its own private doc too; merge it back for resume,
     // falling back to the legacy public field (still parsed by
@@ -66,6 +72,10 @@ class FirestoreRequestorOnboardingRepository
         // A one-off backfill Cloud Function is still needed for users who
         // never save again - deliberately out of scope here.
         'phone': FieldValue.delete(),
+        // MIGRATION: so did the SSM number, which is personal data for a sole
+        // proprietorship. It now lives in `private/verification`.
+        'ssmNumber': FieldValue.delete(),
+        'ssmNumberNormalized': FieldValue.delete(),
       }, SetOptions(merge: true))
       ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))
       ..set(_payoutDoc(uid), data.payoutMap(), SetOptions(merge: true));
@@ -81,6 +91,8 @@ class FirestoreRequestorOnboardingRepository
         if (data.clientDocumentUrl != null) 'verificationStatus': 'pending',
         'completedAt': FieldValue.serverTimestamp(),
         'phone': FieldValue.delete(),
+        'ssmNumber': FieldValue.delete(),
+        'ssmNumberNormalized': FieldValue.delete(),
       }, SetOptions(merge: true))
       ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))
       ..set(_payoutDoc(uid), data.payoutMap(), SetOptions(merge: true));

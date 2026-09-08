@@ -46,6 +46,7 @@ class RequestorOnboardingData {
   double? lng;
   String companyName = ''; // business only
   String ssmNumber = ''; // business only
+  String ssmNumberNormalized = ''; // canonical match key
 
   // Stage 3 - optional verification document (ID or SSM certificate).
   String? clientDocumentUrl;
@@ -66,14 +67,19 @@ class RequestorOnboardingData {
         'lat': lat,
         'lng': lng,
         'companyName': companyName,
-        'ssmNumber': ssmNumber,
       };
 
   /// Sensitive identity document - stored in the owner+admin-only
   /// `users/{uid}/private/verification` doc, never in the world-readable
   /// user document.
+  /// The SSM number sits here rather than on the public document because for
+  /// a sole proprietorship the business has no legal personality separate from
+  /// its owner, which makes the registration number personal data. The company
+  /// *name* stays public - see [toMap].
   Map<String, dynamic> privateMap() => {
         'clientDocumentUrl': clientDocumentUrl,
+        'ssmNumber': ssmNumber,
+        'ssmNumberNormalized': ssmNumberNormalized,
       };
 
   /// Phone number - stored in the owner+admin-only `users/{uid}/private/payout`
@@ -101,6 +107,7 @@ class RequestorOnboardingData {
       ..lng = (map['lng'] as num?)?.toDouble()
       ..companyName = map['companyName'] as String? ?? ''
       ..ssmNumber = map['ssmNumber'] as String? ?? ''
+      ..ssmNumberNormalized = map['ssmNumberNormalized'] as String? ?? ''
       ..clientDocumentUrl = map['clientDocumentUrl'] as String?;
     return data;
   }

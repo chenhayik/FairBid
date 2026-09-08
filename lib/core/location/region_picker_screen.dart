@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import 'address_hint.dart';
 import 'penang.dart';
 import 'penang_districts.dart';
 import 'region.dart';
@@ -148,39 +149,20 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     }
   }
 
-  /// Best-effort reverse geocode to SUGGEST a town label when the user hasn't
-  /// picked one - only accepted if it matches one of [kPenangTowns], so the
-  /// stored town is always one of the fixed, known options.
-  Future<String?> _suggestTown(String districtCode) async {
-    final towns = kPenangTowns[districtCode];
-    if (towns == null || towns.isEmpty) return null;
-    try {
-      final placemarks = await Geocoding().placemarkFromCoordinates(
-        _center.latitude,
-        _center.longitude,
-      );
-      if (placemarks.isEmpty) return null;
-      final candidates = [
-        placemarks.first.subLocality,
-        placemarks.first.locality,
-      ].where((s) => s != null && s.isNotEmpty).cast<String>();
-      for (final candidate in candidates) {
-        for (final town in towns) {
-          if (town.toLowerCase() == candidate.toLowerCase()) return town;
-        }
-      }
-    } catch (_) {
-      // best-effort only - leave the town unset.
-    }
-    return null;
-  }
-
   Future<void> _confirm() async {
     final code = _districtCode;
     if (code == null || !_districts.isInPenang(_center)) return;
     setState(() => _resolving = true);
-    final town = _town ?? await _suggestTown(code);
+    // One reverse geocode serves two purposes: suggesting a town label when
+    // the user didn't pick one, and carrying a street-level hint back for the
+    // private service-address form. Null on any failure - both uses are
+    // optional, so nothing here can block the pick.
+    final hint = await reverseGeocode(_center);
     if (!mounted) return;
+    // The suggested town is only accepted when it matches one of
+    // [kPenangTowns], so the stored town is always one of the fixed, known
+    // options rather than raw geocoder output.
+    final town = _town ?? hint?.matchTown(kPenangTowns[code] ?? const []);
     final region = Region(
       districtCode: code,
       districtName: Region.districtNameFor(code),
@@ -192,6 +174,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
         lng: _center.longitude,
         address: region.label,
         region: region,
+        addressHint: hint,
       ),
     );
   }

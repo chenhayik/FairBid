@@ -14,6 +14,26 @@ abstract interface class DocumentStorageRepository {
     required XFile file,
   });
 
+  /// Uploads an SSM registration document. Unlike every other upload here the
+  /// bytes are stored exactly as picked: re-encoding destroys the digital
+  /// signature that makes a certified true copy verifiable.
+  ///
+  /// The `ssm_document_` prefix is what the `extractSsmDocument` Cloud Function
+  /// matches on - renaming it here silently disables extraction.
+  Future<String> uploadSsmDocument({
+    required String uid,
+    required XFile file,
+  });
+
+  /// Uploads an optional SSM Business Profile. Read once by the server for the
+  /// owner-name check and the business facts a Certificate does not carry, then
+  /// **deleted** - it is the only document here containing an NRIC, a date of
+  /// birth and a residential address, and no human ever needs to see it.
+  Future<String> uploadSsmProfile({
+    required String uid,
+    required XFile file,
+  });
+
   /// Uploads a profile photo under `avatars/{uid}/`, world-readable to any
   /// signed-in user (see `storage.rules`) since it's denormalised onto bids,
   /// jobs, chats and reviews.
@@ -69,6 +89,24 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   }) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     return _upload('verification/$uid/${purpose}_$timestamp', file);
+  }
+
+  @override
+  Future<String> uploadSsmDocument({
+    required String uid,
+    required XFile file,
+  }) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    return _upload('verification/$uid/ssm_document_$timestamp', file);
+  }
+
+  @override
+  Future<String> uploadSsmProfile({
+    required String uid,
+    required XFile file,
+  }) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    return _upload('verification/$uid/ssm_profile_$timestamp', file);
   }
 
   @override
@@ -135,11 +173,27 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
     await ref
         .putData(
           bytes,
-          SettableMetadata(
-              contentType: contentType ?? file.mimeType ?? 'image/jpeg'),
+          SettableMetadata(contentType: _contentTypeFor(contentType, file)),
         )
         .timeout(effectiveTimeout);
     return ref.getDownloadURL().timeout(effectiveTimeout);
+  }
+
+  /// Content type, most trusted source first: an explicit override, the file's
+  /// own mime type, then its extension. That last step is not cosmetic - a file
+  /// chosen through `file_picker` reports a null `mimeType` on Android and iOS,
+  /// and the old `?? 'image/jpeg'` default would tag every SSM PDF as a photo,
+  /// which `storage.rules` now rejects.
+  String _contentTypeFor(String? override, XFile file) {
+    if (override != null) return override;
+    final mime = file.mimeType;
+    if (mime != null && mime.isNotEmpty) return mime;
+    return switch (_extensionOf(file.name).toLowerCase()) {
+      '.pdf' => 'application/pdf',
+      '.png' => 'image/png',
+      '.heic' || '.heif' => 'image/heic',
+      _ => 'image/jpeg',
+    };
   }
 
   String _extensionOf(String fileName) {

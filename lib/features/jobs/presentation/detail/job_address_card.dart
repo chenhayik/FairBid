@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/location/address_hint.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../../data/job_repository.dart';
@@ -29,14 +31,34 @@ class _JobAddressCardState extends State<JobAddressCard> {
   late final Stream<ServiceAddress?> _address =
       context.read<JobRepository>().watchJobAddress(widget.job.id);
 
+  /// The job pin's reverse geocode, started once and cached for the widget's
+  /// life. Unlike Post-a-Job - which still holds the `PickedLocation` in
+  /// memory - the stored `JobLocation` deliberately carries no street detail,
+  /// so it has to be looked up again here.
+  Future<AddressHint?>? _hint;
+
+  /// Kicks the lookup off as soon as we know the owner has no address yet, so
+  /// tapping "Add address" opens an already-filled form rather than waiting
+  /// on the geocoder. Skips legacy jobs whose pin never got real coordinates.
+  Future<AddressHint?> _addressHint() {
+    final location = widget.job.location;
+    if (location.lat == 0 && location.lng == 0) return Future.value();
+    return _hint ??= reverseGeocode(LatLng(location.lat, location.lng));
+  }
+
   Future<void> _editAddress(BuildContext context, ServiceAddress? initial) async {
     // Prefer the job's picked region town; fall back to the requestor's own
     // saved default town when the job has none.
     final defaultTown = context.read<AuthController>().user?.defaultTown;
+    // Only worth resolving when adding an address from scratch - an existing
+    // one always wins over the geocoder's guess.
+    final hint = initial == null ? await _addressHint() : null;
+    if (!context.mounted) return;
     final result = await ServiceAddressSheet.show(
       context,
       initial: initial,
       defaultCity: widget.job.location.town ?? defaultTown,
+      hint: hint,
     );
     if (result == null || !context.mounted) return;
     try {
@@ -55,6 +77,12 @@ class _JobAddressCardState extends State<JobAddressCard> {
       stream: _address,
       builder: (context, snapshot) {
         final address = snapshot.data;
+        // Warm the pin's geocode while the owner reads the card, so the form
+        // opens instantly. `??=` inside keeps this idempotent across the
+        // stream's rebuilds.
+        if (widget.isOwner && address == null && !snapshot.hasError) {
+          _addressHint();
+        }
         return AppCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

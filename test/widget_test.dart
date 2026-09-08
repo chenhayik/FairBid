@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:fairbid/core/app.dart';
 import 'package:fairbid/core/config/platform_config.dart';
+import 'package:fairbid/core/location/address_hint.dart';
 import 'package:fairbid/core/location/geo.dart';
 import 'package:fairbid/core/location/penang.dart';
 import 'package:fairbid/core/location/penang_districts.dart';
@@ -11,6 +12,8 @@ import 'package:fairbid/core/location/region.dart';
 import 'package:fairbid/core/location/region_picker_screen.dart';
 import 'package:fairbid/core/theme/app_theme.dart';
 import 'package:fairbid/core/util/money.dart';
+import 'package:fairbid/core/util/service_categories.dart';
+import 'package:fairbid/core/util/ssm_number.dart';
 import 'package:fairbid/core/widgets/app_widgets.dart';
 import 'package:fairbid/features/admin/data/moderation_repository.dart';
 import 'package:fairbid/features/admin/data/stats_repository.dart';
@@ -36,6 +39,7 @@ import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
 import 'package:fairbid/features/jobs/domain/service_address.dart';
+import 'package:fairbid/features/jobs/presentation/detail/service_address_sheet.dart';
 import 'package:fairbid/features/jobs/presentation/detail/job_detail_view_model.dart';
 import 'package:fairbid/features/jobs/presentation/widgets/bid_card.dart';
 import 'package:fairbid/features/messages/data/chat_repository.dart';
@@ -49,7 +53,10 @@ import 'package:fairbid/features/onboarding/data/onboarding_repository.dart';
 import 'package:fairbid/features/onboarding/data/requestor_onboarding_repository.dart';
 import 'package:fairbid/features/onboarding/domain/onboarding_data.dart';
 import 'package:fairbid/features/onboarding/domain/requestor_onboarding_data.dart';
+import 'package:fairbid/features/onboarding/domain/ssm_extract.dart';
 import 'package:fairbid/features/onboarding/presentation/onboarding_controller.dart';
+import 'package:fairbid/features/onboarding/presentation/steps/identity_step.dart';
+import 'package:fairbid/features/onboarding/presentation/steps/profile_step.dart';
 import 'package:fairbid/features/onboarding/presentation/steps/service_step.dart';
 import 'package:fairbid/features/profile/data/public_profile_repository.dart';
 import 'package:fairbid/features/profile/data/review_repository.dart';
@@ -62,9 +69,18 @@ import 'package:fairbid/features/wallet/data/wallet_repository.dart';
 import 'package:fairbid/features/wallet/domain/ledger_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:geocoding/geocoding.dart' show Placemark;
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+
+/// The current text of every editable field on screen - lets a test assert
+/// what a form was pre-filled with without tripping over placeholder hints,
+/// which render as ordinary [Text] too.
+List<String> _fieldValues(WidgetTester tester) => tester
+    .widgetList<EditableText>(find.byType(EditableText))
+    .map((field) => field.controller.text)
+    .toList();
 
 /// In-memory [AuthRepository] used to drive the UI in tests without Firebase.
 ///
@@ -118,6 +134,18 @@ class FakeAuthRepository implements AuthRepository {
   /// Mirrors the `watchlist` array Firestore field; seed a job id here (or
   /// mutate it via [setJobSaved]) so tests can assert the watchlist toggle.
   List<String> watchlist = [];
+
+  /// Mirrors `User.emailVerified`. Defaults true so the existing dashboard
+  /// tests don't render the banner; banner tests opt in with false.
+  bool emailVerified = true;
+
+  /// Set true so the next [reloadUser] flips [emailVerified] - mimics the
+  /// user clicking the link while the app was backgrounded.
+  bool verifyOnReload = false;
+
+  /// Counters for tests to assert against.
+  int verificationEmailsSent = 0;
+  int reauthCount = 0;
 
   @override
   Stream<AppUser?> authStateChanges() async* {
@@ -173,6 +201,7 @@ class FakeAuthRepository implements AuthRepository {
       suspended: suspended,
       suspensionReason: suspensionReason,
       watchlist: List.of(watchlist),
+      emailVerified: emailVerified,
     );
   }
 
@@ -243,6 +272,24 @@ class FakeAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<void> sendEmailVerification() async {
+    if (failWith != null) throw failWith!;
+    verificationEmailsSent++;
+  }
+
+  @override
+  Future<bool> reloadUser() async {
+    if (verifyOnReload) emailVerified = true;
+    return emailVerified;
+  }
+
+  @override
+  Future<void> reauthenticate({String? password}) async {
+    if (failWith != null) throw failWith!;
+    reauthCount++;
+  }
+
+  @override
   Future<void> registerWithEmail({
     required String email,
     required String password,
@@ -295,8 +342,16 @@ class FakeOnboardingRepository implements OnboardingRepository {
   final FakeAuthRepository auth;
   OnboardingData? saved;
 
+  /// Set before pumping to drive the SSM step's verdict card.
+  SsmExtract? ssmExtract;
+
   @override
   Future<OnboardingData> load(String uid) async => saved ?? OnboardingData();
+
+  @override
+  Stream<SsmExtract?> watchSsmExtract(String uid) async* {
+    yield ssmExtract;
+  }
 
   @override
   Future<void> save(String uid, OnboardingData data) async => saved = data;
@@ -341,6 +396,18 @@ class FakeDocumentStorageRepository implements DocumentStorageRepository {
     required String purpose,
     required XFile file,
   }) async => 'https://fake.storage/$uid/$purpose';
+
+  @override
+  Future<String> uploadSsmDocument({
+    required String uid,
+    required XFile file,
+  }) async => 'https://fake.storage/$uid/ssm_document';
+
+  @override
+  Future<String> uploadSsmProfile({
+    required String uid,
+    required XFile file,
+  }) async => 'https://fake.storage/$uid/ssm_profile';
 
   @override
   Future<String> uploadAvatar({
@@ -469,6 +536,11 @@ class FakeJobRepository implements JobRepository {
 
   /// No test currently seeds the activity timeline - an empty stream still
   /// satisfies the interface.
+  ///
+  /// If you do seed it, yield **newest first**. The real query is
+  /// `orderBy('at', descending: true).limit(50)` and the UI renders the list
+  /// as-is; seeding oldest-first here would quietly test the opposite of
+  /// production and make `events.first` the wrong entry.
   @override
   Stream<List<JobEvent>> watchJobEvents(String jobId) async* {
     yield const [];
@@ -1118,6 +1190,18 @@ class FakePublicProfileRepository implements PublicProfileRepository {
   Stream<PublicProfile?> watchProfile(String uid) async* {
     yield _profiles[uid];
   }
+
+  @override
+  Future<Map<String, ProviderTrust>> fetchTrust(Iterable<String> uids) async {
+    // Only seeded profiles resolve; anyone else falls back to the score
+    // stored on their bid, exactly as the real repository behaves when a
+    // user document cannot be read.
+    return {
+      for (final uid in uids)
+        if (_profiles[uid] case final p?)
+          uid: (trustScore: p.trustScore, scoreVisible: p.scoreVisible),
+    };
+  }
 }
 
 /// In-memory [UserReportRepository]; records filed reports so tests can
@@ -1643,6 +1727,445 @@ void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     await PenangDistricts.instance.ensureLoaded();
+  });
+
+  group('SSM number', () {
+    test('decodes the current 12-digit format', () {
+      final ssm = SsmNumber.parse('201903350205')!;
+      expect(ssm.format, SsmNumberFormat.current);
+      expect(ssm.year, 2019);
+      expect(ssm.entityType, SsmEntityType.business);
+      expect(ssm.normalized, '201903350205');
+    });
+
+    test('sample business profile decodes as a sole proprietorship', () {
+      expect(SsmNumber.parse('200803090077')?.entityType, SsmEntityType.business);
+    });
+
+    test('accepts the combined form printed on certificates', () {
+      final ssm = SsmNumber.parse('201903350205 (003058656-T)')!;
+      expect(ssm.normalized, '201903350205');
+      expect(ssm.legacyNumber, '003058656T');
+    });
+
+    test('accepts legacy formats with and without a state prefix', () {
+      expect(SsmNumber.parse('003058656-T')?.normalized, '003058656T');
+      expect(SsmNumber.parse('SA0085324-V')?.normalized, 'SA0085324V');
+      expect(SsmNumber.parse('499519-U')?.normalized, '499519U');
+    });
+
+    test('normalises case and punctuation so the same number matches', () {
+      expect(SsmNumber.parse('sa 0085324 - v')?.normalized, 'SA0085324V');
+    });
+
+    test('rejects an unknown entity type code', () {
+      expect(SsmNumber.validate('201999350205'), isNotNull);
+    });
+
+    test('rejects an implausible year', () {
+      expect(SsmNumber.validate('999903350205'), isNotNull);
+    });
+
+    test('names the digit count on a near miss', () {
+      expect(SsmNumber.validate('20190335020'), contains('12 digits'));
+    });
+
+    test('requires a value', () {
+      expect(SsmNumber.validate(''), isNotNull);
+      expect(SsmNumber.validate(null), isNotNull);
+    });
+  });
+
+  group('SSM autofill chain', () {
+    /// A picker that yields a file without touching the platform channel, so
+    /// the upload path can be exercised in a widget test at all.
+    Future<XFile?> fakePicker() async =>
+        XFile('ssm.pdf', mimeType: 'application/pdf');
+
+    const verdict = SsmExtract(
+      verdict: SsmVerdict.passed,
+      businessName: 'Jin Xiao Long Trading',
+      registrationNumber: '201903350205',
+    );
+
+    OnboardingController build(FakeOnboardingRepository repo) =>
+        OnboardingController(repo, FakeDocumentStorageRepository(),
+            pdfPicker: fakePicker);
+
+    test('a verdict written before this session still reaches the UI', () async {
+      final repo = FakeOnboardingRepository(FakeAuthRepository())
+        ..ssmExtract = verdict;
+      final controller = build(repo);
+
+      await controller.loadFor('provider-1');
+      await Future<void>.delayed(Duration.zero); // let the stream deliver
+
+      expect(controller.ssmExtract, isNotNull,
+          reason: 'resuming after an upload must still show the verdict');
+    });
+
+    test('the typed number is persisted before the document is uploaded',
+        () async {
+      final repo = FakeOnboardingRepository(FakeAuthRepository());
+      final controller = build(repo);
+      await controller.loadFor('provider-1');
+      controller
+        ..data.providerType = ProviderType.business
+        ..setSsmNumber('201903350205');
+
+      await controller.pickSsmDocument();
+
+      // The extract trigger fires the instant the bytes land, and reads the
+      // number from Firestore - so it has to be saved first or the server's
+      // cross-check compares against nothing.
+      expect(repo.saved?.ssmNumberNormalized, '201903350205',
+          reason: 'the server cannot cross-check a number it cannot see');
+    });
+
+    test('applying the verdict fills both fields', () async {
+      final repo = FakeOnboardingRepository(FakeAuthRepository())
+        ..ssmExtract = verdict;
+      final controller = build(repo);
+      await controller.loadFor('provider-1');
+      await Future<void>.delayed(Duration.zero);
+
+      controller.applySsmExtract();
+
+      expect(controller.data.businessName, 'Jin Xiao Long Trading');
+      expect(controller.data.ssmNumber, '201903350205');
+      expect(controller.data.ssmNumberNormalized, '201903350205');
+    });
+
+    test('SsmExtract.fromMap reads what the Cloud Function writes', () {
+      final extract = SsmExtract.fromMap({
+        'verdict': 'needsReview',
+        'failures': ['not-digitally-signed'],
+        'businessName': 'Sunmal Dental Art',
+        'registrationNumber': '200803090077',
+        'entityStatus': 'ACTIVE',
+        'ownership': 'SOLE PROPRIETORSHIP',
+        'expiryDate': '2020-10-08',
+        'businessStartDate': '2008-05-05',
+        'natureOfBusiness': 'PERKHIDMATAN PERGIGIAN & KESIHATAN',
+        'signaturePresent': false,
+      });
+
+      expect(extract, isNotNull);
+      expect(extract!.verdict, SsmVerdict.needsReview);
+      expect(extract.hasProposals, isTrue);
+      expect(extract.reasons.single, contains('not a digitally certified copy'));
+      expect(extract.expiryDate, '2020-10-08');
+      expect(extract.businessStartDate, '2008-05-05');
+      expect(extract.natureOfBusiness, 'PERKHIDMATAN PERGIGIAN & KESIHATAN');
+    });
+
+    test('an expired registration reads as a plain-English reason', () {
+      final extract = SsmExtract.fromMap({
+        'verdict': 'rejected',
+        'failures': ['registration-expired'],
+        'expiryDate': '2020-10-08',
+      });
+
+      expect(extract!.verdict, SsmVerdict.rejected);
+      expect(extract.reasons.single, contains('expired'));
+    });
+
+    test('the owner check is three-valued, not a boolean', () {
+      SsmExtract? read(Object? value) => SsmExtract.fromMap({
+            'verdict': 'passed',
+            'ownerNameMatches': value,
+          });
+
+      expect(read(true)!.ownerNameMatches, isTrue);
+      expect(read(false)!.ownerNameMatches, isFalse);
+      // Absent means no Profile was supplied, or neither name was usable -
+      // which is emphatically not the same as "the owner does not match".
+      expect(read(null)!.ownerNameMatches, isNull);
+    });
+
+    test('a registered trade suggests a category, in Malay or English', () {
+      expect(suggestedCategoryFor('PERKHIDMATAN PEMBERSIHAN AM'), 'Cleaning');
+      expect(suggestedCategoryFor('KERJA-KERJA PERPAIPAN'), 'Plumbing');
+      expect(suggestedCategoryFor('PENYAMAN UDARA'), 'Aircon Servicing');
+      expect(suggestedCategoryFor('General cleaning services'), 'Cleaning');
+    });
+
+    test('an unmatched trade suggests nothing rather than guessing', () {
+      // The Profile sample is a dental practice - not one of the ten
+      // categories this app serves. A confident null beats a wrong guess,
+      // because the suggestion is written into the applicant's form.
+      expect(suggestedCategoryFor('PERKHIDMATAN PERGIGIAN & KESIHATAN'),
+          isNull);
+      expect(suggestedCategoryFor(null), isNull);
+      expect(suggestedCategoryFor(''), isNull);
+    });
+
+    test('an unrecognised verdict is treated as no verdict', () {
+      expect(SsmExtract.fromMap({'verdict': 'weird'}), isNull);
+      expect(SsmExtract.fromMap(null), isNull);
+    });
+  });
+
+  group('SSM autofill into the later stages', () {
+    /// Builds a controller whose server verdict is already in, then pumps
+    /// [step] - the autofill happens in each step's initState, so the
+    /// assertions are on the controller rather than on rendered widgets.
+    Future<OnboardingController> pumpStage(
+      WidgetTester tester,
+      Widget step, {
+      String? natureOfBusiness,
+      void Function(OnboardingData data)? seed,
+    }) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final repo = FakeOnboardingRepository(FakeAuthRepository())
+        ..ssmExtract = SsmExtract(
+          verdict: SsmVerdict.passed,
+          businessName: 'Jin Xiao Long Trading',
+          natureOfBusiness: natureOfBusiness,
+        );
+      final controller =
+          OnboardingController(repo, FakeDocumentStorageRepository());
+      // runAsync, because loadFor awaits a stream delivery and testWidgets'
+      // fake-async zone will not drain it - a plain await here deadlocks.
+      await tester.runAsync(() async {
+        await controller.loadFor('provider-1');
+        await Future<void>.delayed(Duration.zero); // let the verdict arrive
+      });
+      controller.data.providerType = ProviderType.business;
+      seed?.call(controller.data);
+
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<OnboardingController>.value(
+          value: controller,
+          child: Scaffold(
+            body: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: step,
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+      return controller;
+    }
+
+    testWidgets('stage 4 offers the registered name as the display name', (
+      tester,
+    ) async {
+      await pumpStage(tester, const ProfileStep(),
+          seed: (data) => data.businessName = 'Jin Xiao Long Trading');
+
+      expect(find.widgetWithText(TextFormField, 'Jin Xiao Long Trading'),
+          findsOneWidget);
+    });
+
+    testWidgets('stage 4 never overwrites a display name already chosen', (
+      tester,
+    ) async {
+      await pumpStage(tester, const ProfileStep(), seed: (data) {
+        data
+          ..businessName = 'Jin Xiao Long Trading'
+          ..displayName = 'Ah Long Plumbing';
+      });
+
+      expect(find.widgetWithText(TextFormField, 'Ah Long Plumbing'),
+          findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Jin Xiao Long Trading'),
+          findsNothing);
+    });
+
+    testWidgets('stage 5 suggests a category from the registered trade', (
+      tester,
+    ) async {
+      final controller = await pumpStage(tester, const ServiceStep(),
+          natureOfBusiness: 'KERJA-KERJA PERPAIPAN');
+
+      expect(controller.data.category, 'Plumbing');
+    });
+
+    testWidgets('stage 5 never overwrites a category already chosen', (
+      tester,
+    ) async {
+      final controller = await pumpStage(tester, const ServiceStep(),
+          natureOfBusiness: 'KERJA-KERJA PERPAIPAN',
+          seed: (data) => data.category = 'Tutoring');
+
+      expect(controller.data.category, 'Tutoring');
+    });
+
+    testWidgets('stage 5 leaves the category alone for an unmatched trade', (
+      tester,
+    ) async {
+      // The Profile sample is a dental practice - not a category this app
+      // serves, so nothing should be filled in.
+      final controller = await pumpStage(tester, const ServiceStep(),
+          natureOfBusiness: 'PERKHIDMATAN PERGIGIAN & KESIHATAN');
+
+      expect(controller.data.category, isNull);
+    });
+  });
+
+  group('Business provider SSM step', () {
+    /// Pumps the identity stage on its own, with the controller pre-loaded and
+    /// the ID and selfie already uploaded - so the only thing standing between
+    /// it and Continue is the SSM block under test.
+    Future<OnboardingController> pumpStep(
+      WidgetTester tester, {
+      ProviderType type = ProviderType.business,
+    }) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeDocumentStorageRepository(),
+      );
+      await controller.loadFor('provider-1');
+      controller.data
+        ..providerType = type
+        ..idDocumentUrl = 'https://fake.storage/id'
+        ..selfieUrl = 'https://fake.storage/selfie';
+
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<OnboardingController>.value(
+          value: controller,
+          child: const Scaffold(
+            body: SingleChildScrollView(
+              padding: EdgeInsets.all(16),
+              child: IdentityStep(),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      return controller;
+    }
+
+    FilledButton continueButton(WidgetTester tester) => tester
+        .widget<FilledButton>(find.widgetWithText(FilledButton, 'Continue'));
+
+    /// The document is uploaded through the system file picker, which cannot
+    /// run in a widget test - so apply the result the upload would have
+    /// produced, then notify, exactly as `pickSsmDocument` does.
+    void attachDocument(OnboardingController controller) {
+      controller.data.ssmDocumentUrl = 'https://fake.storage/ssm';
+      controller.selectProviderType(ProviderType.business);
+    }
+
+    testWidgets('individual providers never see the business block', (
+      tester,
+    ) async {
+      await pumpStep(tester, type: ProviderType.individual);
+
+      expect(find.text('Business registration'), findsNothing);
+      // ID and selfie are already in place, so nothing else blocks Continue.
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('a business is blocked until name, number and document are in', (
+      tester,
+    ) async {
+      final controller = await pumpStep(tester);
+
+      expect(find.text('Business registration'), findsOneWidget);
+      expect(continueButton(tester).onPressed, isNull,
+          reason: 'nothing supplied yet');
+
+      await fillField(
+          tester, 'Registered Business Name', 'Jin Xiao Long Trading');
+      await fillField(tester, 'SSM Registration Number', '201903350205');
+      await tester.pumpAndSettle();
+      expect(continueButton(tester).onPressed, isNull,
+          reason: 'the SSM document is required');
+
+      attachDocument(controller);
+      await tester.pump(); // a spinner is now on screen - see above
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('names what is still missing instead of only disabling', (
+      tester,
+    ) async {
+      await pumpStep(tester);
+
+      String hint() =>
+          tester.widget<Text>(find.textContaining('Still needed:')).data!;
+
+      // The button is driven by the same list as the hint, so the two can
+      // never disagree - that is the point of the change.
+      expect(continueButton(tester).onPressed, isNull);
+      expect(hint(), contains('your registered business name'));
+      expect(hint(), contains('a valid SSM registration number'));
+      expect(hint(), contains('your SSM document'));
+
+      await fillField(
+          tester, 'Registered Business Name', 'Jin Xiao Long Trading');
+      await tester.pumpAndSettle();
+      expect(hint(), isNot(contains('your registered business name')),
+          reason: 'the hint must shrink as requirements are met');
+    });
+
+    testWidgets('shows a checking state between upload and verdict', (
+      tester,
+    ) async {
+      final controller = await pumpStep(tester);
+      attachDocument(controller); // uploaded, no verdict yet
+      // pump(), not pumpAndSettle(): the checking card holds a
+      // CircularProgressIndicator, which never stops animating and so never
+      // lets the tree settle.
+      await tester.pump();
+
+      expect(find.textContaining('Checking your document'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsWidgets);
+    });
+
+    testWidgets('the owner check is offered but never gates Continue', (
+      tester,
+    ) async {
+      final controller = await pumpStep(tester);
+      expect(find.text('Confirm you are the owner (optional)'), findsOneWidget);
+
+      await fillField(
+          tester, 'Registered Business Name', 'Jin Xiao Long Trading');
+      await fillField(tester, 'SSM Registration Number', '201903350205');
+      await tester.pumpAndSettle();
+      attachDocument(controller);
+      await tester.pump();
+
+      // No Business Profile supplied - Continue must still be available, or
+      // the "optional" framing is a lie.
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('an unparseable SSM number keeps Continue locked', (
+      tester,
+    ) async {
+      final controller = await pumpStep(tester);
+      await fillField(
+          tester, 'Registered Business Name', 'Jin Xiao Long Trading');
+      await fillField(tester, 'SSM Registration Number', '12345');
+      await tester.pumpAndSettle();
+      // Attached last: once the checking card is up, nothing settles.
+      attachDocument(controller);
+      await tester.pump();
+
+      expect(continueButton(tester).onPressed, isNull);
+    });
+
+    testWidgets('the typed number is normalised for matching', (
+      tester,
+    ) async {
+      final controller = await pumpStep(tester);
+
+      await fillField(tester, 'SSM Registration Number', 'sa 0085324 - v');
+      await tester.pumpAndSettle();
+
+      expect(controller.data.ssmNumberNormalized, 'SA0085324V');
+    });
   });
 
   group('Validators', () {
@@ -2344,6 +2867,133 @@ void main() {
     });
   });
 
+  group('Email verification', () {
+    Future<void> loginRequestor(WidgetTester tester) async {
+      await fillField(tester, 'Email', 'test@fairbid.app');
+      await fillField(tester, 'Password', 'secret123');
+      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('unverified user sees the banner and can resend', (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()..emailVerified = false;
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await loginRequestor(tester);
+
+      expect(find.text('Verify your email'), findsOneWidget);
+
+      await tester.tap(find.text('Resend'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(auth.verificationEmailsSent, 1);
+      expect(find.textContaining('Verification email sent'), findsOneWidget);
+
+      // Let the 60s cooldown finish so its Timer.periodic self-cancels
+      // instead of leaking past the end of the test.
+      await tester.pump(const Duration(seconds: 61));
+    });
+
+    testWidgets('verified user sees no banner', (tester) async {
+      await tester.pumpWidget(buildApp(FakeAuthRepository()));
+      await tester.pumpAndSettle();
+      await loginRequestor(tester);
+
+      expect(find.text('Verify your email'), findsNothing);
+    });
+
+    testWidgets('tapping refresh after verifying hides the banner', (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()
+        ..emailVerified = false
+        ..verifyOnReload = true;
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await loginRequestor(tester);
+
+      await tester.tap(find.byTooltip("I've verified - refresh"));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Verify your email'), findsNothing);
+    });
+
+    testWidgets('withdrawing asks to confirm identity; cancelling stops it', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()
+        ..verificationStatus = 'approved'
+        ..walletBalanceSen = 85000;
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await openRegisterAs(tester, 'Work');
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Earnings & Payouts'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
+      await tester.pumpAndSettle();
+      expect(find.text("Confirm it's you"), findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(auth.reauthCount, 0);
+      expect(find.byType(TextField), findsNothing);
+    });
+
+    testWidgets('confirming identity opens the withdraw amount sheet', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()
+        ..verificationStatus = 'approved'
+        ..walletBalanceSen = 85000;
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await openRegisterAs(tester, 'Work');
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Earnings & Payouts'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Your password'),
+        'secret123',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
+      await tester.pumpAndSettle();
+
+      expect(auth.reauthCount, 1);
+      expect(
+        find.textContaining('Move money from your FairBid balance'),
+        findsOneWidget,
+      );
+    });
+  });
+
   group('Money & distance', () {
     test('formatRm formats sen as RM', () {
       expect(formatRm(0), 'RM 0.00');
@@ -2518,6 +3168,123 @@ void main() {
       expect(controller.data.lng, isNotNull);
       expect(controller.data.coverageArea, 'Barat Daya, Penang');
       expect(find.text('Barat Daya, Penang'), findsOneWidget);
+    });
+  });
+
+  group('Address autofill from the map pin', () {
+    test('AddressHint maps a placemark into form-ready fields', () {
+      final hint = AddressHint.fromPlacemark(const Placemark(
+        subThoroughfare: '12',
+        thoroughfare: 'Jalan Mawar 3',
+        postalCode: '11900',
+        locality: 'Bayan Lepas',
+        subLocality: 'Batu Maung',
+      ));
+
+      expect(hint.line1, '12, Jalan Mawar 3');
+      expect(hint.postcode, '11900');
+      expect(hint.city, 'Bayan Lepas');
+      expect(hint.isEmpty, isFalse);
+    });
+
+    test('AddressHint drops blanks and never repeats the house number', () {
+      // The common Malaysian case: a street but no house number, and empty
+      // strings where the geocoder had nothing.
+      final noNumber = AddressHint.fromPlacemark(const Placemark(
+        subThoroughfare: '',
+        thoroughfare: 'Lebuh Chulia',
+        postalCode: '',
+      ));
+      expect(noNumber.line1, 'Lebuh Chulia');
+      expect(noNumber.postcode, isNull);
+      expect(noNumber.city, isNull);
+
+      // Android sometimes folds the number into `street`; don't double it up.
+      final folded = AddressHint.fromPlacemark(const Placemark(
+        subThoroughfare: '12',
+        street: '12 Jalan Mawar 3',
+      ));
+      expect(folded.line1, '12 Jalan Mawar 3');
+
+      expect(const AddressHint().isEmpty, isTrue);
+    });
+
+    test('matchTown only ever returns one of the fixed town options', () {
+      final hint = AddressHint.fromPlacemark(const Placemark(
+        subLocality: 'george town',
+        locality: 'Somewhere Else',
+      ));
+
+      // Case-insensitive, but the returned value is the canonical spelling
+      // from the caller's list - never the geocoder's own string.
+      expect(hint.matchTown(kPenangTowns['TL']!), 'George Town');
+      // A locality that isn't a known town yields nothing rather than
+      // leaking raw geocoder output into the stored region.
+      expect(
+        AddressHint.fromPlacemark(const Placemark(locality: 'Kuala Lumpur'))
+            .matchTown(kPenangTowns['TL']!),
+        isNull,
+      );
+    });
+
+    testWidgets('the address sheet pre-fills from the hint', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ServiceAddressSheet(
+            defaultCity: 'Bayan Lepas',
+            hint: AddressHint.fromPlacemark(const Placemark(
+              subThoroughfare: '12',
+              thoroughfare: 'Jalan Mawar 3',
+              postalCode: '11900',
+              locality: 'Somewhere Else',
+            )),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      // Read the controllers rather than the rendered text: a field's hint
+      // ("11900") is a Text too, so find.text would double-count it.
+      expect(
+        _fieldValues(tester),
+        containsAll(<String>['12, Jalan Mawar 3', '11900', 'Bayan Lepas']),
+      );
+      // The curated town from the picker beats the geocoder's city label.
+      expect(_fieldValues(tester), isNot(contains('Somewhere Else')));
+      expect(
+        find.textContaining('Filled in from your map pin'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('an existing address always beats the hint', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ServiceAddressSheet(
+            initial: const ServiceAddress(
+              line1: '9, Lorong Kenari',
+              postcode: '11700',
+              city: 'Gelugor',
+            ),
+            hint: AddressHint.fromPlacemark(const Placemark(
+              subThoroughfare: '12',
+              thoroughfare: 'Jalan Mawar 3',
+              postalCode: '11900',
+            )),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      expect(
+        _fieldValues(tester),
+        containsAll(<String>['9, Lorong Kenari', '11700', 'Gelugor']),
+      );
+      expect(_fieldValues(tester), isNot(contains('12, Jalan Mawar 3')));
+      // No "check this" notice when nothing was guessed.
+      expect(find.textContaining('Filled in from your map pin'), findsNothing);
     });
   });
 
@@ -4475,6 +5242,115 @@ void postJobAndOnboardingTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('Job posted!'), findsOneWidget);
+    });
+  });
+
+  group('Saved Jobs covers the whole watchlist', () {
+    // Firestore's whereIn caps at 30 values. Saved Jobs used to `take(30)`,
+    // so a user who bookmarked a 31st job never saw it again - silently, with
+    // nothing in the UI to explain the gap. These pin the chunking that
+    // replaced it. (The repository itself needs a live Firestore and so
+    // cannot be unit-tested; this covers the arithmetic that carried the bug.)
+    test('a 35-id watchlist is split into chunks that lose nothing', () {
+      final ids = [for (var i = 0; i < 35; i++) 'job-$i'];
+      final chunks = chunkForWhereIn(ids);
+
+      expect(chunks.length, 2);
+      expect(chunks[0].length, 30);
+      expect(chunks[1].length, 5);
+      // The bug was losing ids, so assert on coverage, not just on counts.
+      expect(chunks.expand((c) => c).toList(), ids);
+    });
+
+    test('never exceeds the whereIn limit, at any size', () {
+      for (final size in [1, 29, 30, 31, 60, 61, 200]) {
+        final ids = [for (var i = 0; i < size; i++) 'job-$i'];
+        final chunks = chunkForWhereIn(ids);
+        expect(
+          chunks.every((c) => c.length <= kWhereInLimit && c.isNotEmpty),
+          isTrue,
+          reason: 'a $size-id watchlist produced an invalid chunk',
+        );
+        expect(
+          chunks.expand((c) => c).length,
+          size,
+          reason: 'a $size-id watchlist lost or duplicated ids',
+        );
+      }
+    });
+
+    test('an empty watchlist produces no queries', () {
+      expect(chunkForWhereIn(const []), isEmpty);
+    });
+  });
+
+  group('Best Value uses live trust, not the bid snapshot', () {
+    // The stored scores would rank Cheap Charlie first; the providers' current
+    // scores are the reverse. Ranking must follow the live numbers, otherwise
+    // Best Value orders today's bids by last week's reputation while each
+    // provider's own profile shows something different.
+    //
+    //   stored: Charlie 950 -> 0.6*1.000 + 0.4*0.95 = 0.98  (would win)
+    //   live:   Charlie 300 -> 0.6*1.000 + 0.4*0.30 = 0.72
+    //           Tina    950 -> 0.6*0.833 + 0.4*0.95 = 0.88  -> wins
+    testWidgets('ranks on the provider\'s current score', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final publicProfile = FakePublicProfileRepository({
+        'p-cheap': const PublicProfile(
+          uid: 'p-cheap',
+          displayName: 'Cheap Charlie',
+          role: UserRole.provider,
+          trustScore: 300, // dropped since bidding
+        ),
+        'p-trust': const PublicProfile(
+          uid: 'p-trust',
+          displayName: 'Trusty Tina',
+          role: UserRole.provider,
+          trustScore: 950, // climbed since bidding
+        ),
+      });
+
+      await tester.pumpWidget(
+        buildApp(
+          FakeAuthRepository(),
+          jobs: [sampleJob()],
+          bids: [
+            sampleBid(
+              providerId: 'p-cheap',
+              providerName: 'Cheap Charlie',
+              amountSen: 10000,
+              trustScore: 950, // stale snapshot on the bid
+            ),
+            sampleBid(
+              providerId: 'p-trust',
+              providerName: 'Trusty Tina',
+              amountSen: 12000,
+              trustScore: 300, // stale snapshot on the bid
+            ),
+          ],
+          publicProfile: publicProfile,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await fillField(tester, 'Email', 'a@b.com');
+      await fillField(tester, 'Password', 'secret123');
+      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Fix leaking sink').first);
+      await tester.pumpAndSettle();
+
+      final firstCard = find.byType(BidCard).first;
+      expect(
+        find.descendant(of: firstCard, matching: find.text('Trusty Tina')),
+        findsOneWidget,
+        reason: 'live trust should decide the order, not the bid snapshot',
+      );
+      expect(
+        find.descendant(of: firstCard, matching: find.text('BEST VALUE')),
+        findsOneWidget,
+      );
     });
   });
 

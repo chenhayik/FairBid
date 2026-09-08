@@ -77,7 +77,21 @@ class FirestoreVerificationRepository implements VerificationRepository {
     } catch (_) {
       payout = null;
     }
-    return PendingVerification.fromMap(doc.id, doc.data(), payoutData: payout);
+    // The SSM number moved off the world-readable user document (it is personal
+    // data for a sole proprietorship), so the queue reads it from the private
+    // doc that admins are allowed to see.
+    Map<String, dynamic>? verification;
+    try {
+      verification = (await doc.reference
+              .collection('private')
+              .doc('verification')
+              .get())
+          .data();
+    } catch (_) {
+      verification = null;
+    }
+    return PendingVerification.fromMap(doc.id, doc.data(),
+        payoutData: payout, verificationData: verification);
   }
 
   @override
@@ -99,6 +113,7 @@ class FirestoreVerificationRepository implements VerificationRepository {
     add('Identity Document', data['idDocumentUrl'] as String?);
     add('Selfie', data['selfieUrl'] as String?);
     add('Identity / SSM Document', data['clientDocumentUrl'] as String?);
+    add('SSM Document', data['ssmDocumentUrl'] as String?);
     return docs;
   }
 

@@ -142,7 +142,12 @@ service cloud.firestore {
       match /private/{doc} {
         allow read: if isSignedIn()
                     && (request.auth.uid == userId || isAdmin());
-        allow write: if isSignedIn() && request.auth.uid == userId;
+        // `ssmExtract` is the server's verdict on an uploaded SSM document,
+        // written only by the extractSsmDocument Cloud Function (admin SDK,
+        // bypasses rules). Excluding it here is what stops an applicant
+        // writing their own "passed" result and forging verification.
+        allow write: if isSignedIn() && request.auth.uid == userId
+                     && doc != 'ssmExtract';
       }
 
       // Notifications are written only by the Cloud Functions (`notify()`);

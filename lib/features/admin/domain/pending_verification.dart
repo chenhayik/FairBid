@@ -93,6 +93,7 @@ class PendingVerification {
     String uid,
     Map<String, dynamic>? data, {
     Map<String, dynamic>? payoutData,
+    Map<String, dynamic>? verificationData,
   }) {
     if (data == null) return null;
     final role = UserRole.fromStorage(data['role'] as String?);
@@ -145,8 +146,15 @@ class PendingVerification {
       category: onboarding?['category'] as String?,
       coverageArea: onboarding?['coverageArea'] as String?,
       hourlyRate: onboarding?['hourlyRate'] as String?,
-      companyName: data['companyName'] as String?,
-      ssmNumber: data['ssmNumber'] as String?,
+      // Requestors keep the company name at the top level; providers nest it
+      // in the onboarding map, mirroring how `bio` is handled above.
+      companyName: (data['companyName'] ??
+          onboarding?['businessName']) as String?,
+      // The SSM number is only ever in the private doc now - see
+      // `VerificationRepository._toPendingVerification`. The public fallback
+      // covers accounts that have not saved since that migration.
+      ssmNumber: (verificationData?['ssmNumber'] ??
+          data['ssmNumber']) as String?,
       skills: strings(onboarding?['skills']),
       bankName: (payoutData?['bankName'] ?? onboarding?['bankName']) as String?,
       accountHolder: (payoutData?['accountHolder'] ??

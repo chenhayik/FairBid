@@ -25,7 +25,7 @@ From `firestore-tests/`, spin up the emulator, run the suite against it, and
 tear the emulator down again, all in one command:
 
 ```
-npx firebase-tools emulators:exec --only firestore "npm test"
+npx firebase-tools emulators:exec --only firestore,storage "npm test"
 ```
 
 `emulators:exec` reads `../firebase.json` for the emulator config (Firestore

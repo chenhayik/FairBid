@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/util/service_categories.dart';
+import '../../../../core/location/address_hint.dart';
 import '../../../../core/location/region.dart';
 import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -17,7 +19,6 @@ import '../../../../core/widgets/location_field.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../../../auth/presentation/validators.dart';
 import '../../../onboarding/data/document_storage_repository.dart';
-import '../../../onboarding/presentation/steps/service_step.dart';
 import '../../data/assist_repository.dart';
 import '../../data/job_repository.dart';
 import '../../domain/job.dart';
@@ -65,6 +66,13 @@ class _PostJobViewState extends State<_PostJobView> {
   /// (from onboarding) and hasn't been overridden by picking a new one.
   bool _locationDefaulted = false;
 
+  /// The location [_seededHint] was resolved for, and the pending lookup
+  /// itself. A fresh pick already carries its own hint (the picker geocodes
+  /// on confirm); a location seeded from the requestor's saved default has
+  /// none, so `_addressHint` resolves one and caches it here.
+  PickedLocation? _hintFor;
+  Future<AddressHint?>? _seededHint;
+
   @override
   void initState() {
     super.initState();
@@ -84,6 +92,9 @@ class _PostJobViewState extends State<_PostJobView> {
     ));
     _address.text = region.label;
     _locationDefaulted = true;
+    // Warm the pin's reverse geocode now rather than on the tap, so the
+    // address sheet opens already filled in.
+    _addressHint(controller.location);
   }
 
   @override
@@ -111,16 +122,36 @@ class _PostJobViewState extends State<_PostJobView> {
     setState(() => _locationDefaulted = false);
   }
 
+  /// The street-level suggestion for [location] - its own if it came from a
+  /// fresh pick, otherwise a cached reverse geocode of its coordinates.
+  Future<AddressHint?> _addressHint(PickedLocation? location) {
+    if (location == null) return Future.value();
+    if (location.addressHint != null) return Future.value(location.addressHint);
+    if (!identical(_hintFor, location)) {
+      _hintFor = location;
+      _seededHint = reverseGeocode(LatLng(location.lat, location.lng));
+    }
+    return _seededHint!;
+  }
+
   /// Opens the address sheet, pre-filling the town from the picked map
-  /// location if any, else the requestor's saved default town. Fully
-  /// optional - posting still works without one.
+  /// location if any, else the requestor's saved default town, plus the
+  /// street/postcode reverse-geocoded from the pin. Fully optional - posting
+  /// still works without one.
   Future<void> _pickAddress() async {
     final controller = context.read<PostJobController>();
     final user = context.read<AuthController>().user;
+    // Only worth resolving when adding an address from scratch - one the
+    // requestor already entered always wins over the geocoder's guess.
+    final hint = controller.pendingAddress == null
+        ? await _addressHint(controller.location)
+        : null;
+    if (!mounted) return;
     final result = await ServiceAddressSheet.show(
       context,
       initial: controller.pendingAddress,
       defaultCity: controller.location?.region.town ?? user?.defaultTown,
+      hint: hint,
     );
     if (result == null) return;
     controller.setAddress(result);

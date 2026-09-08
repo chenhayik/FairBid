@@ -24,7 +24,11 @@ class _ProfileStepState extends State<ProfileStep> {
   void initState() {
     super.initState();
     final data = context.read<OnboardingController>().data;
-    _displayName = TextEditingController(text: data.displayName);
+    // A registered business trades under its registered name, so that is the
+    // sensible default - but only when the applicant has not set one, so this
+    // can never overwrite a name they chose.
+    _displayName = TextEditingController(
+        text: data.displayName.isNotEmpty ? data.displayName : data.businessName);
     _bio = TextEditingController(text: data.bio);
     _linkInput.text = data.portfolioLinks.isEmpty ? '' : data.portfolioLinks.first;
   }

@@ -46,6 +46,27 @@ Baseline held throughout: `flutter analyze` clean, 116/116 tests passing.
 - **High-severity dependency patched** via `npm audit fix`. The remaining 8
   moderates need `firebase-admin` 12 -> 14, two majors on the money backend with no
   test exercising it; do that as its own change, not folded into something else.
+- **Stale trust score on bids fixed by reading live, not by fanning out.**
+  `Bid.providerTrustScore` is copied at bid time, but Best Value and the Trust
+  sort ranked on that snapshot, so today's bids were ordered by last week's
+  reputation while each provider's profile showed the current number. The bid
+  list now resolves the live score via `PublicProfileRepository.fetchTrust` and
+  applies it with `Bid.withTrust`, falling back to the stored snapshot until it
+  lands (so the list still renders in one pass) and on error.
+
+  A Cloud Functions fan-out was considered and rejected: trust changes on
+  *profile edits* as well as reviews, it needs a new collection-group index that
+  must be deployed separately, each fan-out write re-invokes `onBidAccepted`,
+  and nothing in CI could exercise it since there are no functions-emulator
+  tests. Reading live needs no index, no trigger and no consistency window, and
+  the existing `allow read: if isSignedIn()` rule on `users/{userId}` already
+  permits it. The cost is a handful of reads per bid-list view.
+
+  **The other denormalised fields were left alone deliberately.** `bidCount`,
+  `lastMessageText` and `unreadCounts` are actively maintained in the same
+  transaction as the thing they describe; `Review`'s reviewer name, photo and
+  job title are correct *because* they are frozen. Only the trust score was
+  both stale and load-bearing.
 - **The two untested funnels now have tests** (+5, suite at 121). Writing them
   surfaced a real bug: `PostJobController.setLocation` called `notifyListeners()`
   from `initState`, tripping `'!_dirty'` for every requestor with a saved default
@@ -364,7 +385,12 @@ at `job_detail_screen.dart:1364` and `notifications_screen.dart:122`;
   times. Reuse it in `payout_step.dart:83` and the bid sheet.
 - Video preview spins forever on failure - `hasError` never checked
   (`job_video_player.dart:55`).
-- Saved Jobs silently truncates at 30 (`whereIn` cap, `job_repository.dart:178`).
+- ~~Saved Jobs silently truncates at 30~~ - FIXED. `watchSavedJobs` now chunks the
+  watchlist via the pure `chunkForWhereIn` helper and combines a stream per chunk,
+  sorted newest-first. Deliberately *not* solved by moving the watchlist to a
+  subcollection: `AppUser.isSaved` runs on every card in the feed and is free today
+  because the array rides along with the profile document the app already streams;
+  a subcollection would turn that into N reads on the most-viewed screen.
 - Location placeholder says "e.g. Bangsar, Kuala Lumpur" in a Penang-only app
   (`post_job_screen.dart:386`).
 - Admin verification docs vanish silently on error - `[...?snap.data]` null-spreads the

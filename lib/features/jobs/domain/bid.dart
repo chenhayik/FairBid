@@ -45,6 +45,26 @@ class Bid {
     this.createdAt,
   });
 
+  /// Returns a copy carrying the provider's *current* reputation.
+  ///
+  /// [providerTrustScore] is denormalised at bid time so the bid list renders
+  /// from one query. That snapshot is fine to show, but ranking on it would
+  /// order today's bids by the provider's reputation as it was when they bid.
+  /// The bid list resolves the live score and applies it through this.
+  Bid withTrust({required int trustScore, required bool scoreVisible}) => Bid(
+        jobId: jobId,
+        providerId: providerId,
+        providerName: providerName,
+        providerPhotoUrl: providerPhotoUrl,
+        providerTrustScore: trustScore,
+        providerScoreVisible: scoreVisible,
+        amountSen: amountSen,
+        estimatedDuration: estimatedDuration,
+        message: message,
+        status: status,
+        createdAt: createdAt,
+      );
+
   /// The parent job's id (the doc's path, not a stored field).
   final String jobId;
   final String providerId;

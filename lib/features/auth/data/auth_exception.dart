@@ -27,6 +27,8 @@ class AuthException implements Exception {
       'too-many-requests' => 'Too many attempts. Please try again later.',
       'account-exists-with-different-credential' =>
         'That email is already linked to a different sign-in method.',
+      'requires-recent-login' => 'Please confirm your password to continue.',
+      'user-mismatch' => 'Those credentials belong to a different account.',
       _ => 'Something went wrong. Please try again.',
     };
     return AuthException(message);

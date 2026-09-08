@@ -679,6 +679,62 @@ describe("Private payout doc", () => {
 // transactions, a client creates these directly, so the create rule carries
 // all the vetting; reads stay admin-only so the collection can't be mined to
 // discover who has been reported.
+describe("Server-owned SSM extract doc", () => {
+  const OWNER = "user8";
+  const OTHER = "user8-other";
+  const ADMIN = "admin8";
+  const EXTRACT_PATH = `users/${OWNER}/private/ssmExtract`;
+  const VERIFICATION_PATH = `users/${OWNER}/private/verification`;
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${OWNER}`, {role: "provider"}],
+      [`users/${OTHER}`, {role: "provider"}],
+      [`users/${ADMIN}`, {role: "admin"}],
+    ]);
+  });
+
+  // The whole verification story rests on this one rule: the verdict is
+  // written only by the extractSsmDocument Cloud Function (admin SDK, bypasses
+  // rules). If an applicant could write it, they could declare themselves
+  // verified.
+  it("denies the owner writing their own verification verdict", async () => {
+    await assertFails(setDoc(doc(dbAs(OWNER), EXTRACT_PATH),
+        {verdict: "passed", failures: [], ownerNameMatches: true}));
+  });
+
+  it("denies the owner merging into an existing verdict", async () => {
+    await seed([[EXTRACT_PATH, {verdict: "rejected", failures: ["not-a-pdf"]}]]);
+    await assertFails(setDoc(doc(dbAs(OWNER), EXTRACT_PATH),
+        {verdict: "passed"}, {merge: true}));
+    await assertFails(
+        updateDoc(doc(dbAs(OWNER), EXTRACT_PATH), {ownerNameMatches: true}));
+  });
+
+  it("denies another signed-in user writing or reading it", async () => {
+    await seed([[EXTRACT_PATH, {verdict: "passed"}]]);
+    await assertFails(setDoc(doc(dbAs(OTHER), EXTRACT_PATH), {verdict: "passed"}));
+    await assertFails(getDoc(doc(dbAs(OTHER), EXTRACT_PATH)));
+  });
+
+  it("still lets the owner read their own verdict", async () => {
+    await seed([[EXTRACT_PATH, {verdict: "needsReview"}]]);
+    await assertSucceeds(getDoc(doc(dbAs(OWNER), EXTRACT_PATH)));
+  });
+
+  it("lets an admin read it for the review queue", async () => {
+    await seed([[EXTRACT_PATH, {verdict: "needsReview"}]]);
+    await assertSucceeds(getDoc(doc(dbAs(ADMIN), EXTRACT_PATH)));
+  });
+
+  // The carve-out must be narrow: sibling private docs stay owner-writable,
+  // or onboarding itself breaks.
+  it("leaves other private docs writable by their owner", async () => {
+    await assertSucceeds(setDoc(doc(dbAs(OWNER), VERIFICATION_PATH),
+        {ssmNumber: "201903350205"}));
+  });
+});
+
 describe("User reports", () => {
   const REPORTER = "user8";
   const REPORTED = "user8-target";

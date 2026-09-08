@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../domain/onboarding_data.dart';
+import '../domain/ssm_extract.dart';
 
 /// Loads and saves a provider's onboarding progress.
 abstract interface class OnboardingRepository {
@@ -11,6 +12,10 @@ abstract interface class OnboardingRepository {
   /// Final submission: saves everything and flips the user's
   /// `verificationStatus` to `pending` for admin review.
   Future<void> submitForReview(String uid, OnboardingData data);
+
+  /// Streams the server's reading of the uploaded SSM document, or null while
+  /// none exists. Written only by the `extractSsmDocument` Cloud Function.
+  Stream<SsmExtract?> watchSsmExtract(String uid);
 }
 
 /// Firestore-backed implementation. Progress lives in an `onboarding` map on
@@ -55,7 +60,11 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
     if (private != null) {
       data
         ..idDocumentUrl = private['idDocumentUrl'] as String?
-        ..selfieUrl = private['selfieUrl'] as String?;
+        ..selfieUrl = private['selfieUrl'] as String?
+        ..ssmDocumentUrl = private['ssmDocumentUrl'] as String?
+        ..ssmNumber = private['ssmNumber'] as String? ?? ''
+        ..ssmNumberNormalized =
+            private['ssmNumberNormalized'] as String? ?? '';
     }
     // Payout bank details live in their own private doc too; merge them back
     // for resume, falling back to the legacy public onboarding fields (still
@@ -71,6 +80,13 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
     }
     return data;
   }
+
+  @override
+  Stream<SsmExtract?> watchSsmExtract(String uid) => _doc(uid)
+      .collection('private')
+      .doc('ssmExtract')
+      .snapshots()
+      .map((snapshot) => SsmExtract.fromMap(snapshot.data()));
 
   @override
   Future<void> save(String uid, OnboardingData data) {

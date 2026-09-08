@@ -1,9 +1,30 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/job.dart';
 import '../domain/job_event.dart';
 import '../domain/service_address.dart';
+
+/// Firestore's cap on the number of values in a `whereIn` filter.
+const int kWhereInLimit = 30;
+
+/// Splits [ids] into consecutive chunks of at most [limit], preserving order.
+///
+/// Exists because Firestore rejects a `whereIn` with more than [kWhereInLimit]
+/// values. Saved Jobs used to sidestep that with `ids.take(30)`, which silently
+/// dropped every bookmark past the 30th; callers must query each chunk and
+/// combine the results instead. Kept as a pure top-level function so the
+/// arithmetic is directly testable - the repository around it needs a live
+/// Firestore and cannot be.
+List<List<String>> chunkForWhereIn(List<String> ids, {int limit = kWhereInLimit}) {
+  assert(limit > 0, 'limit must be positive');
+  return [
+    for (var i = 0; i < ids.length; i += limit)
+      ids.sublist(i, i + limit > ids.length ? ids.length : i + limit),
+  ];
+}
 
 /// How many open jobs the feed loads at a time. The feed grows this window
 /// rather than paging through disjoint pages, so the list stays a live stream
@@ -60,8 +81,12 @@ abstract interface class JobRepository {
   Stream<List<JobEvent>> watchJobEvents(String jobId);
 
   /// Streams the jobs on a user's watchlist (Saved Jobs screen), for the
-  /// bookmarked ids in [jobIds]. Yields an empty list without querying when
-  /// [jobIds] is empty.
+  /// bookmarked ids in [jobIds], newest first. Yields an empty list without
+  /// querying when [jobIds] is empty.
+  ///
+  /// Every id is returned: implementations must work around Firestore's 30-id
+  /// `whereIn` cap rather than truncating, or bookmarks past the 30th vanish
+  /// with no indication to the user.
   Stream<List<Job>> watchSavedJobs(List<String> jobIds);
 
   /// Saves (or overwrites) [jobId]'s private service address. Only the
@@ -183,10 +208,16 @@ class FirestoreJobRepository implements JobRepository {
 
   @override
   Stream<List<JobEvent>> watchJobEvents(String jobId) {
+    // Newest first, bounded. Note the pairing: this used to read ascending
+    // with the UI calling .reversed to show newest first, so adding a limit
+    // on top of that would have kept the OLDEST 50 events and dropped
+    // everything recent. Ordering descending here is what makes the limit
+    // correct, and the caller no longer reverses.
     return _jobs
         .doc(jobId)
         .collection('events')
-        .orderBy('at')
+        .orderBy('at', descending: true)
+        .limit(_jobEventsLimit)
         .snapshots()
         .map((snapshot) => snapshot.docs.map((doc) {
               final data = Map<String, dynamic>.of(doc.data());
@@ -198,12 +229,73 @@ class FirestoreJobRepository implements JobRepository {
   @override
   Stream<List<Job>> watchSavedJobs(List<String> jobIds) {
     if (jobIds.isEmpty) return Stream.value(const []);
-    // Firestore's whereIn caps at 30 ids; a watchlist bigger than that only
-    // shows its first 30 entries here.
-    return _jobs
-        .where(FieldPath.documentId, whereIn: jobIds.take(30).toList())
-        .snapshots()
-        .map(_toJobs);
+
+    // Firestore's whereIn caps at 30 ids. This used to `take(30)`, so a user
+    // who bookmarked a 31st job simply never saw it again - no message, no
+    // truncation notice. Query in chunks of 30 instead and combine them.
+    final chunks = chunkForWhereIn(jobIds);
+
+    Stream<List<Job>> chunkStream(List<String> ids) =>
+        _jobs.where(FieldPath.documentId, whereIn: ids).snapshots().map(_toJobs);
+
+    // The overwhelmingly common case: one query, exactly as before.
+    if (chunks.length == 1) return chunkStream(chunks.first).map(_byNewest);
+
+    return _combineLatest(chunks.map(chunkStream).toList()).map(_byNewest);
+  }
+
+  /// Most recent timeline entries kept for a job. Events accumulate for the
+  /// life of a job, and the activity list only ever shows the recent tail.
+  static const _jobEventsLimit = 50;
+
+  /// Newest first. Chunked queries resolve in arbitrary order, so without an
+  /// explicit sort the saved list would reshuffle as chunks report.
+  List<Job> _byNewest(List<Job> jobs) {
+    final sorted = [...jobs];
+    sorted.sort((a, b) {
+      final at = a.createdAt;
+      final bt = b.createdAt;
+      if (at == null || bt == null) return 0;
+      return bt.compareTo(at);
+    });
+    return sorted;
+  }
+
+  /// Emits the concatenation of the latest value from every stream in
+  /// [streams], once all of them have produced one.
+  ///
+  /// `package:async` has no combineLatest and rxdart is not worth a dependency
+  /// for one call site, so this is the minimal hand-rolled equivalent.
+  Stream<List<Job>> _combineLatest(List<Stream<List<Job>>> streams) {
+    final latest = List<List<Job>?>.filled(streams.length, null);
+    final subscriptions = <StreamSubscription<List<Job>>>[];
+    late final StreamController<List<Job>> controller;
+
+    controller = StreamController<List<Job>>(
+      onListen: () {
+        for (var i = 0; i < streams.length; i++) {
+          final index = i;
+          subscriptions.add(streams[index].listen(
+            (jobs) {
+              latest[index] = jobs;
+              // Hold the first emission until every chunk has reported, so
+              // the list never renders a partial watchlist.
+              if (latest.every((chunk) => chunk != null)) {
+                controller.add([for (final chunk in latest) ...chunk!]);
+              }
+            },
+            onError: controller.addError,
+          ));
+        }
+      },
+      onCancel: () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+        subscriptions.clear();
+      },
+    );
+    return controller.stream;
   }
 
   @override

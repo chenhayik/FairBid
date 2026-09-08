@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/location/address_hint.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../auth/presentation/validators.dart';
@@ -9,10 +10,17 @@ import '../../domain/service_address.dart';
 /// with the job's hired provider - never with other bidders (see
 /// `firestore.rules` and `job_address_card.dart`).
 class ServiceAddressSheet extends StatelessWidget {
-  const ServiceAddressSheet({super.key, this.initial, this.defaultCity});
+  const ServiceAddressSheet(
+      {super.key, this.initial, this.defaultCity, this.hint});
 
   final ServiceAddress? initial;
   final String? defaultCity;
+
+  /// Street-level suggestion reverse-geocoded from the job's map pin, used to
+  /// pre-fill a *new* address only. An [initial] address always wins, and
+  /// [defaultCity] - a curated town from the picker - beats the geocoder's
+  /// own city label.
+  final AddressHint? hint;
 
   /// Opens the sheet. Resolves to the entered [ServiceAddress] on save, or
   /// `null` on cancel/dismiss.
@@ -20,6 +28,7 @@ class ServiceAddressSheet extends StatelessWidget {
     BuildContext context, {
     ServiceAddress? initial,
     String? defaultCity,
+    AddressHint? hint,
   }) {
     return showModalBottomSheet<ServiceAddress?>(
       context: context,
@@ -28,6 +37,7 @@ class ServiceAddressSheet extends StatelessWidget {
       builder: (_) => ServiceAddressSheet(
         initial: initial,
         defaultCity: defaultCity,
+        hint: hint,
       ),
     );
   }
@@ -38,15 +48,17 @@ class ServiceAddressSheet extends StatelessWidget {
       // Keep the form above the keyboard.
       padding:
           EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: _ServiceAddressForm(initial: initial, defaultCity: defaultCity),
+      child: _ServiceAddressForm(
+          initial: initial, defaultCity: defaultCity, hint: hint),
     );
   }
 }
 
 class _ServiceAddressForm extends StatefulWidget {
-  const _ServiceAddressForm({this.initial, this.defaultCity});
+  const _ServiceAddressForm({this.initial, this.defaultCity, this.hint});
   final ServiceAddress? initial;
   final String? defaultCity;
+  final AddressHint? hint;
 
   @override
   State<_ServiceAddressForm> createState() => _ServiceAddressFormState();
@@ -54,11 +66,23 @@ class _ServiceAddressForm extends StatefulWidget {
 
 class _ServiceAddressFormState extends State<_ServiceAddressForm> {
   final _formKey = GlobalKey<FormState>();
-  late final _line1 = TextEditingController(text: widget.initial?.line1);
+
+  /// Only pre-fill from the map pin when adding an address from scratch -
+  /// never overwrite what the requestor already saved.
+  AddressHint? get _hint => widget.initial == null ? widget.hint : null;
+
+  /// True when the geocoder actually supplied a street or postcode, so the
+  /// form can tell the requestor those values are guesses worth checking.
+  bool get _prefilled =>
+      _hint != null && (_hint!.line1 != null || _hint!.postcode != null);
+
+  late final _line1 =
+      TextEditingController(text: widget.initial?.line1 ?? _hint?.line1);
   late final _line2 = TextEditingController(text: widget.initial?.line2);
-  late final _postcode = TextEditingController(text: widget.initial?.postcode);
+  late final _postcode =
+      TextEditingController(text: widget.initial?.postcode ?? _hint?.postcode);
   late final _city = TextEditingController(
-      text: widget.initial?.city ?? widget.defaultCity);
+      text: widget.initial?.city ?? widget.defaultCity ?? _hint?.city);
   late final _accessNote =
       TextEditingController(text: widget.initial?.accessNote);
 
@@ -113,6 +137,25 @@ class _ServiceAddressFormState extends State<_ServiceAddressForm> {
                 ),
               ],
             ),
+            if (_prefilled) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.auto_fix_high_outlined,
+                      size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Filled in from your map pin - please check it, '
+                      'especially the unit or house number.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 20),
             AppTextField(
               controller: _line1,
