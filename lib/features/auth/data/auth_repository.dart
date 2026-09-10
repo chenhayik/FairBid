@@ -6,6 +6,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../../core/config/platform_config.dart';
 import '../domain/app_user.dart';
+import '../domain/mfa.dart';
 import '../domain/user_role.dart';
 import 'auth_config.dart';
 import 'auth_exception.dart';
@@ -47,6 +48,28 @@ abstract interface class AuthRepository {
   /// Re-proves the signed-in user's identity before a sensitive action.
   /// [password] is required for email/password accounts; ignored for Google.
   Future<void> reauthenticate({String? password});
+
+  /// The second factors enrolled on the signed-in account (empty when none).
+  Future<List<MfaFactor>> enrolledFactors();
+
+  /// Starts TOTP enrolment. Requires a verified email and a recent login -
+  /// call [reauthenticate] first.
+  Future<TotpEnrollment> startTotpEnrollment();
+
+  /// Finishes enrolment by proving the user's authenticator app produced
+  /// [code] from [enrollment].
+  Future<void> completeTotpEnrollment({
+    required TotpEnrollment enrollment,
+    required String code,
+    required String label,
+  });
+
+  /// Removes an enrolled factor. Firebase may sign the user out afterwards.
+  Future<void> unenrollFactor(String factorUid);
+
+  /// Answers an [MfaChallenge] with the code from the authenticator app,
+  /// completing the sign-in or re-auth that raised it.
+  Future<void> resolveMfa(MfaChallenge challenge, String code);
 
   /// Signs in with Google. If this is a brand-new account, a profile is created
   /// using [roleIfNew]; existing accounts keep their stored role.
@@ -248,6 +271,87 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<List<MfaFactor>> enrolledFactors() {
+    return _guardValue(() async {
+      final user = _auth.currentUser;
+      if (user == null) return const <MfaFactor>[];
+      final factors = await user.multiFactor.getEnrolledFactors();
+      return factors.map(_toFactor).toList();
+    });
+  }
+
+  @override
+  Future<TotpEnrollment> startTotpEnrollment() {
+    return _guardValue(() async {
+      final user = _auth.currentUser!;
+      final session = await user.multiFactor.getSession();
+      final secret = await TotpMultiFactorGenerator.generateSecret(session);
+      final url = await secret.generateQrCodeUrl(
+        accountName: user.email ?? user.uid,
+        issuer: 'FairBid',
+      );
+      return TotpEnrollment(
+        secretKey: secret.secretKey,
+        qrCodeUrl: url,
+        handle: secret,
+      );
+    });
+  }
+
+  @override
+  Future<void> completeTotpEnrollment({
+    required TotpEnrollment enrollment,
+    required String code,
+    required String label,
+  }) {
+    return _guard(() async {
+      final assertion = await TotpMultiFactorGenerator.getAssertionForEnrollment(
+        enrollment.handle as TotpSecret,
+        code,
+      );
+      // displayName is required for TOTP - shows in the sign-in hints.
+      await _auth.currentUser!.multiFactor.enroll(assertion, displayName: label);
+    });
+  }
+
+  @override
+  Future<void> unenrollFactor(String factorUid) {
+    return _guard(() => _auth.currentUser!.multiFactor.unenroll(
+          factorUid: factorUid,
+        ));
+  }
+
+  @override
+  Future<void> resolveMfa(MfaChallenge challenge, String code) {
+    return _guard(() async {
+      final resolver = challenge.resolver as MultiFactorResolver;
+      // Filter by factorId, not hints.first - SMS would silently pick wrong.
+      final hint = resolver.hints.firstWhere((h) => h.factorId == 'totp');
+      final assertion =
+          await TotpMultiFactorGenerator.getAssertionForSignIn(hint.uid, code);
+      await resolver.resolveSignIn(assertion);
+    });
+  }
+
+  MfaFactor _toFactor(MultiFactorInfo info) => MfaFactor(
+        uid: info.uid,
+        displayName: info.displayName ?? 'Authenticator app',
+        // enrollmentTimestamp is seconds since epoch, not milliseconds.
+        enrolledAt: DateTime.fromMillisecondsSinceEpoch(
+          (info.enrollmentTimestamp * 1000).round(),
+        ),
+      );
+
+  MfaChallenge _toChallenge(FirebaseAuthMultiFactorException e) {
+    // e.resolver allocates a new wrapper each call - read it once.
+    final resolver = e.resolver;
+    return MfaChallenge(
+      hints: resolver.hints.map(_toFactor).toList(),
+      resolver: resolver,
+    );
+  }
+
+  @override
   Future<void> registerWithEmail({
     required String email,
     required String password,
@@ -262,7 +366,7 @@ class FirebaseAuthRepository implements AuthRepository {
       final user = credential.user!;
       try {
         await user.updateDisplayName(displayName.trim());
-        await _createProfileIfMissing(user, role, displayName.trim());
+        await _ensureProfile(user, role, displayName.trim());
         // Best-effort: a mail failure must not roll back a good account, so
         // this deliberately swallows its error (the banner offers a resend).
         await user.sendEmailVerification().catchError((_) {});
@@ -299,12 +403,53 @@ class FirebaseAuthRepository implements AuthRepository {
       // Firebase only needs the ID token to verify a Google sign-in.
       final credential = GoogleAuthProvider.credential(idToken: idToken);
       final userCredential = await _auth.signInWithCredential(credential);
-      await _createProfileIfMissing(
-        userCredential.user!,
-        roleIfNew,
-        googleUser.displayName ?? userCredential.user!.displayName ?? '',
-      );
+      final user = userCredential.user!;
+      final displayName = _googleDisplayName(googleUser, userCredential);
+      // Keep the auth profile in step with the name we settled on, so anything
+      // reading `User.displayName` (and the next sign-in) sees it too.
+      if ((user.displayName ?? '').trim().isEmpty) {
+        await user.updateDisplayName(displayName).catchError((_) {});
+      }
+      await _ensureProfile(user, roleIfNew, displayName);
     });
+  }
+
+  /// The best human name available for a Google sign-in.
+  ///
+  /// Android's Credential Manager often hands back a credential with no
+  /// display name, and Firebase only copies one onto the auth profile when the
+  /// ID token carried it, so walk every source before falling back to the
+  /// email's local part - showing the whole address as someone's name is the
+  /// bug this chain exists to avoid.
+  String _googleDisplayName(
+    GoogleSignInAccount googleUser,
+    UserCredential userCredential,
+  ) {
+    final user = userCredential.user!;
+    final profileName = userCredential.additionalUserInfo?.profile?['name'];
+    final candidates = <String?>[
+      googleUser.displayName,
+      profileName is String ? profileName : null,
+      for (final provider in user.providerData) provider.displayName,
+      user.displayName,
+    ];
+    for (final candidate in candidates) {
+      final name = candidate?.trim() ?? '';
+      if (name.isNotEmpty) return name;
+    }
+    return _nameFromEmail(googleUser.email);
+  }
+
+  /// A readable stand-in built from an email's local part, e.g.
+  /// `siti.rahman@gmail.com` -> `Siti Rahman`. Used only when no provider gave
+  /// us a real name; still far better than the full address.
+  String _nameFromEmail(String? email) {
+    final local = (email ?? '').split('@').first.split('+').first;
+    final words = local
+        .split(RegExp(r'[._\-]+'))
+        .where((word) => word.isNotEmpty)
+        .map((word) => word[0].toUpperCase() + word.substring(1));
+    return words.isEmpty ? 'User' : words.join(' ');
   }
 
   @override
@@ -425,29 +570,57 @@ class FirebaseAuthRepository implements AuthRepository {
     );
   }
 
-  /// Creates the Firestore profile only the first time an account appears, so
-  /// re-logins never overwrite an existing role or balance.
-  Future<void> _createProfileIfMissing(
+  /// Writes the Firestore profile only the first time an account appears, so
+  /// re-logins never overwrite an existing role or balance - the one exception
+  /// being [_healEmailAsDisplayName].
+  Future<void> _ensureProfile(
     User user,
     UserRole role,
     String displayName,
   ) async {
     final doc = _users.doc(user.uid);
     final snapshot = await doc.get();
-    if (snapshot.exists) return;
+    if (snapshot.exists) {
+      await _healEmailAsDisplayName(doc, snapshot, user, displayName);
+      return;
+    }
 
     // No trust or rating fields: rules reject them at create, and the
     // `recomputeTrustOnUserWrite` Cloud Function seeds the server-computed
     // Trust Score moments after this write lands.
     await doc.set({
       'role': role.storageValue,
-      'displayName': displayName.isEmpty ? (user.email ?? 'User') : displayName,
+      'displayName':
+          displayName.isEmpty ? _nameFromEmail(user.email) : displayName,
       'email': user.email,
       'walletBalanceSen': 0,
       'verificationStatus': 'none',
       'onboardingComplete': false,
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  /// Repairs profiles created before [_googleDisplayName] existed, which stored
+  /// the email address as the account name. Deliberately narrow: it only writes
+  /// when the stored name is still the bare email (or empty), so a name the
+  /// user picked themselves is never overwritten.
+  Future<void> _healEmailAsDisplayName(
+    DocumentReference<Map<String, dynamic>> doc,
+    DocumentSnapshot<Map<String, dynamic>> snapshot,
+    User user,
+    String displayName,
+  ) async {
+    final stored = (snapshot.data()?['displayName'] as String? ?? '').trim();
+    final email = (user.email ?? '').trim();
+    final isEmailAsName = email.isNotEmpty &&
+        stored.toLowerCase() == email.toLowerCase();
+    if (stored.isNotEmpty && !isEmailAsName) return;
+    if (displayName.isEmpty || displayName == stored) return;
+    // Best-effort: the rules deny profile writes to a suspended account, and a
+    // cosmetic repair must never turn a good sign-in into an error.
+    await doc
+        .set({'displayName': displayName}, SetOptions(merge: true))
+        .catchError((_) {});
   }
 
   /// Reads the role from the profile and builds an [AppUser]. Returns `null`
@@ -546,6 +719,10 @@ class FirebaseAuthRepository implements AuthRepository {
   Future<void> _guard(Future<void> Function() action) async {
     try {
       await action();
+    } on FirebaseAuthMultiFactorException catch (e) {
+      // Must precede FirebaseAuthException - it's a subclass, and the
+      // resolver is lost if the generic clause swallows it.
+      throw MfaRequiredException(_toChallenge(e));
     } on FirebaseAuthException catch (e) {
       throw AuthException.fromFirebase(e);
     } on GoogleSignInException catch (e) {
@@ -560,6 +737,20 @@ class FirebaseAuthRepository implements AuthRepository {
     } on FirebaseException catch (e) {
       // Non-auth Firebase errors, e.g. a Firestore permission-denied while
       // saving or reading the profile. (FirebaseAuthException is caught above.)
+      throw AuthException(_firebaseMessage(e));
+    }
+  }
+
+  /// [_guard] for calls that return a value. No GoogleSignInException clause
+  /// - none of its callers touch Google sign-in.
+  Future<T> _guardValue<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on FirebaseAuthMultiFactorException catch (e) {
+      throw MfaRequiredException(_toChallenge(e));
+    } on FirebaseAuthException catch (e) {
+      throw AuthException.fromFirebase(e);
+    } on FirebaseException catch (e) {
       throw AuthException(_firebaseMessage(e));
     }
   }

@@ -12,6 +12,7 @@ import '../../admin/domain/pending_verification.dart';
 import '../../auth/domain/app_user.dart';
 import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../auth/presentation/mfa_code_sheet.dart';
 import '../../home/presentation/home_app_bar.dart';
 import '../data/review_repository.dart';
 import '../domain/review.dart';
@@ -65,6 +66,8 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 16),
               _ReviewsCard(user: user),
             ],
+            const SizedBox(height: 16),
+            const _SecurityNavCard(),
             const SizedBox(height: 24),
             SecondaryButton(
               label: 'Log out',
@@ -103,10 +106,28 @@ Future<void> _confirmDelete(
   );
   if (password == null || !context.mounted) return;
 
-  final success = await auth.deleteAccount(
+  var success = await auth.deleteAccount(
     password: password.isEmpty ? null : password,
   );
-  if (!context.mounted || success) return;
+  if (!context.mounted) return;
+
+  if (!success) {
+    // Unlike withdrawal, deleteAccount re-authenticates internally, so an
+    // enrolled user's challenge surfaces from here rather than a reauth
+    // dialog.
+    final challenge = auth.takePendingChallenge();
+    if (challenge != null) {
+      final verified = await MfaCodeSheet.show(context, challenge: challenge);
+      if (!context.mounted) return;
+      if (verified) {
+        success = await auth.deleteAccount(
+          password: password.isEmpty ? null : password,
+        );
+        if (!context.mounted) return;
+      }
+    }
+  }
+  if (success) return;
 
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(
@@ -394,6 +415,41 @@ class _EarningsNavCard extends StatelessWidget {
           ],
         ),
       );
+  }
+}
+
+/// Navigation card to the Security screen (2FA on/off).
+class _SecurityNavCard extends StatelessWidget {
+  const _SecurityNavCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppCard(
+      onTap: () => context.push('/profile/security'),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: context.fairbid.subtleBlue,
+            child: Icon(Icons.shield_outlined, color: context.fairbid.verified),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Security', style: theme.textTheme.titleLarge),
+                const SizedBox(height: 2),
+                Text('Two-factor authentication',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+        ],
+      ),
+    );
   }
 }
 

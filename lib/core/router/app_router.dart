@@ -7,6 +7,7 @@ import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/domain/user_role.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/register_screen.dart';
+import '../../features/auth/presentation/security_screen.dart';
 import '../../features/auth/presentation/suspended_screen.dart';
 import '../../features/disputes/domain/dispute.dart';
 import '../../features/disputes/presentation/dispute_detail_screen.dart';
@@ -121,6 +122,9 @@ GoRouter buildRouter(AuthController auth) {
       GoRoute(
           path: '/profile/earnings',
           builder: (_, _) => const EarningsScreen()),
+      GoRoute(
+          path: '/profile/security',
+          builder: (_, _) => const SecurityScreen()),
 
       // Public profile - pushed full-screen (outside the tab shell) with a
       // back button, matching /jobs/:id. Viewing your own uid redirects to

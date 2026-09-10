@@ -26,7 +26,9 @@ import 'package:fairbid/features/admin/domain/platform_stats.dart';
 import 'package:fairbid/features/auth/data/auth_exception.dart';
 import 'package:fairbid/features/auth/data/auth_repository.dart';
 import 'package:fairbid/features/auth/domain/app_user.dart';
+import 'package:fairbid/features/auth/domain/mfa.dart';
 import 'package:fairbid/features/auth/domain/user_role.dart';
+import 'package:fairbid/features/auth/presentation/mfa_code_sheet.dart';
 import 'package:fairbid/features/auth/presentation/validators.dart';
 import 'package:fairbid/features/disputes/data/dispute_repository.dart';
 import 'package:fairbid/features/disputes/domain/dispute.dart';
@@ -147,6 +149,17 @@ class FakeAuthRepository implements AuthRepository {
   int verificationEmailsSent = 0;
   int reauthCount = 0;
 
+  /// Enrolled second factors. Empty = 2FA off, which every existing test
+  /// expects.
+  List<MfaFactor> mfaFactors = [];
+
+  /// When true, the next sign-in or re-auth raises an MFA challenge instead
+  /// of succeeding - mirrors Firebase pausing for a second factor.
+  bool requireMfaOnSignIn = false;
+
+  /// Codes the fake accepts. Anything else fails like a wrong code.
+  String validCode = '123456';
+
   @override
   Stream<AppUser?> authStateChanges() async* {
     yield _current; // initial state so the app leaves the splash screen
@@ -215,6 +228,12 @@ class FakeAuthRepository implements AuthRepository {
 
   void _signIn(UserRole role) {
     if (failWith != null) throw failWith!;
+    if (requireMfaOnSignIn) {
+      throw const MfaRequiredException(MfaChallenge(
+        hints: [MfaFactor(uid: 'factor-1', displayName: 'Authenticator app')],
+        resolver: 'fake-resolver',
+      ));
+    }
     _current = _build(role);
     _controller.add(_current);
   }
@@ -287,6 +306,52 @@ class FakeAuthRepository implements AuthRepository {
   Future<void> reauthenticate({String? password}) async {
     if (failWith != null) throw failWith!;
     reauthCount++;
+    if (requireMfaOnSignIn) {
+      throw const MfaRequiredException(MfaChallenge(
+        hints: [MfaFactor(uid: 'factor-1', displayName: 'Authenticator app')],
+        resolver: 'fake-resolver',
+      ));
+    }
+  }
+
+  @override
+  Future<List<MfaFactor>> enrolledFactors() async => List.of(mfaFactors);
+
+  @override
+  Future<TotpEnrollment> startTotpEnrollment() async => const TotpEnrollment(
+        secretKey: 'ABCD1234',
+        qrCodeUrl: 'otpauth://totp/FairBid:test@fairbid.app?secret=ABCD1234',
+        handle: 'fake-secret',
+      );
+
+  @override
+  Future<void> completeTotpEnrollment({
+    required TotpEnrollment enrollment,
+    required String code,
+    required String label,
+  }) async {
+    if (code != validCode) {
+      throw const AuthException('That code is incorrect.');
+    }
+    mfaFactors = [
+      MfaFactor(uid: 'factor-1', displayName: label, enrolledAt: DateTime(2026)),
+    ];
+  }
+
+  @override
+  Future<void> unenrollFactor(String factorUid) async {
+    mfaFactors = mfaFactors.where((f) => f.uid != factorUid).toList();
+  }
+
+  @override
+  Future<void> resolveMfa(MfaChallenge challenge, String code) async {
+    if (code != validCode) {
+      throw const AuthException('That code is incorrect.');
+    }
+    requireMfaOnSignIn = false;
+    // A re-auth-originated challenge just refreshes the existing session
+    // (see the design note on resolveSignIn); only sign-in needs a build.
+    if (_current == null) _signIn(UserRole.requestor);
   }
 
   @override
@@ -329,6 +394,14 @@ class FakeAuthRepository implements AuthRepository {
   @override
   Future<void> deleteAccount({String? password}) async {
     if (failWith != null) throw failWith!;
+    // Mirrors the real repo: requires-recent-login re-authenticates
+    // internally, so an enrolled user's challenge surfaces from here too.
+    if (requireMfaOnSignIn) {
+      throw const MfaRequiredException(MfaChallenge(
+        hints: [MfaFactor(uid: 'factor-1', displayName: 'Authenticator app')],
+        resolver: 'fake-resolver',
+      ));
+    }
     _current = null;
     _controller.add(null);
   }
@@ -1069,6 +1142,9 @@ class FakeUserAdminRepository implements UserAdminRepository {
   /// Every setSuspended call, for tests to assert.
   final calls = <({String uid, bool suspended, String? reason})>[];
 
+  /// Every clearMfa call, for tests to assert.
+  final mfaClears = <String>[];
+
   @override
   Stream<List<ManagedUser>> watchUsers() async* {
     yield List.of(_users);
@@ -1099,6 +1175,11 @@ class FakeUserAdminRepository implements UserAdminRepository {
       );
     }
     _changes.add(null);
+  }
+
+  @override
+  Future<void> clearMfa(String uid) async {
+    mfaClears.add(uid);
   }
 }
 
@@ -2992,6 +3073,244 @@ void main() {
         findsOneWidget,
       );
     });
+  });
+
+  group('Two-factor authentication', () {
+    Future<void> loginRequestor(WidgetTester tester) async {
+      await fillField(tester, 'Email', 'test@fairbid.app');
+      await fillField(tester, 'Password', 'secret123');
+      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> openSecurityScreen(WidgetTester tester) async {
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Profile'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Security'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'signing in with 2FA on prompts for a code; wrong code stays open, '
+      'right code signs in',
+      (tester) async {
+        final auth = FakeAuthRepository()..requireMfaOnSignIn = true;
+        await tester.pumpWidget(buildApp(auth));
+        await tester.pumpAndSettle();
+        await loginRequestor(tester);
+
+        expect(find.text('Two-factor authentication'), findsOneWidget);
+        expect(find.byType(NavigationBar), findsNothing);
+
+        // The login screen's own fields are still mounted behind the sheet
+        // (TextFormField renders a TextField internally too), so scope the
+        // finder to the sheet's field.
+        final codeField = find.descendant(
+          of: find.byType(MfaCodeSheet),
+          matching: find.byType(TextField),
+        );
+        await tester.enterText(codeField, '000000');
+        await tester.tap(find.widgetWithText(FilledButton, 'Verify'));
+        await tester.pumpAndSettle();
+        expect(find.text('That code is incorrect.'), findsOneWidget);
+
+        await tester.enterText(codeField, '123456');
+        await tester.tap(find.widgetWithText(FilledButton, 'Verify'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(NavigationBar), findsOneWidget);
+      },
+    );
+
+    testWidgets('security screen shows Off, then On after enrolling', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository();
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await loginRequestor(tester);
+      await openSecurityScreen(tester);
+
+      expect(find.text('Off'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(PrimaryButton, 'Turn on'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Your password'),
+        'secret123',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Scan this code'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '123456');
+      await tester.tap(find.text('Verify and turn on'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('On'), findsOneWidget);
+    });
+
+    testWidgets('unverified email blocks turning 2FA on', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()..emailVerified = false;
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await loginRequestor(tester);
+      await openSecurityScreen(tester);
+
+      expect(find.text('Verify your email first'), findsOneWidget);
+      expect(find.text('Turn on'), findsNothing);
+    });
+
+    testWidgets('turning off asks for confirmation, then returns to Off', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()
+        ..mfaFactors = const [
+          MfaFactor(uid: 'factor-1', displayName: 'Authenticator app'),
+        ];
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+      await loginRequestor(tester);
+      await openSecurityScreen(tester);
+
+      expect(find.text('On'), findsOneWidget);
+      await tester.tap(find.widgetWithText(SecondaryButton, 'Turn off'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Turn off two-factor?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Turn off'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Off'), findsOneWidget);
+    });
+
+    testWidgets(
+      'withdrawing as an enrolled user shows re-auth, then the code sheet',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 2200));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        // Seeded already signed in - this test targets the reauth path, not
+        // the (separately covered) sign-in one, and requireMfaOnSignIn is a
+        // single-use flag.
+        final auth = FakeAuthRepository()
+          ..verificationStatus = 'approved'
+          ..walletBalanceSen = 85000
+          ..mfaFactors = const [
+            MfaFactor(uid: 'factor-1', displayName: 'Authenticator app'),
+          ]
+          ..requireMfaOnSignIn = true
+          ..seedSignedIn(UserRole.provider);
+        await tester.pumpWidget(buildApp(auth));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('Profile'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Earnings & Payouts'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Your password'),
+          'secret123',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Two-factor authentication'), findsOneWidget);
+
+        // The reauth dialog's password field is still mounted behind the
+        // sheet - scope the finder to the sheet's field.
+        await tester.enterText(
+          find.descendant(
+            of: find.byType(MfaCodeSheet),
+            matching: find.byType(TextField),
+          ),
+          '123456',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Verify'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Move money from your FairBid balance'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'deleting the account as an MFA-enrolled user with a stale session '
+      'prompts for the code and completes the deletion',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 2200));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        // Seeded already signed in, same as the withdraw test above -
+        // deleteAccount re-authenticates internally, so the challenge
+        // surfaces from that call rather than a separate reauth dialog.
+        final auth = FakeAuthRepository()
+          ..mfaFactors = const [
+            MfaFactor(uid: 'factor-1', displayName: 'Authenticator app'),
+          ]
+          ..requireMfaOnSignIn = true
+          ..seedSignedIn(UserRole.requestor);
+        await tester.pumpWidget(buildApp(auth));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('Profile'),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Delete Account'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Confirm your password'),
+          'secret123',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+        await tester.pumpAndSettle();
+
+        // The Security nav card behind the sheet also says "Two-factor
+        // authentication", so scope this to the sheet itself.
+        expect(find.byType(MfaCodeSheet), findsOneWidget);
+
+        await tester.enterText(
+          find.descendant(
+            of: find.byType(MfaCodeSheet),
+            matching: find.byType(TextField),
+          ),
+          '123456',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Verify'));
+        await tester.pumpAndSettle();
+
+        // Signed out -> router redirects back to the login screen.
+        expect(find.text('Delete account?'), findsNothing);
+        expect(find.widgetWithText(FilledButton, 'Log In'), findsOneWidget);
+      },
+    );
   });
 
   group('Money & distance', () {
@@ -5129,6 +5448,43 @@ void main() {
       // action flips to Reinstate.
       expect(find.text('Suspended'), findsOneWidget);
       expect(find.widgetWithText(OutlinedButton, 'Reinstate'), findsOneWidget);
+    });
+
+    testWidgets('admin resets a lost authenticator from the Users tab', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
+      final users = FakeUserAdminRepository([
+        const ManagedUser(
+          uid: 'u-2',
+          displayName: 'Bob Provider',
+          email: 'bob@fairbid.app',
+          role: 'provider',
+          suspended: false,
+        ),
+      ]);
+      await tester.pumpWidget(buildApp(auth, userAdmin: users));
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('Users'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Users'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Reset two-factor'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Reset two-factor for Bob Provider?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Reset'));
+      await tester.pumpAndSettle();
+
+      expect(users.mfaClears, ['u-2']);
+      expect(find.text('Two-factor authentication reset.'), findsOneWidget);
     });
 
     testWidgets('a suspended user is locked to the suspended screen', (

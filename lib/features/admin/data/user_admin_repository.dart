@@ -19,6 +19,10 @@ abstract interface class UserAdminRepository {
     required bool suspended,
     String? reason,
   });
+
+  /// Clears every second factor from [uid] - the recovery path for a user who
+  /// lost their authenticator app (`adminClearMfa`).
+  Future<void> clearMfa(String uid);
 }
 
 /// Firestore/Functions-backed [UserAdminRepository].
@@ -52,5 +56,10 @@ class FirestoreUserAdminRepository implements UserAdminRepository {
       'suspended': suspended,
       if (reason != null && reason.isNotEmpty) 'reason': reason,
     });
+  }
+
+  @override
+  Future<void> clearMfa(String uid) async {
+    await _functions.httpsCallable('adminClearMfa').call<void>({'uid': uid});
   }
 }

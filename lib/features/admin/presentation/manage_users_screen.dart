@@ -79,6 +79,43 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     }
   }
 
+  /// Confirms, then clears every second factor from [user] - the recovery
+  /// path for a lost authenticator app.
+  Future<void> _clearMfa(ManagedUser user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reset two-factor for ${user.displayName}?'),
+        content: const Text(
+            'This lets them sign in with just their password until they set '
+            'it up again.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busyUid = user.uid);
+    try {
+      await context.read<UserAdminRepository>().clearMfa(user.uid);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Two-factor authentication reset.')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not reset it. Please try again.')));
+    } finally {
+      if (mounted) setState(() => _busyUid = null);
+    }
+  }
+
   /// Non-admin users matching the search, suspended ones first then by name.
   List<ManagedUser> _visible(List<ManagedUser> all) {
     final q = _query.trim().toLowerCase();
@@ -165,6 +202,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                     busy: _busyUid == users[i].uid,
                     onSuspend: () => _suspend(users[i]),
                     onReinstate: () => _reinstate(users[i]),
+                    onClearMfa: () => _clearMfa(users[i]),
                   ),
                 ),
               );
@@ -183,12 +221,14 @@ class _UserCard extends StatelessWidget {
     required this.busy,
     required this.onSuspend,
     required this.onReinstate,
+    required this.onClearMfa,
   });
 
   final ManagedUser user;
   final bool busy;
   final VoidCallback onSuspend;
   final VoidCallback onReinstate;
+  final VoidCallback onClearMfa;
 
   @override
   Widget build(BuildContext context) {
@@ -260,26 +300,37 @@ class _UserCard extends StatelessWidget {
                 width: 24,
                 height: 24,
                 child: CircularProgressIndicator(strokeWidth: 2))
-          else if (user.suspended)
-            OutlinedButton(
-              onPressed: onReinstate,
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(0, 40),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-              ),
-              child: const Text('Reinstate'),
-            )
-          else
-            OutlinedButton(
-              onPressed: onSuspend,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: context.fairbid.danger,
-                side: BorderSide(color: context.fairbid.danger),
-                minimumSize: const Size(0, 40),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-              ),
-              child: const Text('Suspend'),
+          else ...[
+            PopupMenuButton<String>(
+              tooltip: 'More actions',
+              onSelected: (value) {
+                if (value == 'mfa') onClearMfa();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'mfa', child: Text('Reset two-factor')),
+              ],
             ),
+            if (user.suspended)
+              OutlinedButton(
+                onPressed: onReinstate,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+                child: const Text('Reinstate'),
+              )
+            else
+              OutlinedButton(
+                onPressed: onSuspend,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: context.fairbid.danger,
+                  side: BorderSide(color: context.fairbid.danger),
+                  minimumSize: const Size(0, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+                child: const Text('Suspend'),
+              ),
+          ],
         ],
       ),
     );

@@ -11,6 +11,12 @@ class AuthException implements Exception {
   final String message;
 
   factory AuthException.fromFirebase(FirebaseAuthException e) {
+    // Android reports an expired TOTP challenge as code 'unknown' with the
+    // real reason only in the message.
+    if (e.message?.contains('TOTP_CHALLENGE_TIMEOUT') ?? false) {
+      return const AuthException(
+          'That took too long. Please sign in again.');
+    }
     final message = switch (e.code) {
       'invalid-email' => 'That email address looks invalid.',
       'user-disabled' => 'This account has been disabled.',
@@ -29,6 +35,17 @@ class AuthException implements Exception {
         'That email is already linked to a different sign-in method.',
       'requires-recent-login' => 'Please confirm your password to continue.',
       'user-mismatch' => 'Those credentials belong to a different account.',
+      'invalid-verification-code' =>
+        'That code is incorrect. Check your authenticator app and try again.',
+      'second-factor-already-in-use' =>
+        'Two-factor authentication is already set up on this account.',
+      'maximum-second-factor-count-exceeded' =>
+        'You have reached the maximum number of second factors.',
+      'unverified-email' =>
+        'Verify your email address before turning on two-factor '
+            'authentication.',
+      'multi-factor-info-not-found' =>
+        'That second factor is no longer enrolled.',
       _ => 'Something went wrong. Please try again.',
     };
     return AuthException(message);

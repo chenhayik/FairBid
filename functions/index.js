@@ -1248,6 +1248,28 @@ exports.setUserSuspended = functions.https.onCall(async (data, context) => {
   });
 });
 
+/**
+ * Admin-only: clears every second factor from an account, for a user who
+ * lost their authenticator app. Firebase offers no self-service recovery.
+ * Refresh tokens are revoked so the old session can't linger.
+ */
+exports.adminClearMfa = functions.https.onCall(async (data, context) => {
+  const callerId = callerUid(context);
+  const targetUid = checkId(data.uid, "uid");
+  const db = admin.firestore();
+
+  const callerSnap = await db.doc(`users/${callerId}`).get();
+  if (callerSnap.data()?.role !== "admin") {
+    throw new functions.https.HttpsError(
+        "permission-denied", "Only an admin can do this.");
+  }
+
+  await admin.auth().updateUser(targetUid, {
+    multiFactor: {enrolledFactors: null},
+  });
+  await admin.auth().revokeRefreshTokens(targetUid);
+});
+
 // ---------------------------------------------------------------------------
 // Dispute resolution (plan §3.3.3). Raising a dispute freezes the milestone;
 // an admin ruling pays the escrowed amount out. Both live here so the

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../domain/app_user.dart';
 import 'auth_controller.dart';
+import 'mfa_code_sheet.dart';
 
 /// Asks the user to prove who they are again, immediately before a sensitive
 /// action (withdrawing money, deleting the account).
@@ -71,6 +72,20 @@ class _ReauthDialogState extends State<ReauthDialog> {
       Navigator.of(context).pop(true);
       return;
     }
+
+    // An enrolled user must also pass their second factor here.
+    final challenge = auth.takePendingChallenge();
+    if (challenge != null) {
+      // Stop the spinner while the code sheet (a separate modal) is up top.
+      setState(() => _busy = false);
+      final verified = await MfaCodeSheet.show(context, challenge: challenge);
+      if (!mounted) return;
+      if (verified) {
+        Navigator.of(context).pop(true);
+        return;
+      }
+    }
+
     setState(() {
       _busy = false;
       _error = auth.errorMessage ?? 'Could not confirm your identity.';

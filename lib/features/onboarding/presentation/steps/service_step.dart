@@ -128,8 +128,11 @@ class _ServiceStepState extends State<ServiceStep> {
               AppTextField(
                 controller: _rate,
                 label: 'Indicative Hourly Rate (RM)',
-                hint: '50.00',
+                // The prefix shows even on an empty field, so a sample amount
+                // here reads as a pre-filled rate rather than a placeholder.
+                hint: '0.00',
                 prefixText: 'RM ',
+                helperText: 'Optional. Shown on your public profile.',
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 validator: (v) {

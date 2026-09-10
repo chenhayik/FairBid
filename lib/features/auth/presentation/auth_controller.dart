@@ -6,6 +6,7 @@ import '../../../core/location/region.dart';
 import '../data/auth_exception.dart';
 import '../data/auth_repository.dart';
 import '../domain/app_user.dart';
+import '../domain/mfa.dart';
 import '../domain/user_role.dart';
 
 /// Holds authentication state for the whole app and exposes the sign-in /
@@ -99,6 +100,45 @@ class AuthController extends ChangeNotifier {
   /// Re-proves the user's identity before a sensitive action.
   Future<bool> reauthenticate({String? password}) =>
       _run(() => _repository.reauthenticate(password: password));
+
+  MfaChallenge? _pendingChallenge;
+
+  /// Set when a sign-in or re-auth needs a second factor. The screen that
+  /// started it reads this and prompts for the code.
+  MfaChallenge? get pendingMfaChallenge => _pendingChallenge;
+
+  /// Reads and clears the pending challenge, so it is handled exactly once.
+  MfaChallenge? takePendingChallenge() {
+    final challenge = _pendingChallenge;
+    _pendingChallenge = null;
+    return challenge;
+  }
+
+  Future<List<MfaFactor>> enrolledFactors() => _repository.enrolledFactors();
+
+  /// Starts TOTP enrolment. Throws [AuthException] on failure so the setup
+  /// sheet can show it inline.
+  Future<TotpEnrollment> startTotpEnrollment() =>
+      _repository.startTotpEnrollment();
+
+  Future<bool> completeTotpEnrollment({
+    required TotpEnrollment enrollment,
+    required String code,
+    String label = 'Authenticator app',
+  }) =>
+      _run(() => _repository.completeTotpEnrollment(
+            enrollment: enrollment,
+            code: code,
+            label: label,
+          ));
+
+  Future<bool> unenrollFactor(String factorUid) =>
+      _run(() => _repository.unenrollFactor(factorUid));
+
+  /// Answers an MFA challenge. Returns false with [errorMessage] set on a
+  /// wrong or expired code.
+  Future<bool> submitMfaCode(MfaChallenge challenge, String code) =>
+      _run(() => _repository.resolveMfa(challenge, code));
 
   Future<void> signOut() => _run(() async {
         final uid = _user?.uid;
@@ -200,6 +240,10 @@ class AuthController extends ChangeNotifier {
     try {
       await action();
       return true;
+    } on MfaRequiredException catch (e) {
+      // Not an error: the caller prompts for the code and retries.
+      _pendingChallenge = e.challenge;
+      return false;
     } on AuthException catch (e) {
       _errorMessage = e.message;
       return false;

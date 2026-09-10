@@ -8,6 +8,7 @@ import '../../../core/widgets/form_widgets.dart';
 import '../data/auth_config.dart';
 import '../domain/user_role.dart';
 import 'auth_controller.dart';
+import 'mfa_code_sheet.dart';
 import 'validators.dart';
 
 /// "Welcome to FairBid" - email/password + Google sign-in, with the
@@ -33,19 +34,28 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    final auth = context.read<AuthController>();
     // Navigation happens automatically via the router's auth redirect.
-    await context.read<AuthController>().signInWithEmail(
-          _email.text,
-          _password.text,
-        );
+    await auth.signInWithEmail(_email.text, _password.text);
+    if (!mounted) return;
+    await _resolveMfaIfNeeded(auth);
   }
 
   Future<void> _google() async {
+    final auth = context.read<AuthController>();
     // Existing Google users keep their stored role; roleIfNew only applies to
     // a first-time Google account.
-    await context.read<AuthController>().signInWithGoogle(
-          roleIfNew: UserRole.requestor,
-        );
+    await auth.signInWithGoogle(roleIfNew: UserRole.requestor);
+    if (!mounted) return;
+    await _resolveMfaIfNeeded(auth);
+  }
+
+  /// Prompts for the second factor when Firebase asked for one. Nothing to do
+  /// on success - the router redirect handles it, same as a normal sign-in.
+  Future<void> _resolveMfaIfNeeded(AuthController auth) async {
+    final challenge = auth.takePendingChallenge();
+    if (challenge == null) return;
+    await MfaCodeSheet.show(context, challenge: challenge);
   }
 
   Future<void> _forgotPassword() async {
