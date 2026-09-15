@@ -340,6 +340,140 @@ describe("Reviews", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Bundles - bundles/{bundleId} plus the bundle fields on a task job.
+//
+// A bundle and its tasks are authored only by the createBundle Cloud Function
+// (admin SDK, bypasses rules), so every client write here must be denied -
+// and the tasks of an open bundle must refuse ordinary per-job bids, which
+// belong at bundles/{id}/bundleBids/{uid} instead.
+// ---------------------------------------------------------------------------
+describe("Bundles", () => {
+  const BUNDLE_ID = "bundle1";
+  const TASK_ID = "task1";
+  const PROVIDER = "provider1"; // trustScore 42, scoreVisible true, approved
+  const REQUESTOR = "requestor1";
+
+  const validBid = (overrides = {}) => ({
+    providerId: PROVIDER,
+    amountSen: 50000,
+    providerTrustScore: 42,
+    providerScoreVisible: true,
+    status: "pending",
+    ...overrides,
+  });
+
+  const openBundle = {
+    requestorId: REQUESTOR,
+    status: "open",
+    title: "Bathroom refresh",
+    taskIds: [TASK_ID],
+    consolidationCapPct: 5,
+    consolidationCapSen: 50000,
+  };
+
+  beforeEach(async () => {
+    await seed([
+      [
+        `users/${PROVIDER}`,
+        {
+          role: "provider",
+          verificationStatus: "approved",
+          trustScore: 42,
+          trust: {scoreVisible: true},
+        },
+      ],
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      [`bundles/${BUNDLE_ID}`, openBundle],
+      [`jobs/${TASK_ID}`, {
+        requestorId: REQUESTOR,
+        status: "open",
+        bundleId: BUNDLE_ID,
+        bundleOrder: 0,
+      }],
+      // An ordinary, bundle-free job, so every regression check below proves
+      // single-task posting still behaves exactly as it did.
+      [`jobs/plain1`, {requestorId: REQUESTOR, status: "open"}],
+    ]);
+  });
+
+  it("lets any signed-in user read a bundle", async () => {
+    await assertSucceeds(getDoc(doc(dbAs(PROVIDER), `bundles/${BUNDLE_ID}`)));
+  });
+
+  it("denies read to a signed-out visitor", async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(db, `bundles/${BUNDLE_ID}`)));
+  });
+
+  it("denies a requestor writing a bundle directly (createBundle only)", async () => {
+    await assertFails(setDoc(doc(dbAs(REQUESTOR), "bundles/forged"), {
+      requestorId: REQUESTOR,
+      status: "open",
+      taskIds: [],
+    }));
+  });
+
+  it("denies the owner editing their own bundle", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(REQUESTOR), `bundles/${BUNDLE_ID}`), {status: "cancelled"}));
+  });
+
+  it("denies re-stamping the consolidation cap an award is judged against", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(REQUESTOR), `bundles/${BUNDLE_ID}`),
+        {consolidationCapPct: 90}));
+  });
+
+  it("denies deleting a bundle, even by its owner", async () => {
+    await assertFails(deleteDoc(doc(dbAs(REQUESTOR), `bundles/${BUNDLE_ID}`)));
+  });
+
+  it("denies posting a job that claims bundle membership", async () => {
+    await assertFails(setDoc(doc(dbAs(REQUESTOR), "jobs/forged"), {
+      requestorId: REQUESTOR,
+      status: "open",
+      bundleId: BUNDLE_ID,
+      bundleOrder: 1,
+    }));
+  });
+
+  it("denies the owner grafting bundleId onto an existing plain job", async () => {
+    await assertFails(
+        updateDoc(doc(dbAs(REQUESTOR), "jobs/plain1"), {bundleId: BUNDLE_ID}));
+  });
+
+  it("denies the owner re-ordering or re-lotting a bundle task", async () => {
+    await assertFails(updateDoc(doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {
+      bundleOrder: 3,
+      lotId: "wet-works",
+    }));
+  });
+
+  it("still lets the owner edit an ordinary field on a bundle task", async () => {
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {title: "Re-tile the shower"}));
+  });
+
+  it("denies an ordinary per-job bid while the task's bundle is open", async () => {
+    await assertFails(setDoc(
+        doc(dbAs(PROVIDER), `jobs/${TASK_ID}/bids/${PROVIDER}`), validBid()));
+  });
+
+  it("allows an ordinary per-job bid once the bundle is no longer open", async () => {
+    // The phase-4 shape: an unawarded task released back to the normal flow.
+    await seed([[`bundles/${BUNDLE_ID}`, {...openBundle, status: "awarded"}]]);
+    await assertSucceeds(setDoc(
+        doc(dbAs(PROVIDER), `jobs/${TASK_ID}/bids/${PROVIDER}`), validBid()));
+  });
+
+  it("leaves bidding on an ordinary single-task job exactly as it was", async () => {
+    await assertSucceeds(setDoc(
+        doc(dbAs(PROVIDER), `jobs/plain1/bids/${PROVIDER}`), validBid()));
+  });
+});
+
+
+// ---------------------------------------------------------------------------
 // User profile self-writes - users/{uid}.
 // ---------------------------------------------------------------------------
 describe("User profile self-writes", () => {

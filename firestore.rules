@@ -18,6 +18,21 @@ service cloud.firestore {
       return isSignedIn() && roleOf(request.auth.uid) == 'admin';
     }
 
+   function jobTakesOrdinaryBids(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return !('bundleId' in job)
+          || get(/databases/$(database)/documents/bundles/$(job.bundleId))
+              .data.status != 'open';
+    }
+
+  function bundleFields() {
+      return ['bundleId', 'bundleOrder', 'lotId', 'startsAfterJobId',
+              'gapDays'];
+    }
+    function noBundleFieldWrites() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(bundleFields());
+    }
     // A suspended account keeps read access but is frozen out of every write
     // (posting, bidding, reviewing, chatting, editing its profile). The
     // `suspended` flag is server-owned - set only by the setUserSuspended
@@ -256,12 +271,14 @@ service cloud.firestore {
       allow create: if isSignedIn()
                     && !isSuspended()
                     && request.resource.data.requestorId == request.auth.uid
-                    && roleOf(request.auth.uid) == 'requestor';
+                    && roleOf(request.auth.uid) == 'requestor'
+                    && !request.resource.data.keys().hasAny(bundleFields());
       allow update: if isSignedIn()
                     && ((resource.data.requestorId == request.auth.uid
                          && jobStatusWriteOk()
                          && noCancelFieldWrites()
-                         && noAcceptFieldWrites())
+                         && noAcceptFieldWrites()
+                         && noBundleFieldWrites())
                         || request.resource.data.diff(resource.data)
                             .affectedKeys().hasOnly(['bidCount']));
       allow delete: if false;
@@ -279,6 +296,7 @@ service cloud.firestore {
                               && request.resource.data.providerId == bidId
                               && isApprovedProvider(request.auth.uid)
                               && jobBiddingOpen(jobId)
+                              && jobTakesOrdinaryBids(jobId)
                               // A negative or absurd amount must never reach
                               // acceptBid, which trusts this stored value
                               // when debiting the requestor's wallet. RM
@@ -350,6 +368,10 @@ service cloud.firestore {
         allow create, update: if isSignedIn() && !isSuspended() && ownsJob(jobId);
         allow delete: if false;
       }
+    }
+   match /bundles/{bundleId} {
+      allow read: if isSignedIn();
+      allow write: if false;
     }
 
     // Collection-group reads for a provider's own cross-job listings - their

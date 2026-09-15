@@ -551,7 +551,13 @@ class FakeJobRepository implements JobRepository {
   Stream<List<Job>> watchAssignedJobs(String providerId) async* {
     yield _jobs.where((j) => j.acceptedProviderId == providerId).toList();
   }
-
+  
+  @override
+  Stream<List<Job>> watchBundleTasks(String bundleId) async* {
+    final tasks = _jobs.where((j) => j.bundleId == bundleId).toList();
+    tasks.sort((a, b) => (a.bundleOrder ?? 0).compareTo(b.bundleOrder ?? 0));
+    yield tasks;
+  }
   @override
   Future<Job?> getById(String id) async =>
       _jobs.cast<Job?>().firstWhere((j) => j!.id == id, orElse: () => null);

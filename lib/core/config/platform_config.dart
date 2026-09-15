@@ -41,6 +41,20 @@ class PlatformConfig {
   /// Cloud Function (which keeps its own copy in sync).
   static const int maxMilestones = 20;
 
+  /// The max and min amount of tasks within a bundle, enforced by the
+  /// `createBundle` Cloud Function (which keeps its own copy in sync).
+  static const int minBundleTasks = 2;
+  static const int maxBundleTasks = 6;
+
+  /// If the cheapest provider does not take all the tasks, this helps decide
+  /// how the bundle can be done with the least amount of providers. The
+  /// fewest-providers option is recommended over the cheapest option only if
+  /// it costs at most [consolidationCapPct]% more AND at most
+  /// [consolidationCapSen] (RM 500) more. Both limits apply, so whichever is
+  /// smaller wins. `createBundle` keeps its own copy in sync.
+  static const int consolidationCapPct = 5;
+  static const int consolidationCapSen = 50000; // RM 500
+
   /// Bayesian Trust Score priors: a new provider starts as if they already had
   /// [trustPriorWeight] reviews averaging [trustPriorMean] stars, so a single
   /// review moves the score only gently away from the platform baseline.

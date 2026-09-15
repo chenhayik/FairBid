@@ -2312,3 +2312,5 @@ exports.suggestJobDetails = functions
 // ---------------------------------------------------------------------------
 
 exports.extractSsmDocument = require("./ssm").extractSsmDocument;
+
+exports.createBundle = require("./bundles").createBundle;

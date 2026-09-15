@@ -122,6 +122,11 @@ class Job {
     this.cancelledAt,
     this.cancelledBy,
     this.planRejectionNote,
+    this.bundleId,
+    this.bundleOrder,
+    this.lotId,
+    this.startsAfterJobId,
+    this.gapDays,
   });
 
   final String id;
@@ -175,6 +180,23 @@ class Job {
   /// changes; null once the provider re-proposes.
   final String? planRejectionNote;
 
+  final String? bundleId;
+
+  /// The order of tasks within a bundle
+  final int? bundleOrder;
+
+  /// To identify and properly award the group of tasks to the correct
+  /// provider
+  final String? lotId;
+
+  /// The id of the task (job) that must be completed before this one starts
+  final String? startsAfterJobId;
+
+  /// The given time in between tasks
+  final int? gapDays;
+
+  bool get isBundleTask => bundleId != null;
+
   /// Fields written to Firestore. `createdAt`/`bidCount`/`status` for a new job
   /// are set by the repository, so they are omitted here.
   Map<String, dynamic> toMap() => {
@@ -221,5 +243,10 @@ class Job {
         cancelledAt: m['cancelledAt'] as DateTime?,
         cancelledBy: m['cancelledBy'] as String?,
         planRejectionNote: m['planRejectionNote'] as String?,
+        bundleId: m['bundleId'] as String?,
+        bundleOrder: (m['bundleOrder'] as num?)?.toInt(),
+        lotId: m['lotId'] as String?,
+        startsAfterJobId:m['startsAfterJobId'] as String?,
+        gapDays: (m['gapDays']as num?)?.toInt(),
       );
 }

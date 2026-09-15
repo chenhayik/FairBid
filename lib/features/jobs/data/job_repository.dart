@@ -52,6 +52,8 @@ abstract interface class JobRepository {
   /// them (newest first).
   Stream<List<Job>> watchAssignedJobs(String providerId);
 
+  Stream<List<Job>> watchBundleTasks(String bundleId);
+
   Future<Job?> getById(String id);
 
   /// Streams one job, emitting on every change; null when it doesn't exist.
@@ -158,6 +160,18 @@ class FirestoreJobRepository implements JobRepository {
     return _jobs
         .where('acceptedProviderId', isEqualTo: providerId)
         .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(_toJobs);
+  }
+
+  @override
+  Stream<List<Job>> watchBundleTasks(String bundleId) {
+    // Needs the (bundleId ASC, bundleOrder ASC) composite index declared in
+    // firestore.indexes.json - an equality filter plus an orderBy on a
+    // different field always does.
+    return _jobs
+        .where('bundleId', isEqualTo: bundleId)
+        .orderBy('bundleOrder')
         .snapshots()
         .map(_toJobs);
   }
