@@ -56,6 +56,31 @@ service cloud.firestore {
                 'hireRate'];
       }
 
+      // `role` is the authorisation principal: isAdmin() here, isAdmin() in
+      // storage.rules and assertAdmin() in functions/index.js all read it off
+      // this document. It is therefore set once, at sign-up, to a non-admin
+      // role and frozen - otherwise any signed-in user could promote
+      // themselves to admin with a single write and inherit every admin
+      // read (identity documents, payout details) and every admin callable
+      // (dispute rulings, adminClearMfa).
+      function roleUnchanged() {
+        return request.resource.data.get('role', '')
+            == resource.data.get('role', '');
+      }
+
+      // The only verification transition a user may write on their own
+      // profile is submitting for review ('pending'), which is what the two
+      // onboarding flows do (onboarding_repository.dart,
+      // requestor_onboarding_repository.dart). 'approved'/'rejected' belong
+      // to the admin branch below - without this a pending provider could
+      // approve themselves and bid without ever being vetted.
+      function selfVerificationWriteOk() {
+        return request.resource.data.get('verificationStatus', 'none')
+                == resource.data.get('verificationStatus', 'none')
+            || request.resource.data.get('verificationStatus', 'none')
+                == 'pending';
+      }
+
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userId
                     && !request.resource.data.keys().hasAny(
@@ -64,17 +89,26 @@ service cloud.firestore {
                     && request.resource.data
                         .get('walletBalanceSen', 0) == 0
                     && request.resource.data
-                        .get('escrowLockedSen', 0) == 0;
+                        .get('escrowLockedSen', 0) == 0
+                    // A new account may only ever be a requestor or a
+                    // provider, awaiting (not holding) verification.
+                    && request.resource.data.get('role', '')
+                        in ['requestor', 'provider']
+                    && request.resource.data
+                        .get('verificationStatus', 'none') == 'none';
       allow update: if isSignedIn() && (
                       (request.auth.uid == userId
                           && !isSuspended()
+                          && roleUnchanged()
+                          && selfVerificationWriteOk()
                           && !request.resource.data.diff(resource.data)
                               .affectedKeys()
                               .hasAny(trustFields()
                                   .concat(['walletBalanceSen',
                                            'escrowLockedSen', 'suspended',
                                            'suspensionReason', 'suspendedAt',
-                                           'suspendedBy'])))
+                                           'suspendedBy', 'verificationReason',
+                                           'reviewedAt'])))
                       || (isAdmin()
                           && request.resource.data.diff(resource.data)
                               .affectedKeys()
