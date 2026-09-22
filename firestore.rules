@@ -111,6 +111,8 @@ service cloud.firestore {
                         in ['requestor', 'provider']
                     && request.resource.data
                         .get('verificationStatus', 'none') == 'none';
+
+
       allow update: if isSignedIn() && (
                       (request.auth.uid == userId
                           && !isSuspended()

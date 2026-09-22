@@ -30,7 +30,7 @@ env:
   NODE_VERSION: "22"
   # android/app/build.gradle.kts targets JavaVersion.VERSION_17, and the
   # Firestore emulator needs a JDK too.
-  JAVA_VERSION: "17"
+  JAVA_VERSION: "21"
 
 jobs:
   analyze-and-test:
