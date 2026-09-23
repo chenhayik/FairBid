@@ -619,4 +619,9 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
 exports.validateBundle = validateBundle;
 exports.validateBundleBid = validateBundleBid;
 exports.checkLots = checkLots;
-exports.bundleBiddingOpen = bundleBiddingOpen;    
+exports.bundleBiddingOpen = bundleBiddingOpen;
+
+// Shared with bundle_award.js.
+exports.callerUid = callerUid;
+exports.bad = bad;
+exports.docId = docId;    

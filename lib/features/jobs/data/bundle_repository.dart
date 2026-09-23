@@ -2,7 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/bundle.dart';
+import '../domain/bundle_award.dart';
 import '../domain/job.dart';
+import 'bid_repository.dart';
 
 /// Thrown by [BundleRepository.create] when the `createBundle` callable
 /// refuses the posting - a task without a category, a deadline in the
@@ -47,6 +49,24 @@ abstract interface class BundleRepository {
   /// cancelling the bundle is the only way to call the whole posting off
   /// before it's awarded.
   Future<void> cancelBundle(String id);
+
+  /// The three award options for [bundleId], priced by `previewBundleAward`
+  /// from the stored bids. Empty when no bid covers anything yet.
+  Future<List<BundleAwardOption>> previewAward(String bundleId);
+
+  /// Awards the bundle: every task in [providerByTaskId] goes to that
+  /// provider, the rest are released back to ordinary bidding.
+  ///
+  /// [expectedTotalSen] is the total the requestor was shown; the server
+  /// refuses the award if the bids have changed since. Throws
+  /// [InsufficientBalanceException] when the wallet can't cover it, and
+  /// [BundleRejectedException] for anything the server refuses outright.
+  Future<void> award({
+    required String bundleId,
+    required Map<String, String> providerByTaskId,
+    int? expectedTotalSen,
+    DateTime? releasedDeadline,
+  });
 }
 
 
@@ -132,6 +152,56 @@ class FirestoreBundleRepository implements BundleRepository {
     await _functions.httpsCallable('cancelBundle').call<void>({
       'bundleId': id,
     });
+  }
+
+  @override
+  Future<List<BundleAwardOption>> previewAward(String bundleId) async {
+    try {
+      final result = await _functions
+          .httpsCallable('previewBundleAward')
+          .call({'bundleId': bundleId});
+      final options = (result.data as Map)['options'] as List? ?? const [];
+      return [
+        for (final option in options.whereType<Map>())
+          BundleAwardOption.fromMap(Map<String, dynamic>.from(option)),
+      ];
+    } on FirebaseFunctionsException catch (e) {
+      throw BundleRejectedException(
+        e.message ?? 'Could not work out the award options.',
+      );
+    }
+  }
+
+  @override
+  Future<void> award({
+    required String bundleId,
+    required Map<String, String> providerByTaskId,
+    int? expectedTotalSen,
+    DateTime? releasedDeadline,
+  }) async {
+    try {
+      await _functions.httpsCallable('awardBundle').call<void>({
+        'bundleId': bundleId,
+        'providerByTaskId': providerByTaskId,
+        'expectedTotalSen': ?expectedTotalSen,
+        if (releasedDeadline != null)
+          'releasedDeadlineMillis': releasedDeadline.millisecondsSinceEpoch,
+      });
+    } on FirebaseFunctionsException catch (e) {
+      // The wallet gate reports the shortfall the same way acceptBid does, so
+      // the top-up prompt the job flow already has works here unchanged.
+      final details = e.details;
+      if (details is Map && details['reason'] == 'insufficient_balance') {
+        throw InsufficientBalanceException(
+          shortfallSen: (details['shortfallSen'] as num).toInt(),
+          availableSen: (details['availableSen'] as num).toInt(),
+          requiredSen: (details['requiredSen'] as num).toInt(),
+        );
+      }
+      throw BundleRejectedException(
+        e.message ?? 'Could not award this bundle. Please try again.',
+      );
+    }
   }
 
   Bundle _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {

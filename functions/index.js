@@ -2317,3 +2317,5 @@ exports.createBundle = require("./bundles").createBundle;
 exports.submitBundleBid = require("./bundles").submitBundleBid;
 exports.withdrawBundleBid = require("./bundles").withdrawBundleBid;
 exports.cancelBundle = require("./bundles").cancelBundle;
+exports.previewBundleAward = require("./bundle_award").previewBundleAward;
+exports.awardBundle = require("./bundle_award").awardBundle;

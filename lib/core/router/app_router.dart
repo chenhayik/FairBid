@@ -12,6 +12,7 @@ import '../../features/auth/presentation/suspended_screen.dart';
 import '../../features/disputes/domain/dispute.dart';
 import '../../features/disputes/presentation/dispute_detail_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
+import '../../features/jobs/presentation/bundle/bundle_detail_screen.dart';
 import '../../features/jobs/presentation/detail/job_detail_screen.dart';
 import '../../features/jobs/presentation/feed/job_feed_screen.dart';
 import '../../features/jobs/presentation/my_jobs_screen.dart';
@@ -79,6 +80,14 @@ GoRouter buildRouter(AuthController auth) {
         path: '/jobs/:id',
         builder: (_, state) =>
             JobDetailScreen(jobId: state.pathParameters['id']!),
+      ),
+
+      // The requestor's view of a bundled posting: its tasks, the bids on
+      // each, and the three award options.
+      GoRoute(
+        path: '/bundles/:id',
+        builder: (_, state) =>
+            BundleDetailScreen(bundleId: state.pathParameters['id']!),
       ),
 
       // Admin - the verification review screen, pushed from the queue with the

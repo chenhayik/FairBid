@@ -40,12 +40,14 @@ import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/data/milestone_repository.dart';
 import 'package:fairbid/features/jobs/domain/bid.dart';
 import 'package:fairbid/features/jobs/domain/bundle.dart';
+import 'package:fairbid/features/jobs/domain/bundle_award.dart';
 import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
 import 'package:fairbid/features/jobs/domain/service_address.dart';
 import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_controller.dart';
+import 'package:fairbid/features/jobs/presentation/bundle/bundle_detail_screen.dart';
 import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_sheet.dart';
 import 'package:fairbid/features/jobs/presentation/detail/service_address_sheet.dart';
 import 'package:fairbid/features/jobs/presentation/detail/job_detail_view_model.dart';
@@ -1672,6 +1674,30 @@ class FakeBundleRepository implements BundleRepository {
   @override
   Future<void> cancelBundle(String id) async => cancelled.add(id);
 
+  /// What [previewAward] hands back; empty unless a test seeds it.
+  List<BundleAwardOption> awardOptions = const [];
+
+  /// Arguments of the last [award], or null when it was never called.
+  Map<String, Object?>? lastAward;
+
+  @override
+  Future<List<BundleAwardOption>> previewAward(String bundleId) async =>
+      awardOptions;
+
+  @override
+  Future<void> award({
+    required String bundleId,
+    required Map<String, String> providerByTaskId,
+    int? expectedTotalSen,
+    DateTime? releasedDeadline,
+  }) async {
+    lastAward = {
+      'bundleId': bundleId,
+      'providerByTaskId': providerByTaskId,
+      'expectedTotalSen': expectedTotalSen,
+    };
+  }
+
   @override
   Stream<Bundle?> watchBundle(String id) async* {
     yield _byId(id);
@@ -1694,7 +1720,10 @@ class FakeBundleRepository implements BundleRepository {
 /// into one `submit` call, so the fake records that call's arguments instead
 /// of modelling Firestore.
 class FakeBundleBidRepository implements BundleBidRepository {
-  final List<BundleBid> _bids = [];
+  FakeBundleBidRepository([List<BundleBid> bids = const []])
+    : _bids = [...bids];
+
+  final List<BundleBid> _bids;
 
   /// Arguments of the last [submit], or null when it was never called.
   Map<String, Object?>? lastSubmission;
@@ -6150,6 +6179,105 @@ void postJobAndOnboardingTests() {
       expect(posted['description'],
           '2 tasks: Fix the kitchen tap, Replace the ceiling light.');
       expect(find.text('Bundle posted with 2 tasks!'), findsOneWidget);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Awarding a bundle (phase 3): the requestor's screen turns the server's
+  // three options into one award action.
+  // -------------------------------------------------------------------------
+  group('Bundle award', () {
+    final tasks = [
+      sampleJob(id: 'job-1', title: 'Waterproof the floor', bundleId: 'b1',
+          bundleOrder: 0, bundleTaskCount: 2),
+      sampleJob(id: 'job-2', title: 'Tile the floor', bundleId: 'b1',
+          bundleOrder: 1, bundleTaskCount: 2),
+    ];
+
+    final recommended = const BundleAwardOption(
+      key: 'recommended',
+      label: 'Recommended',
+      totalSen: 87500,
+      providerCount: 2,
+      premiumSen: 3500,
+      weightedTrust: 751,
+      awards: [
+        BundleAwardItem(
+          providerId: 'prov-1',
+          providerName: 'Aida Renovation',
+          taskAmountsSen: {'job-1': 37500},
+        ),
+        BundleAwardItem(
+          providerId: 'prov-2',
+          providerName: 'Dev Tiling',
+          taskAmountsSen: {'job-2': 50000},
+        ),
+      ],
+    );
+
+    BundleBid bid() => BundleBid(
+      bundleId: 'b1',
+      providerId: 'prov-1',
+      providerName: 'Aida Renovation',
+      taskPrices: const {'job-1': 37500, 'job-2': 52000},
+      estimatedDuration: '1 week',
+      createdAt: DateTime.now(),
+    );
+
+    Future<FakeBundleRepository> pumpBundle(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final bundles = FakeBundleRepository([
+        sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
+      ])..awardOptions = [recommended];
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: MultiProvider(
+          providers: [
+            Provider<BundleRepository>.value(value: bundles),
+            Provider<JobRepository>.value(value: FakeJobRepository(tasks)),
+            Provider<BundleBidRepository>.value(
+                value: FakeBundleBidRepository([bid()])),
+          ],
+          child: const BundleDetailScreen(bundleId: 'b1'),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      return bundles;
+    }
+
+    testWidgets('the screen lists each task with what was bid on it', (
+      tester,
+    ) async {
+      await pumpBundle(tester);
+
+      expect(find.text('Waterproof the floor'), findsOneWidget);
+      expect(find.text('Tile the floor'), findsOneWidget);
+      expect(find.textContaining('Aida Renovation'), findsWidgets);
+      // Options are only fetched when the requestor asks for them.
+      expect(find.text('Recommended'), findsNothing);
+    });
+
+    testWidgets('awarding an option sends its picks and total', (
+      tester,
+    ) async {
+      final bundles = await pumpBundle(tester);
+
+      await tester.tap(find.widgetWithText(FilledButton,
+          'Show award options'));
+      await tester.pumpAndSettle();
+      expect(find.text('Recommended'), findsOneWidget);
+      expect(find.textContaining('RM 35.00 more than the cheapest'),
+          findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Award recommended'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Award'));
+      await tester.pumpAndSettle();
+
+      expect(bundles.lastAward?['providerByTaskId'],
+          {'job-1': 'prov-1', 'job-2': 'prov-2'});
+      expect(bundles.lastAward?['expectedTotalSen'], 87500);
     });
   });
 }

@@ -547,7 +547,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
           ? _CancellationResponseCard(job: job, role: vm.role)
           : null,
     );
-    add(job.isBundleTask ? _BundleTaskBanner(job: job) : null);
+    add(job.isBundleTask
+        ? _BundleTaskBanner(job: job, isOwner: isOwner)
+        : null);
     add(_HeroFacts(job: job));
     add(
       showCounterparty
@@ -610,14 +612,22 @@ class _StatusHeadline extends StatelessWidget {
 /// Slot 2b: a bundle task explains itself, since it bids and gets cancelled
 /// differently from an ordinary job.
 class _BundleTaskBanner extends StatelessWidget {
-  const _BundleTaskBanner({required this.job});
+  const _BundleTaskBanner({required this.job, required this.isOwner});
   final Job job;
+  final bool isOwner;
 
   @override
   Widget build(BuildContext context) {
     final count = job.bundleTaskCount;
     return InfoBanner(
       icon: Icons.inventory_2_outlined,
+      // The owner awards the whole posting from the bundle screen.
+      trailing: isOwner
+          ? TextButton(
+              onPressed: () => context.push('/bundles/${job.bundleId}'),
+              child: const Text('View bundle'),
+            )
+          : null,
       title: 'Part of a bundle',
       body: count != null && count > 1
           ? 'This is one of $count tasks in a bundle. Providers bid on the '

@@ -7,7 +7,7 @@
   "main": "index.js",
   "scripts": {
     "lint": "eslint .",
-    "test": "node check_vectors.js && node ssm.test.js && node bundles.test.js"
+    "test": "node check_vectors.js && node ssm.test.js && node bundles.test.js && node bundle_award.test.js"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
