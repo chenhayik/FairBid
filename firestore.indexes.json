@@ -66,6 +66,14 @@
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },
+    {
+      "collectionGroup": "bundleBids",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "providerId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
 
     {
       "collectionGroup": "conversations",

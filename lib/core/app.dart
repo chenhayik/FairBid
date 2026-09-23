@@ -11,6 +11,8 @@ import '../features/auth/presentation/auth_controller.dart';
 import '../features/disputes/data/dispute_repository.dart';
 import '../features/jobs/data/assist_repository.dart';
 import '../features/jobs/data/bid_repository.dart';
+import '../features/jobs/data/bundle_bid_repository.dart';
+import '../features/jobs/data/bundle_repository.dart';
 import '../features/jobs/data/job_repository.dart';
 import '../features/jobs/data/milestone_repository.dart';
 import '../features/messages/data/chat_repository.dart';
@@ -39,6 +41,8 @@ class FairBidApp extends StatelessWidget {
     required this.documentStorageRepository,
     required this.jobRepository,
     required this.bidRepository,
+    required this.bundleRepository,
+    required this.bundleBidRepository,
     required this.reviewRepository,
     required this.publicProfileRepository,
     required this.userReportRepository,
@@ -61,6 +65,8 @@ class FairBidApp extends StatelessWidget {
   final DocumentStorageRepository documentStorageRepository;
   final JobRepository jobRepository;
   final BidRepository bidRepository;
+  final BundleRepository bundleRepository;
+  final BundleBidRepository bundleBidRepository;
   final ReviewRepository reviewRepository;
   final PublicProfileRepository publicProfileRepository;
   final UserReportRepository userReportRepository;
@@ -83,6 +89,8 @@ class FairBidApp extends StatelessWidget {
         // Plain repositories, read by scoped controllers (e.g. Post-a-Job).
         Provider<JobRepository>.value(value: jobRepository),
         Provider<BidRepository>.value(value: bidRepository),
+        Provider<BundleRepository>.value(value: bundleRepository),
+        Provider<BundleBidRepository>.value(value: bundleBidRepository),
         Provider<ReviewRepository>.value(value: reviewRepository),
         Provider<PublicProfileRepository>.value(
             value: publicProfileRepository),

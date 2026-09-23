@@ -42,25 +42,36 @@ class JobCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                // Flexible (not Expanded) so the pill hugs its text instead of
-                // stretching to fill the row.
-                Flexible(
-                  child: PillBadge(
-                    label: job.category,
-                    color: theme.colorScheme.onSurfaceVariant,
+                // Expanded + Wrap (not a plain Row of Flexibles) so a third
+                // pill on a bundle task flows to a second line on a narrow
+                // card instead of squeezing every pill's text down to a sliver.
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      PillBadge(
+                        label: job.category,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      job.status == JobStatus.open
+                          ? PillBadge(
+                              label: 'Open', color: context.fairbid.verified)
+                          : PillBadge(
+                              label: job.status.label,
+                              color: theme.colorScheme.onSurfaceVariant),
+                      if (job.bundleTaskCount != null &&
+                          job.bundleTaskCount! > 1)
+                        PillBadge(
+                          label: 'Part of a ${job.bundleTaskCount}-task '
+                              'bundle',
+                          color: context.fairbid.verified,
+                        ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: job.status == JobStatus.open
-                      ? PillBadge(
-                          label: 'Open', color: context.fairbid.verified)
-                      : PillBadge(
-                          label: job.status.label,
-                          color: theme.colorScheme.onSurfaceVariant),
-                ),
-                if (onToggleSave != null) ...[
-                  const Spacer(),
+                if (onToggleSave != null)
                   IconButton(
                     tooltip: saved ? 'Saved' : 'Save job',
                     icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
@@ -69,7 +80,6 @@ class JobCard extends StatelessWidget {
                         : theme.colorScheme.onSurfaceVariant,
                     onPressed: onToggleSave,
                   ),
-                ],
               ],
             ),
             const SizedBox(height: 12),

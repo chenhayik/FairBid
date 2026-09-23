@@ -34,16 +34,23 @@ import 'package:fairbid/features/disputes/data/dispute_repository.dart';
 import 'package:fairbid/features/disputes/domain/dispute.dart';
 import 'package:fairbid/features/jobs/data/assist_repository.dart';
 import 'package:fairbid/features/jobs/data/bid_repository.dart';
+import 'package:fairbid/features/jobs/data/bundle_bid_repository.dart';
+import 'package:fairbid/features/jobs/data/bundle_repository.dart';
 import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/data/milestone_repository.dart';
 import 'package:fairbid/features/jobs/domain/bid.dart';
+import 'package:fairbid/features/jobs/domain/bundle.dart';
+import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
 import 'package:fairbid/features/jobs/domain/service_address.dart';
+import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_controller.dart';
+import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_sheet.dart';
 import 'package:fairbid/features/jobs/presentation/detail/service_address_sheet.dart';
 import 'package:fairbid/features/jobs/presentation/detail/job_detail_view_model.dart';
 import 'package:fairbid/features/jobs/presentation/widgets/bid_card.dart';
+import 'package:fairbid/features/jobs/presentation/widgets/job_card.dart';
 import 'package:fairbid/features/messages/data/chat_repository.dart';
 import 'package:fairbid/features/messages/domain/conversation.dart';
 import 'package:fairbid/features/messages/domain/message.dart';
@@ -1627,6 +1634,118 @@ class FakeChatRepository implements ChatRepository {
   }
 }
 
+/// In-memory [BundleRepository]: serves the bundles a test seeds, and records
+/// every `cancelBundle` so a test can assert the whole posting was called off
+/// rather than one task.
+class FakeBundleRepository implements BundleRepository {
+  FakeBundleRepository([List<Bundle> bundles = const []])
+    : _bundles = [...bundles];
+
+  final List<Bundle> _bundles;
+
+  /// Bundle ids passed to [cancelBundle], in call order.
+  final List<String> cancelled = [];
+
+  /// Arguments of the last [create], or null when it was never called.
+  Map<String, Object?>? lastCreate;
+
+  @override
+  Future<String> create({
+    required String title,
+    required String description,
+    required JobLocation location,
+    required List<BundleTaskDraft> tasks,
+    List<String> photoUrls = const [],
+    DateTime? deadline,
+  }) async {
+    lastCreate = {
+      'title': title,
+      'description': description,
+      'location': location,
+      'tasks': tasks,
+      'photoUrls': photoUrls,
+      'deadline': deadline,
+    };
+    return 'bundle-new';
+  }
+
+  @override
+  Future<void> cancelBundle(String id) async => cancelled.add(id);
+
+  @override
+  Stream<Bundle?> watchBundle(String id) async* {
+    yield _byId(id);
+  }
+
+  @override
+  Stream<List<Bundle>> watchMyBundles(String requestorId) async* {
+    yield _bundles.where((b) => b.requestorId == requestorId).toList();
+  }
+
+  @override
+  Future<Bundle?> getById(String id) async => _byId(id);
+
+  Bundle? _byId(String id) => _bundles
+      .cast<Bundle?>()
+      .firstWhere((b) => b!.id == id, orElse: () => null);
+}
+
+/// In-memory [BundleBidRepository]. The sheet's whole job is to turn a form
+/// into one `submit` call, so the fake records that call's arguments instead
+/// of modelling Firestore.
+class FakeBundleBidRepository implements BundleBidRepository {
+  final List<BundleBid> _bids = [];
+
+  /// Arguments of the last [submit], or null when it was never called.
+  Map<String, Object?>? lastSubmission;
+
+  /// Bundle ids passed to [withdraw], in call order.
+  final List<String> withdrawn = [];
+
+  @override
+  Future<void> submit({
+    required String bundleId,
+    required Map<String, int> taskPrices,
+    int? bundlePriceSen,
+    bool allOrNothing = false,
+    required String estimatedDuration,
+    String message = '',
+  }) async {
+    lastSubmission = {
+      'bundleId': bundleId,
+      'taskPrices': taskPrices,
+      'bundlePriceSen': bundlePriceSen,
+      'allOrNothing': allOrNothing,
+      'estimatedDuration': estimatedDuration,
+      'message': message,
+    };
+  }
+
+  @override
+  Future<void> withdraw(String bundleId) async => withdrawn.add(bundleId);
+
+  @override
+  Stream<BundleBid?> watchMyBundleBid(
+    String bundleId,
+    String providerId,
+  ) async* {
+    yield _bids.cast<BundleBid?>().firstWhere(
+      (b) => b!.bundleId == bundleId && b.providerId == providerId,
+      orElse: () => null,
+    );
+  }
+
+  @override
+  Stream<List<BundleBid>> watchBundleBids(String bundleId) async* {
+    yield _bids.where((b) => b.bundleId == bundleId).toList();
+  }
+
+  @override
+  Stream<List<BundleBid>> watchMyBundleBids(String providerId) async* {
+    yield _bids.where((b) => b.providerId == providerId).toList();
+  }
+}
+
 /// Builds a sample job for tests (open by default; pass [status] and the
 /// accepted-provider fields to seed an in-progress or completed job).
 Job sampleJob({
@@ -1643,6 +1762,9 @@ Job sampleJob({
   int? acceptedBidAmountSen,
   DateTime? deadline,
   int bidCount = 0,
+  String? bundleId,
+  int? bundleOrder,
+  int? bundleTaskCount,
 }) => Job(
   id: id,
   requestorId: requestorId,
@@ -1659,6 +1781,9 @@ Job sampleJob({
   acceptedBidAmountSen: acceptedBidAmountSen,
   deadline: deadline,
   bidCount: bidCount,
+  bundleId: bundleId,
+  bundleOrder: bundleOrder,
+  bundleTaskCount: bundleTaskCount,
 );
 
 /// Builds a sample pending bid on [jobId] for tests. Defaults to an
@@ -1683,6 +1808,27 @@ Bid sampleBid({
   createdAt: DateTime.now(),
 );
 
+/// Builds a sample open bundle for tests, with [taskIds] naming its tasks.
+Bundle sampleBundle({
+  String id = 'bundle-1',
+  String requestorId = 'uid-1',
+  String title = 'Bathroom refresh',
+  List<String> taskIds = const ['job-1', 'job-2'],
+  DateTime? deadline,
+}) => Bundle(
+  id: id,
+  requestorId: requestorId,
+  requestorName: 'Test User',
+  title: title,
+  description: 'Small bathroom, about 4 square metres.',
+  location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Penang'),
+  taskIds: taskIds,
+  consolidationCapPct: PlatformConfig.consolidationCapPct,
+  consolidationCapSen: PlatformConfig.consolidationCapSen,
+  createdAt: DateTime.now(),
+  deadline: deadline,
+);
+
 Widget buildApp(
   FakeAuthRepository auth, {
   List<Job> jobs = const [],
@@ -1700,6 +1846,8 @@ Widget buildApp(
   FakeNotificationRepository? notifications,
   FakeUserAdminRepository? userAdmin,
   FakeAssistRepository? assist,
+  FakeBundleRepository? bundle,
+  FakeBundleBidRepository? bundleBid,
 }) {
   final jobRepo = FakeJobRepository(jobs);
   final milestoneRepo = FakeMilestoneRepository(jobRepo, milestones);
@@ -1726,6 +1874,8 @@ Widget buildApp(
     notificationRepository: notifications ?? FakeNotificationRepository(),
     pushService: FakePushService(),
     assistRepository: assist ?? FakeAssistRepository(),
+    bundleRepository: bundle ?? FakeBundleRepository(),
+    bundleBidRepository: bundleBid ?? FakeBundleBidRepository(),
   );
 }
 
@@ -5760,6 +5910,246 @@ void postJobAndOnboardingTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('How will you hire?'), findsNothing);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Bundle bidding (docs/BUNDLE_BIDDING.md phase 2): a provider prices the
+  // tasks of a bundle they can do, as one package bid.
+  // -------------------------------------------------------------------------
+  group('Bundle bidding', () {
+    final tasks = [
+      sampleJob(
+        id: 'job-1',
+        title: 'Waterproof the floor',
+        bundleId: 'b1',
+        bundleOrder: 0,
+        bundleTaskCount: 2,
+      ),
+      sampleJob(
+        id: 'job-2',
+        title: 'Tile the floor',
+        bundleId: 'b1',
+        bundleOrder: 1,
+        bundleTaskCount: 2,
+      ),
+    ];
+
+    /// Taps something that may be below the fold on this tall form.
+    Future<void> tapAt(WidgetTester tester, Finder finder) async {
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    /// Pumps the sheet on its own: it is a form, so it needs nothing from the
+    /// router or the shell, only the controller its fields drive.
+    Future<FakeBundleBidRepository> pumpSheet(
+      WidgetTester tester, {
+      BundleBid? existing,
+    }) async {
+      final bundleBids = FakeBundleBidRepository();
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider(
+          create: (_) => SubmitBundleBidController(bundleBids),
+          child: Scaffold(
+            body: SubmitBundleBidSheet(
+              bundle: sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
+              tasks: tasks,
+              bidder: const AppUser(
+                uid: 'prov-1',
+                email: 'pro@test.com',
+                displayName: 'Pro Fixer',
+                role: UserRole.provider,
+              ),
+              existing: existing,
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      return bundleBids;
+    }
+
+    /// Fills in everything the form needs beyond the task prices.
+    Future<void> fillRest(WidgetTester tester) async {
+      await tapAt(tester, find.byType(DropdownButtonFormField<String>));
+      await tester.tap(find.text('Less than 1 week').last);
+      await tester.pumpAndSettle();
+      await fillField(tester, 'Proposal Message', 'I can do this.');
+      await tapAt(tester, find.byType(CheckboxListTile).last);
+    }
+
+    testWidgets('a bundle task card says how big its bundle is', (
+      tester,
+    ) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: JobCard(
+            job: sampleJob(bundleId: 'b1', bundleOrder: 0, bundleTaskCount: 3),
+          ),
+        ),
+      ));
+
+      expect(find.text('Part of a 3-task bundle'), findsOneWidget);
+    });
+
+    testWidgets('an ordinary job card carries no bundle pill', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(body: JobCard(job: sampleJob())),
+      ));
+
+      expect(find.textContaining('bundle'), findsNothing);
+    });
+
+    testWidgets('submitting with no task picked is refused', (tester) async {
+      final bundleBids = await pumpSheet(tester);
+
+      await tapAt(
+          tester, find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'));
+
+      expect(find.text('Pick at least one task to bid on.'), findsOneWidget);
+      expect(bundleBids.lastSubmission, isNull);
+    });
+
+    testWidgets('one picked task is sent with its price in sen', (
+      tester,
+    ) async {
+      final bundleBids = await pumpSheet(tester);
+
+      await tapAt(
+          tester, find.widgetWithText(CheckboxListTile, 'Tile the floor'));
+      await fillField(tester, 'Price if you get only this task (RM)', '150.50');
+      await fillRest(tester);
+      await tapAt(
+          tester, find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'));
+
+      expect(bundleBids.lastSubmission?['taskPrices'], {'job-2': 15050});
+      expect(bundleBids.lastSubmission?['bundlePriceSen'], isNull);
+      expect(
+          bundleBids.lastSubmission?['estimatedDuration'], 'Less than 1 week');
+    });
+
+    testWidgets('a bundle price at or above the task total is refused', (
+      tester,
+    ) async {
+      final bundleBids = await pumpSheet(tester);
+
+      await tapAt(
+          tester, find.widgetWithText(CheckboxListTile, 'Tile the floor'));
+      await fillField(tester, 'Price if you get only this task (RM)', '100.00');
+      await fillField(tester, 'Bundle price (RM)', '100.00');
+      await fillRest(tester);
+      await tapAt(
+          tester, find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'));
+
+      expect(
+        find.textContaining('Must be lower than your task prices added up'),
+        findsOneWidget,
+      );
+      expect(bundleBids.lastSubmission, isNull);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Posting a bundle: Post-a-Job's "Add another task", which is the only way
+  // a requestor can reach createBundle (docs/BUNDLE_BIDDING.md, "Requestor
+  // side"). One task still posts an ordinary job - the group above covers
+  // that path and must keep passing.
+  // -------------------------------------------------------------------------
+  group('Post a bundle', () {
+    /// Signs in a requestor, opens the form, and hands back the fake the
+    /// posting will go through.
+    Future<FakeBundleRepository> openPostJob(WidgetTester tester) async {
+      // Taller than the single-job form's 1600: a task card adds a section.
+      await tester.binding.setSurfaceSize(const Size(800, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final auth = FakeAuthRepository()
+        ..defaultLat = 5.4164
+        ..defaultLng = 100.3327
+        ..defaultDistrictCode = 'TL'
+        ..defaultTown = 'George Town'
+        ..seedSignedIn(UserRole.requestor);
+      final bundles = FakeBundleRepository();
+      await tester.pumpWidget(buildApp(auth, bundle: bundles));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('+ Post a Job'));
+      await tester.pumpAndSettle();
+      return bundles;
+    }
+
+    Future<void> addTask(WidgetTester tester) async {
+      final add = find.textContaining('Add another task');
+      await tester.ensureVisible(add);
+      await tester.pumpAndSettle();
+      await tester.tap(add);
+      await tester.pumpAndSettle();
+    }
+
+    /// Picks [category] in the [index]-th category dropdown (0 is task 1).
+    Future<void> pickCategory(
+      WidgetTester tester,
+      int index,
+      String category,
+    ) async {
+      final dropdown = find.byType(DropdownButtonFormField<String>).at(index);
+      await tester.ensureVisible(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(category).last);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('adding a task turns the form into a bundled posting', (
+      tester,
+    ) async {
+      await openPostJob(tester);
+      expect(find.widgetWithText(FilledButton, 'Post Job'), findsOneWidget);
+
+      await addTask(tester);
+
+      expect(find.text('Task 1'), findsOneWidget);
+      expect(find.text('Task 2'), findsOneWidget);
+      expect(find.text('Posting title'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Post Bundle'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Post Job'), findsNothing);
+    });
+
+    testWidgets('a two-task form posts one bundle', (tester) async {
+      final bundles = await openPostJob(tester);
+
+      await pickCategory(tester, 0, 'Plumbing');
+      await fillField(tester, 'Job Title', 'Fix the kitchen tap');
+      await fillField(tester, 'Description', 'It drips constantly.');
+      await addTask(tester);
+      await pickCategory(tester, 1, 'Electrical');
+      await fillField(tester, 'Task 2 title', 'Replace the ceiling light');
+      await fillField(tester, 'Task 2 description', 'The fitting is cracked.');
+      await fillField(tester, 'Posting title', 'Kitchen refresh');
+
+      final submit = find.widgetWithText(FilledButton, 'Post Bundle');
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      final posted = bundles.lastCreate!;
+      final tasks = posted['tasks'] as List<BundleTaskDraft>;
+      expect(posted['title'], 'Kitchen refresh');
+      expect(tasks.map((t) => t.title),
+          ['Fix the kitchen tap', 'Replace the ceiling light']);
+      expect(tasks.map((t) => t.category), ['Plumbing', 'Electrical']);
+      // The shared location came from the requestor's saved default.
+      expect((posted['location'] as JobLocation).districtCode, 'TL');
+      // A blank summary falls back to the task titles, because createBundle
+      // requires a description and the form already knows one.
+      expect(posted['description'],
+          '2 tasks: Fix the kitchen tap, Replace the ceiling light.');
+      expect(find.text('Bundle posted with 2 tasks!'), findsOneWidget);
     });
   });
 }

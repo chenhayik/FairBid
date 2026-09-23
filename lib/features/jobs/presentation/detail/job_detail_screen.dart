@@ -20,6 +20,8 @@ import '../../../messages/data/chat_repository.dart';
 import '../../../profile/data/public_profile_repository.dart';
 import '../../../profile/presentation/leave_review_sheet.dart';
 import '../../data/bid_repository.dart';
+import '../../data/bundle_bid_repository.dart';
+import '../../data/bundle_repository.dart';
 import '../../data/job_repository.dart';
 import '../../data/milestone_repository.dart';
 import '../../domain/bid.dart';
@@ -27,6 +29,7 @@ import '../../domain/job.dart';
 import '../../domain/job_event.dart';
 import '../../domain/milestone.dart';
 import '../bid/submit_bid_sheet.dart';
+import '../bid/submit_bundle_bid_sheet.dart';
 import '../widgets/bid_card.dart';
 import 'job_address_card.dart';
 import 'job_detail_view_model.dart';
@@ -129,6 +132,45 @@ Future<void> _openJobChat(BuildContext context, Job job) async {
         ),
       );
   }
+}
+
+/// Opens the bid sheet appropriate for [job]: the bundle package sheet when
+/// the task belongs to a bundle - a per-job bid on a bundle task is refused
+/// by the rules, since the provider bids on the package instead - otherwise
+/// the ordinary [SubmitBidSheet]. Shared by the bottom bar's primary action
+/// and the inline "Submit a bid" button in the bids slot, so both entry
+/// points onto a bundle task open the right form.
+Future<void> _openBidSheet(BuildContext context, Job job, AppUser bidder) async {
+  if (!job.isBundleTask) {
+    SubmitBidSheet.show(context, job: job, bidder: bidder);
+    return;
+  }
+  final bundleId = job.bundleId!;
+  final bundle = await context.read<BundleRepository>().getById(bundleId);
+  if (!context.mounted) return;
+  if (bundle == null || !bundle.biddingOpen) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('This bundle is no longer accepting bids.'),
+      ),
+    );
+    return;
+  }
+  final tasks =
+      await context.read<JobRepository>().watchBundleTasks(bundleId).first;
+  if (!context.mounted) return;
+  final existing = await context
+      .read<BundleBidRepository>()
+      .watchMyBundleBid(bundleId, bidder.uid)
+      .first;
+  if (!context.mounted) return;
+  SubmitBundleBidSheet.show(
+    context,
+    bundle: bundle,
+    tasks: tasks,
+    bidder: bidder,
+    existing: existing,
+  );
 }
 
 /// Withdraws the provider's own bid on [jobId], after confirmation. Shared
@@ -278,44 +320,67 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
       case JobActionKind.leaveReview:
         _scrollTo(_reviewSectionKey);
       case JobActionKind.submitBid:
-        if (me != null) SubmitBidSheet.show(context, job: job, bidder: me);
+        if (me != null) _openBidSheet(context, job, me);
       case JobActionKind.getVerified:
         context.push('/onboarding');
     }
   }
 
+  /// Cancels [job]. A task belonging to a still-open bundle can't be
+  /// cancelled on its own - `firestore.rules` freezes its `status` while the
+  /// bundle is open, since it may be part of an all-or-nothing bid or a lot -
+  /// so this cancels the whole bundle instead, through
+  /// [BundleRepository.cancelBundle]. An ordinary job keeps using
+  /// [JobRepository.cancelOpenJob], unchanged.
   Future<void> _cancelJob(BuildContext context, Job job) async {
+    final isBundleTask = job.isBundleTask;
+    final taskCount = job.bundleTaskCount;
+    final bundleBody = taskCount != null
+        ? 'All $taskCount tasks in this bundle will be cancelled and '
+            'providers will no longer be able to bid. This cannot be undone.'
+        : 'Every task in this bundle will be cancelled and providers will '
+            'no longer be able to bid. This cannot be undone.';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Cancel this job?'),
-        content: const Text(
-          'Your job posting will be closed and providers will no longer '
-          'be able to bid. This cannot be undone.',
+        title: Text(isBundleTask ? 'Cancel this bundle?' : 'Cancel this job?'),
+        content: Text(
+          isBundleTask
+              ? bundleBody
+              : 'Your job posting will be closed and providers will no '
+                  'longer be able to bid. This cannot be undone.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Keep Job'),
+            child: Text(isBundleTask ? 'Keep Bundle' : 'Keep Job'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: context.fairbid.danger,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Cancel Job'),
+            child: Text(isBundleTask ? 'Cancel Bundle' : 'Cancel Job'),
           ),
         ],
       ),
     );
     if (confirmed != true || !context.mounted) return;
     try {
-      await context.read<JobRepository>().cancelOpenJob(job.id);
+      if (isBundleTask) {
+        await context.read<BundleRepository>().cancelBundle(job.bundleId!);
+      } else {
+        await context.read<JobRepository>().cancelOpenJob(job.id);
+      }
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not cancel the job. Please try again.'),
+        SnackBar(
+          content: Text(
+            isBundleTask
+                ? 'Could not cancel the bundle. Please try again.'
+                : 'Could not cancel the job. Please try again.',
+          ),
         ),
       );
     }
@@ -482,6 +547,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
           ? _CancellationResponseCard(job: job, role: vm.role)
           : null,
     );
+    add(job.isBundleTask ? _BundleTaskBanner(job: job) : null);
     add(_HeroFacts(job: job));
     add(
       showCounterparty
@@ -537,6 +603,28 @@ class _StatusHeadline extends StatelessWidget {
           child: Text(vm.statusHeadline, style: theme.textTheme.titleMedium),
         ),
       ],
+    );
+  }
+}
+
+/// Slot 2b: a bundle task explains itself, since it bids and gets cancelled
+/// differently from an ordinary job.
+class _BundleTaskBanner extends StatelessWidget {
+  const _BundleTaskBanner({required this.job});
+  final Job job;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = job.bundleTaskCount;
+    return InfoBanner(
+      icon: Icons.inventory_2_outlined,
+      title: 'Part of a bundle',
+      body: count != null && count > 1
+          ? 'This is one of $count tasks in a bundle. Providers bid on the '
+              'tasks they pick as one package, and awarding or cancelling '
+              'happens for the whole bundle at once.'
+          : 'This task is bid on together with the rest of its bundle, as '
+              'one package.',
     );
   }
 }
@@ -1259,7 +1347,7 @@ class _BidAction extends StatelessWidget {
       }
       return PrimaryButton(
         label: 'Submit a bid',
-        onPressed: () => SubmitBidSheet.show(context, job: job, bidder: user),
+        onPressed: () => _openBidSheet(context, job, user),
       );
     }
     return Column(

@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/config/platform_config.dart';
 import '../../../../core/util/service_categories.dart';
 import '../../../../core/location/address_hint.dart';
 import '../../../../core/location/region.dart';
@@ -20,7 +21,9 @@ import '../../../auth/presentation/auth_controller.dart';
 import '../../../auth/presentation/validators.dart';
 import '../../../onboarding/data/document_storage_repository.dart';
 import '../../data/assist_repository.dart';
+import '../../data/bundle_repository.dart';
 import '../../data/job_repository.dart';
+import '../../domain/bundle.dart';
 import '../../domain/job.dart';
 import '../../domain/service_address.dart';
 import '../detail/job_video_player.dart';
@@ -39,6 +42,7 @@ class PostJobScreen extends StatelessWidget {
         ctx.read<JobRepository>(),
         ctx.read<DocumentStorageRepository>(),
         ctx.read<AssistRepository>(),
+        ctx.read<BundleRepository>(),
       ),
       child: const _PostJobView(),
     );
@@ -61,6 +65,20 @@ class _PostJobViewState extends State<_PostJobView> {
   final _budgetMax = TextEditingController();
   bool _hourly = false;
   DateTime? _deadline;
+
+  /// The tasks beyond the first, added with "Add another task". Empty for an
+  /// ordinary single-task job - which is what keeps that path exactly as it
+  /// was: the form only becomes a bundled posting once this has something in
+  /// it.
+  final List<_TaskFields> _extraTasks = [];
+
+  /// The bundled posting's own title and summary, asked for only in bundle
+  /// mode. A bundle is a posting in its own right: this is what a provider
+  /// reads at the top of the bid sheet, above the individual tasks.
+  final _postingTitle = TextEditingController();
+  final _postingSummary = TextEditingController();
+
+  bool get _isBundle => _extraTasks.isNotEmpty;
 
   /// True while the location shown is still the requestor's saved default
   /// (from onboarding) and hasn't been overridden by picking a new one.
@@ -104,6 +122,11 @@ class _PostJobViewState extends State<_PostJobView> {
     _address.dispose();
     _budgetMin.dispose();
     _budgetMax.dispose();
+    _postingTitle.dispose();
+    _postingSummary.dispose();
+    for (final task in _extraTasks) {
+      task.dispose();
+    }
     super.dispose();
   }
 
@@ -177,6 +200,23 @@ class _PostJobViewState extends State<_PostJobView> {
 
   void _clearDeadline() => setState(() => _deadline = null);
 
+  void _addTask() => setState(() => _extraTasks.add(_TaskFields()));
+
+  void _removeTask(int index) =>
+      setState(() => _extraTasks.removeAt(index).dispose());
+
+  /// The posting summary to send when the requestor leaves it blank: the task
+  /// titles, which is what a provider wants to see first anyway.
+  /// `createBundle` requires a description, and this beats making someone
+  /// write out in prose what the form already knows.
+  String _composedSummary() {
+    final titles = [
+      _title.text.trim(),
+      for (final task in _extraTasks) task.title.text.trim(),
+    ].where((t) => t.isNotEmpty).toList();
+    return '${titles.length} tasks: ${titles.join(', ')}.';
+  }
+
   Future<void> _submit() async {
     final controller = context.read<PostJobController>();
     final auth = context.read<AuthController>();
@@ -186,6 +226,20 @@ class _PostJobViewState extends State<_PostJobView> {
       return;
     }
     final user = auth.user!;
+    final location = JobLocation(
+      lat: controller.location!.lat,
+      lng: controller.location!.lng,
+      address: _address.text.trim().isEmpty
+          ? controller.location!.address
+          : _address.text.trim(),
+      districtCode: controller.location!.region.districtCode,
+      districtName: controller.location!.region.districtName,
+      town: controller.location!.region.town,
+    );
+    if (_isBundle) {
+      await _submitBundle(controller, location);
+      return;
+    }
     final job = Job(
       id: '',
       requestorId: user.uid,
@@ -194,16 +248,7 @@ class _PostJobViewState extends State<_PostJobView> {
       title: _title.text.trim(),
       description: _description.text.trim(),
       category: controller.category!,
-      location: JobLocation(
-        lat: controller.location!.lat,
-        lng: controller.location!.lng,
-        address: _address.text.trim().isEmpty
-            ? controller.location!.address
-            : _address.text.trim(),
-        districtCode: controller.location!.region.districtCode,
-        districtName: controller.location!.region.districtName,
-        town: controller.location!.region.town,
-      ),
+      location: location,
       budget: JobBudget(
         minSen: parseRmToSen(_budgetMin.text),
         maxSen: parseRmToSen(_budgetMax.text),
@@ -218,6 +263,48 @@ class _PostJobViewState extends State<_PostJobView> {
       unawaited(HapticFeedback.mediumImpact());
       _snack(controller.addressWarning ?? 'Job posted!');
       context.pop(); // back to home; the job shows in Active Jobs
+    }
+  }
+
+  /// Posts every task as one bundle. The first task is the form's own
+  /// fields; the rest come from the cards below them. Its budget stays in the
+  /// "When & budget" section, where it has always been, and each added task
+  /// carries its own.
+  Future<void> _submitBundle(
+      PostJobController controller, JobLocation location) async {
+    final summary = _postingSummary.text.trim();
+    final id = await controller.submitBundle(
+      title: _postingTitle.text.trim(),
+      description: summary.isEmpty ? _composedSummary() : summary,
+      location: location,
+      deadline: _deadline,
+      tasks: [
+        BundleTaskDraft(
+          title: _title.text.trim(),
+          description: _description.text.trim(),
+          category: controller.category!,
+          budget: JobBudget(
+            minSen: parseRmToSen(_budgetMin.text),
+            maxSen: parseRmToSen(_budgetMax.text),
+            hourly: _hourly,
+          ),
+        ),
+        for (final task in _extraTasks)
+          BundleTaskDraft(
+            title: task.title.text.trim(),
+            description: task.description.text.trim(),
+            category: task.category!,
+            budget: JobBudget(
+              minSen: parseRmToSen(task.budgetMin.text),
+              maxSen: parseRmToSen(task.budgetMax.text),
+            ),
+          ),
+      ],
+    );
+    if (id != null && mounted) {
+      unawaited(HapticFeedback.mediumImpact());
+      _snack('Bundle posted with ${_extraTasks.length + 1} tasks!');
+      context.pop(); // back to home; each task shows in the feed
     }
   }
 
@@ -307,8 +394,28 @@ class _PostJobViewState extends State<_PostJobView> {
                 if (controller.errorMessage != null)
                   ErrorBanner(controller.errorMessage!),
 
+                // ---- The posting itself (bundle mode only) ----
+                if (_isBundle) ...[
+                  const _SectionHeader('Your posting'),
+                  const SizedBox(height: 12),
+                  AppTextField(
+                    controller: _postingTitle,
+                    label: 'Posting title',
+                    hint: 'e.g. Bathroom refresh',
+                    textInputAction: TextInputAction.next,
+                    validator: (v) => Validators.required(v, 'Posting title'),
+                  ),
+                  AppTextField(
+                    controller: _postingSummary,
+                    label: 'Posting summary (optional)',
+                    hint: 'Leave blank and we\'ll list your tasks.',
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
                 // ---- The basics (required) ----
-                const _SectionHeader('The basics'),
+                _SectionHeader(_isBundle ? 'Task 1' : 'The basics'),
                 const SizedBox(height: 12),
                 Text('Category', style: theme.textTheme.labelLarge),
                 const SizedBox(height: 6),
@@ -347,9 +454,53 @@ class _PostJobViewState extends State<_PostJobView> {
                   ),
                 ),
 
+                // ---- The other tasks of a bundled posting ----
+                for (var i = 0; i < _extraTasks.length; i++)
+                  _TaskCard(
+                    number: i + 2,
+                    fields: _extraTasks[i],
+                    onRemove: () => _removeTask(i),
+                    onCategory: (v) =>
+                        setState(() => _extraTasks[i].category = v),
+                  ),
+                const SizedBox(height: 8),
+                if (_extraTasks.length + 1 < PlatformConfig.maxBundleTasks)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: controller.isBusy ? null : _addTask,
+                      icon: const Icon(Icons.add),
+                      label: Text(_isBundle
+                          ? 'Add another task'
+                          : 'Add another task to this posting'),
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'One posting can hold up to '
+                      '${PlatformConfig.maxBundleTasks} tasks.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                if (_isBundle)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, left: 4),
+                    child: Text(
+                      'Providers bid on the tasks they can do, as one package. '
+                      'The location, photos and deadline below are shared by '
+                      'every task.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+
                 // ---- Photos & video (optional) ----
                 const SizedBox(height: 24),
-                const _SectionHeader('Photos & video (optional)'),
+                _SectionHeader(
+                    _isBundle ? 'Photos (optional)' : 'Photos & video (optional)'),
                 const SizedBox(height: 8),
                 // No optional toggle left to expand - tapping opens the
                 // photo picker directly, same as the "Add photo" box below.
@@ -378,22 +529,28 @@ class _PostJobViewState extends State<_PostJobView> {
                   hint: 'JPEG or PNG',
                   busy: controller.uploadingPhoto,
                 ),
-                const SizedBox(height: 16),
-                Text('Video (optional)', style: theme.textTheme.labelLarge),
-                const SizedBox(height: 8),
-                if (controller.videoUrl != null)
-                  _VideoThumb(
-                    url: controller.videoUrl!,
-                    onRemove: controller.removeVideo,
-                  )
-                else
-                  UploadBox(
-                    compact: true,
-                    onTap: () => controller.addVideo(uid),
-                    icon: Icons.videocam_outlined,
-                    hint: 'Up to 60 seconds, under 45 MB',
-                    busy: controller.uploadingVideo,
-                  ),
+                // A bundle's tasks carry the shared photos, but
+                // `createBundle` writes no video and no service address, so
+                // both are hidden rather than silently dropped. The address
+                // can still be added per task once the posting is up.
+                if (!_isBundle) ...[
+                  const SizedBox(height: 16),
+                  Text('Video (optional)', style: theme.textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  if (controller.videoUrl != null)
+                    _VideoThumb(
+                      url: controller.videoUrl!,
+                      onRemove: controller.removeVideo,
+                    )
+                  else
+                    UploadBox(
+                      compact: true,
+                      onTap: () => controller.addVideo(uid),
+                      icon: Icons.videocam_outlined,
+                      hint: 'Up to 60 seconds, under 45 MB',
+                      busy: controller.uploadingVideo,
+                    ),
+                ],
 
                 // ---- Where (location required, label/address optional) ----
                 const SizedBox(height: 24),
@@ -422,14 +579,24 @@ class _PostJobViewState extends State<_PostJobView> {
                   ),
                 ],
                 const SizedBox(height: 8),
-                _AddressField(
-                  address: controller.pendingAddress,
-                  onTap: _pickAddress,
-                ),
+                if (!_isBundle)
+                  _AddressField(
+                    address: controller.pendingAddress,
+                    onTap: _pickAddress,
+                  )
+                else
+                  Text(
+                    'Add the exact address from each task once the posting '
+                    'is up.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
 
                 // ---- When & budget (optional) ----
                 const SizedBox(height: 24),
-                const _SectionHeader('When & budget (optional)'),
+                _SectionHeader(_isBundle
+                    ? 'When (shared) & task 1 budget (optional)'
+                    : 'When & budget (optional)'),
                 const SizedBox(height: 12),
                 _DeadlineField(
                   deadline: _deadline,
@@ -448,7 +615,7 @@ class _PostJobViewState extends State<_PostJobView> {
 
                 const SizedBox(height: 24),
                 PrimaryButton(
-                  label: 'Post Job',
+                  label: _isBundle ? 'Post Bundle' : 'Post Job',
                   // Its own spinner reflects submitting only - the screen-wide
                   // overlay already covers that - but stays disabled during a
                   // photo/video upload too, so the job can't be created before
@@ -459,6 +626,126 @@ class _PostJobViewState extends State<_PostJobView> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The controllers behind one added task. Kept in a class so adding and
+/// removing a task is a single list operation, and so every field it owns is
+/// disposed with it.
+class _TaskFields {
+  final title = TextEditingController();
+  final description = TextEditingController();
+  final budgetMin = TextEditingController();
+  final budgetMax = TextEditingController();
+  String? category;
+
+  void dispose() {
+    title.dispose();
+    description.dispose();
+    budgetMin.dispose();
+    budgetMax.dispose();
+  }
+}
+
+/// One added task of a bundled posting: its own category, title, description
+/// and optional budget - the fields `BundleTaskDraft` carries. Task 1 uses
+/// the form's own fields above, so this starts at "Task 2".
+///
+/// Lots and finish-to-start dependencies are deliberately absent: the spec
+/// keeps them read-only in v1, coming from templates rather than from the
+/// requestor's own editing.
+class _TaskCard extends StatelessWidget {
+  const _TaskCard({
+    required this.number,
+    required this.fields,
+    required this.onRemove,
+    required this.onCategory,
+  });
+
+  final int number;
+  final _TaskFields fields;
+  final VoidCallback onRemove;
+  final ValueChanged<String?> onCategory;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Task $number',
+                      style: theme.textTheme.titleMedium),
+                ),
+                IconButton(
+                  tooltip: 'Remove task $number',
+                  icon: const Icon(Icons.close),
+                  onPressed: onRemove,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Category', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 6),
+            DropdownButtonFormField<String>(
+              initialValue: fields.category,
+              hint: const Text('Select a category...'),
+              items: [
+                for (final c in kServiceCategories)
+                  DropdownMenuItem(value: c, child: Text(c)),
+              ],
+              onChanged: onCategory,
+              validator: (v) => v == null ? 'Pick a category.' : null,
+            ),
+            const SizedBox(height: 16),
+            AppTextField(
+              controller: fields.title,
+              label: 'Task $number title',
+              hint: 'e.g. Re-tile the shower wall',
+              textInputAction: TextInputAction.next,
+              validator: (v) => Validators.required(v, 'Title'),
+            ),
+            AppTextField(
+              controller: fields.description,
+              label: 'Task $number description',
+              hint: 'What needs doing, and anything a provider should know...',
+              maxLines: 4,
+              validator: (v) => Validators.required(v, 'Description'),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: AppTextField(
+                    controller: fields.budgetMin,
+                    label: 'Min (RM)',
+                    hint: '0.00',
+                    prefixText: 'RM ',
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: AppTextField(
+                    controller: fields.budgetMax,
+                    label: 'Max (RM)',
+                    hint: '0.00',
+                    prefixText: 'RM ',
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

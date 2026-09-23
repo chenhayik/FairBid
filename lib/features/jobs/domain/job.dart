@@ -127,6 +127,7 @@ class Job {
     this.lotId,
     this.startsAfterJobId,
     this.gapDays,
+    this.bundleTaskCount,
   });
 
   final String id;
@@ -195,6 +196,12 @@ class Job {
   /// The given time in between tasks
   final int? gapDays;
 
+  /// How many tasks the whole bundle has, denormalised onto every task by
+  /// `createBundle` so the feed card can say "Part of a 4-task bundle"
+  /// without a second read of the bundle document. Server-owned, so it is
+  /// never written back in [toMap].
+  final int? bundleTaskCount;
+
   bool get isBundleTask => bundleId != null;
 
   /// Fields written to Firestore. `createdAt`/`bidCount`/`status` for a new job
@@ -248,5 +255,6 @@ class Job {
         lotId: m['lotId'] as String?,
         startsAfterJobId:m['startsAfterJobId'] as String?,
         gapDays: (m['gapDays']as num?)?.toInt(),
+        bundleTaskCount: (m['bundleTaskCount'] as num?)?.toInt(),
       );
 }

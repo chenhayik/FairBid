@@ -4,7 +4,9 @@ import 'package:image_picker/image_picker.dart';
 import '../../../../core/location/region.dart';
 import '../../../onboarding/data/document_storage_repository.dart';
 import '../../data/assist_repository.dart';
+import '../../data/bundle_repository.dart';
 import '../../data/job_repository.dart';
+import '../../domain/bundle.dart';
 import '../../domain/job.dart';
 import '../../domain/service_address.dart';
 
@@ -15,13 +17,15 @@ class PostJobController extends ChangeNotifier {
   PostJobController(
     this._jobs,
     this._storage,
-    this._assist, {
+    this._assist,
+    this._bundles, {
     ImagePicker? imagePicker,
   }) : _picker = imagePicker ?? ImagePicker();
 
   final JobRepository _jobs;
   final DocumentStorageRepository _storage;
   final AssistRepository _assist;
+  final BundleRepository _bundles;
   final ImagePicker _picker;
 
   String? category;
@@ -251,6 +255,49 @@ class PostJobController extends ChangeNotifier {
       return id;
     } catch (_) {
       _errorMessage = 'Could not post the job. Please try again.';
+      return null;
+    } finally {
+      _isSubmitting = false;
+      notifyListeners();
+    }
+  }
+
+  /// Posts several related tasks as ONE bundled posting, through the
+  /// `createBundle` Cloud Function, and returns the new bundle's id (null on
+  /// failure). Each task becomes an ordinary job carrying the bundle's id, so
+  /// the feed, escrow, chat and disputes keep working per task.
+  ///
+  /// The shared fields ([location], the photos and [deadline]) are copied onto
+  /// every task server-side. The optional video and the precise service
+  /// address have no bundle equivalent - `createBundle` writes neither - so
+  /// the form hides both once a second task is added.
+  Future<String?> submitBundle({
+    required String title,
+    required String description,
+    required JobLocation location,
+    required List<BundleTaskDraft> tasks,
+    DateTime? deadline,
+  }) async {
+    _isSubmitting = true;
+    _errorMessage = null;
+    _addressWarning = null;
+    notifyListeners();
+    try {
+      return await _bundles.create(
+        title: title,
+        description: description,
+        location: location,
+        tasks: tasks,
+        photoUrls: List.of(photoUrls),
+        deadline: deadline,
+      );
+    } on BundleRejectedException catch (e) {
+      // The server writes these to be read by a requestor ("Task 2 has no
+      // valid category."), so they are shown as they are.
+      _errorMessage = e.message;
+      return null;
+    } catch (_) {
+      _errorMessage = 'Could not post the bundle. Please try again.';
       return null;
     } finally {
       _isSubmitting = false;

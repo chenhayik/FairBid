@@ -21,10 +21,15 @@ const {
 } = require("@firebase/rules-unit-testing");
 const {
   doc,
+  collection,
+  collectionGroup,
+  query,
+  where,
   setDoc,
   updateDoc,
   deleteDoc,
   getDoc,
+  getDocs,
   serverTimestamp,
   Timestamp,
 } = require("firebase/firestore");
@@ -945,5 +950,184 @@ describe("User reports", () => {
         await assertFails(
             updateDoc(doc(dbAs(ADMIN), REPORT_PATH), {status: "resolved"}));
         await assertFails(deleteDoc(doc(dbAs(REPORTER), REPORT_PATH)));
+      });
+});
+
+// ---------------------------------------------------------------------------
+// Bundle bids - bundles/{bundleId}/bundleBids/{providerId}.
+//
+// A sealed package bid, written only by the submitBundleBid /
+// withdrawBundleBid Cloud Functions (admin SDK, bypasses rules) and readable
+// by the bidder and the bundle's requestor alone - a competitor who could
+// read these prices could undercut them by a ringgit.
+// ---------------------------------------------------------------------------
+describe("Bundle bids", () => {
+  const BUNDLE_ID = "bundle1";
+  const TASK_ID = "task1";
+  const PROVIDER = "provider1"; // trustScore 42, scoreVisible true, approved
+  const RIVAL = "provider2";
+  const REQUESTOR = "requestor1";
+  const BID_PATH = `bundles/${BUNDLE_ID}/bundleBids/${PROVIDER}`;
+
+  const storedBid = {
+    providerId: PROVIDER,
+    providerName: "Pro Fixer",
+    providerTrustScore: 42,
+    providerScoreVisible: true,
+    taskPrices: {[TASK_ID]: 15000},
+    allOrNothing: false,
+    estimatedDuration: "1 week",
+    message: "Happy to take this on.",
+    status: "pending",
+  };
+
+  const approvedProvider = {
+    role: "provider",
+    verificationStatus: "approved",
+    trustScore: 42,
+    trust: {scoreVisible: true},
+  };
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${PROVIDER}`, approvedProvider],
+      [`users/${RIVAL}`, approvedProvider],
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      [`bundles/${BUNDLE_ID}`, {
+        requestorId: REQUESTOR,
+        status: "open",
+        title: "Bathroom refresh",
+        taskIds: [TASK_ID],
+      }],
+      [`jobs/${TASK_ID}`, {
+        requestorId: REQUESTOR,
+        status: "open",
+        bundleId: BUNDLE_ID,
+        bundleOrder: 0,
+        bundleTaskCount: 1,
+      }],
+      [BID_PATH, storedBid],
+      // A rival's bid on the same bundle: what the reads below must NOT reach.
+      [`bundles/${BUNDLE_ID}/bundleBids/${RIVAL}`,
+        {...storedBid, providerId: RIVAL}],
+    ]);
+  });
+
+  it("lets the bidder read their own bid", async () => {
+    await assertSucceeds(getDoc(doc(dbAs(PROVIDER), BID_PATH)));
+  });
+
+  it("lets the bundle's requestor read a bid on their bundle", async () => {
+    await assertSucceeds(getDoc(doc(dbAs(REQUESTOR), BID_PATH)));
+  });
+
+  it("denies a rival provider reading someone else's prices", async () => {
+    await assertFails(getDoc(doc(dbAs(RIVAL), BID_PATH)));
+  });
+
+  it("denies read to a signed-out visitor", async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(db, BID_PATH)));
+  });
+
+  it("denies a provider writing a bid directly (submitBundleBid only)",
+      async () => {
+        await assertFails(setDoc(
+            doc(dbAs(RIVAL), `bundles/${BUNDLE_ID}/bundleBids/${RIVAL}`),
+            {...storedBid, providerId: RIVAL}));
+      });
+
+  it("denies a provider editing their own stored bid", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(PROVIDER), BID_PATH), {taskPrices: {[TASK_ID]: 1}}));
+  });
+
+  it("denies a provider deleting their bid (withdrawBundleBid only)",
+      async () => {
+        await assertFails(deleteDoc(doc(dbAs(PROVIDER), BID_PATH)));
+      });
+
+  it("denies the requestor writing a bid on their own bundle", async () => {
+    await assertFails(setDoc(
+        doc(dbAs(REQUESTOR), `bundles/${BUNDLE_ID}/bundleBids/${REQUESTOR}`),
+        {...storedBid, providerId: REQUESTOR}));
+  });
+
+  it("lets the requestor list every bid on their bundle", async () => {
+    await assertSucceeds(getDocs(
+        collection(dbAs(REQUESTOR), `bundles/${BUNDLE_ID}/bundleBids`)));
+  });
+
+  it("denies a provider listing every bid on a bundle", async () => {
+    await assertFails(getDocs(
+        collection(dbAs(PROVIDER), `bundles/${BUNDLE_ID}/bundleBids`)));
+  });
+
+  it("lets a provider list their own bundle bids (Pending Bids)", async () => {
+    await assertSucceeds(getDocs(query(
+        collectionGroup(dbAs(PROVIDER), "bundleBids"),
+        where("providerId", "==", PROVIDER))));
+  });
+
+  it("denies listing another provider's bundle bids", async () => {
+    await assertFails(getDocs(query(
+        collectionGroup(dbAs(PROVIDER), "bundleBids"),
+        where("providerId", "==", RIVAL))));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cancelling a task of a bundle - jobs/{jobId} while its bundle is open.
+//
+// Providers bid on the package, so a task cannot be dropped out from under
+// them one at a time; the requestor cancels the whole posting through the
+// cancelBundle callable. Once the bundle leaves 'open', its tasks are
+// ordinary jobs again.
+// ---------------------------------------------------------------------------
+describe("Bundle task cancellation", () => {
+  const BUNDLE_ID = "bundle1";
+  const TASK_ID = "task1";
+  const REQUESTOR = "requestor1";
+  const openBundle = {
+    requestorId: REQUESTOR,
+    status: "open",
+    taskIds: [TASK_ID],
+  };
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      [`bundles/${BUNDLE_ID}`, openBundle],
+      [`jobs/${TASK_ID}`, {
+        requestorId: REQUESTOR,
+        status: "open",
+        bundleId: BUNDLE_ID,
+        bundleOrder: 0,
+      }],
+      [`jobs/plain1`, {requestorId: REQUESTOR, status: "open"}],
+    ]);
+  });
+
+  it("denies cancelling one task while its bundle is open", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {status: "cancelled"}));
+  });
+
+  it("allows cancelling a task once the bundle is no longer open", async () => {
+    await seed([[`bundles/${BUNDLE_ID}`,
+      {...openBundle, status: "cancelled"}]]);
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {status: "cancelled"}));
+  });
+
+  it("still lets the owner edit a bundle task's title", async () => {
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {title: "Re-tile the shower"}));
+  });
+
+  it("leaves cancelling an ordinary single-task job exactly as it was",
+      async () => {
+        await assertSucceeds(updateDoc(
+            doc(dbAs(REQUESTOR), "jobs/plain1"), {status: "cancelled"}));
       });
 });

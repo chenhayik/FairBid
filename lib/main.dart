@@ -11,6 +11,8 @@ import 'features/auth/data/auth_repository.dart';
 import 'features/disputes/data/dispute_repository.dart';
 import 'features/jobs/data/assist_repository.dart';
 import 'features/jobs/data/bid_repository.dart';
+import 'features/jobs/data/bundle_bid_repository.dart';
+import 'features/jobs/data/bundle_repository.dart';
 import 'features/jobs/data/job_repository.dart';
 import 'features/jobs/data/milestone_repository.dart';
 import 'features/messages/data/chat_repository.dart';
@@ -49,6 +51,8 @@ Future<void> main() async {
     documentStorageRepository: FirebaseDocumentStorageRepository(),
     jobRepository: FirestoreJobRepository(),
     bidRepository: FirestoreBidRepository(),
+    bundleRepository: FirestoreBundleRepository(),
+    bundleBidRepository: FirestoreBundleBidRepository(),
     reviewRepository: FirebaseReviewRepository(),
     publicProfileRepository: FirebasePublicProfileRepository(),
     userReportRepository: FirestoreUserReportRepository(),

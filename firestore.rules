@@ -26,8 +26,8 @@ service cloud.firestore {
     }
 
   function bundleFields() {
-      return ['bundleId', 'bundleOrder', 'lotId', 'startsAfterJobId',
-              'gapDays'];
+      return ['bundleId', 'bundleOrder', 'bundleTaskCount', 'lotId',
+              'startsAfterJobId', 'gapDays'];
     }
     function noBundleFieldWrites() {
       return !request.resource.data.diff(resource.data).affectedKeys()
@@ -288,6 +288,20 @@ service cloud.firestore {
                    'cancellationRequestedAt', 'cancelledAt', 'cancelledBy']);
     }
 
+    // A task of a still-open bundle cannot be cancelled on its own.
+    // Providers bid on the package, so dropping one task out from under
+    // them would break an all-or-nothing bid or split a lot. The
+    // requestor cancels the whole posting through the cancelBundle
+    // callable instead, which cancels every task with it (admin SDK,
+    // bypasses rules). Once the bundle leaves 'open' its tasks are
+    // ordinary jobs again, so this only bites while bids are live.
+    function bundleTaskStatusWriteOk() {
+      return request.resource.data.status == resource.data.status
+          || !('bundleId' in resource.data)
+          || get(/databases/$(database)/documents/bundles/$(resource.data.bundleId))
+              .data.status != 'open';
+    }
+
     // Bid-acceptance fields are Cloud-Function-owned (acceptBid): a client
     // must never write them directly, or a requestor could assign a job
     // without the server's wallet-balance gate.
@@ -314,7 +328,8 @@ service cloud.firestore {
                          && jobStatusWriteOk()
                          && noCancelFieldWrites()
                          && noAcceptFieldWrites()
-                         && noBundleFieldWrites())
+                         && noBundleFieldWrites()
+                         && bundleTaskStatusWriteOk())
                         || request.resource.data.diff(resource.data)
                             .affectedKeys().hasOnly(['bidCount']));
       allow delete: if false;
@@ -408,6 +423,22 @@ service cloud.firestore {
    match /bundles/{bundleId} {
       allow read: if isSignedIn();
       allow write: if false;
+
+      // Sealed package bids: one per provider per bundle, keyed by their
+      // uid. Readable by the bidder and by the bundle's requestor and no
+      // one else - a competitor who could read these prices could
+      // undercut them by a ringgit, which is the whole reason the
+      // auction is sealed.
+      //
+      // Every write is denied because submitBundleBid and
+      // withdrawBundleBid author them: the prices live in a map, and the
+      // rules language cannot walk a map's entries to check each one.
+      match /bundleBids/{providerId} {
+        allow read: if isSignedIn()
+                    && (request.auth.uid == providerId
+                        || request.auth.uid == get(/databases/$(database)/documents/bundles/$(bundleId)).data.requestorId);
+        allow write: if false;
+      }
     }
 
     // Collection-group reads for a provider's own cross-job listings - their
@@ -416,6 +447,13 @@ service cloud.firestore {
     // queries, so the per-job rules above don't cover these; both queries
     // filter on providerId == the caller, which is exactly what is checked.
     match /{path=**}/bids/{bidId} {
+      allow read: if isSignedIn()
+                  && resource.data.providerId == request.auth.uid;
+    }
+
+    // The same for a provider's bundle bids, which Pending Bids reads
+    // with collectionGroup('bundleBids') filtered on their own uid.
+    match /{path=**}/bundleBids/{bidId} {
       allow read: if isSignedIn()
                   && resource.data.providerId == request.auth.uid;
     }

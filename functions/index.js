@@ -2314,3 +2314,6 @@ exports.suggestJobDetails = functions
 exports.extractSsmDocument = require("./ssm").extractSsmDocument;
 
 exports.createBundle = require("./bundles").createBundle;
+exports.submitBundleBid = require("./bundles").submitBundleBid;
+exports.withdrawBundleBid = require("./bundles").withdrawBundleBid;
+exports.cancelBundle = require("./bundles").cancelBundle;
