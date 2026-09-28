@@ -31,10 +31,24 @@ abstract interface class ReviewRepository {
 
   /// Records [review] on [revieweeId]'s profile. A Cloud Function recomputes
   /// their Bayesian Trust Score (plan §3.4.3) shortly after. Throws
-  /// [ReviewAlreadyExistsException] if the reviewer already reviewed this job.
+  /// [ReviewAlreadyExistsException] if the reviewer already reviewed this job
+  /// (or, when [bundleId] is given, this bundle - one review per reviewer per
+  /// counterparty per bundle).
   Future<void> leaveReview({
     required String revieweeId,
     required Review review,
+    String? bundleId,
+  });
+
+  /// Whether [reviewerId] already reviewed [revieweeId] for [jobId] (or, when
+  /// [bundleId] is given, for that bundle). Lets the UI gate the review
+  /// prompt before the reviewer opens the sheet, mirroring the id
+  /// [leaveReview] would use.
+  Future<bool> hasReviewed({
+    required String revieweeId,
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
   });
 
   /// Reports a review on [revieweeId]'s profile as unfair/abusive, queueing
@@ -57,6 +71,14 @@ class FirebaseReviewRepository implements ReviewRepository {
 
   CollectionReference<Map<String, dynamic>> _reviews(String userId) =>
       _firestore.collection('users').doc(userId).collection('reviews');
+
+  /// One review per reviewer per counterparty per bundle: bundle-keyed when
+  /// [bundleId] is given, else keyed by [jobId] as today.
+  String _reviewId({
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
+  }) => '${bundleId ?? jobId}_$reviewerId';
 
   @override
   Stream<List<Review>> watchReviews(String userId, {int limit = 20}) {
@@ -93,11 +115,17 @@ class FirebaseReviewRepository implements ReviewRepository {
   Future<void> leaveReview({
     required String revieweeId,
     required Review review,
+    String? bundleId,
   }) {
-    // Deterministic id → a reviewer can leave at most one review per job; the
-    // transaction below aborts if it already exists.
-    final reviewRef =
-        _reviews(revieweeId).doc('${review.jobId}_${review.reviewerId}');
+    // Deterministic id → a reviewer can leave at most one review per job (or
+    // bundle); the transaction below aborts if it already exists.
+    final reviewRef = _reviews(revieweeId).doc(
+      _reviewId(
+        jobId: review.jobId ?? '',
+        reviewerId: review.reviewerId,
+        bundleId: bundleId,
+      ),
+    );
     return _firestore.runTransaction((tx) async {
       final existing = await tx.get(reviewRef);
       if (existing.exists) throw const ReviewAlreadyExistsException();
@@ -106,6 +134,22 @@ class FirebaseReviewRepository implements ReviewRepository {
         'createdAt': FieldValue.serverTimestamp(),
       });
     });
+  }
+
+  @override
+  Future<bool> hasReviewed({
+    required String revieweeId,
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
+  }) async {
+    final id = _reviewId(
+      jobId: jobId,
+      reviewerId: reviewerId,
+      bundleId: bundleId,
+    );
+    final doc = await _reviews(revieweeId).doc(id).get();
+    return doc.exists;
   }
 
   @override

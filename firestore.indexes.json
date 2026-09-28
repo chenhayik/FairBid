@@ -67,6 +67,14 @@
       ]
     },
     {
+      "collectionGroup": "bundles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "deadline", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "bundleBids",
       "queryScope": "COLLECTION_GROUP",
       "fields": [

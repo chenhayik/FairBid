@@ -4,7 +4,13 @@ const {
   validateBundleBid,
   checkLots,
   bundleBiddingOpen,
+  splitBundlePrice,
+  startsWhenText,
+  handoverNotificationBody,
+  validateHandover,
+  uidsToCount,
 } = require("./bundles");
+const {IMG_PREFIX} = require("./common");
 
 let failed = 0;
 function test(name, fn) {
@@ -178,6 +184,31 @@ test("a bundle price must be lower than the task prices added up", () => {
   assert.strictEqual(result.bundlePriceSen, 21000);
 });
 
+test("a normal bundle price is accepted", () => {
+  const result = validateBundleBid(bidPayload({bundlePriceSen: 20000}));
+  assert.strictEqual(result.bundlePriceSen, 20000);
+});
+
+test("a bundle price too low to share across every task is refused", () => {
+  // Splitting RM 5,000 in proportion to a RM 0.01 task and a RM 10,000 task
+  // rounds the small task's share down to 0 - it would be awarded at RM 0
+  // and could never get a milestone plan.
+  rejects(() => validateBundleBid(bidPayload({
+    taskPrices: {task1: 1, task2: 1000000},
+    bundlePriceSen: 500000,
+  })));
+});
+
+test("splitBundlePrice sums exactly and gives every task at least 1 sen",
+    () => {
+  const amounts = splitBundlePrice({task1: 15000, task2: 9000}, 20000);
+  assert.strictEqual(amounts.task1 + amounts.task2, 20000);
+  assert.ok(Object.values(amounts).every((sen) => sen >= 1));
+  const thirds = splitBundlePrice({a: 1, b: 1, c: 1}, 100);
+  assert.strictEqual(thirds.a + thirds.b + thirds.c, 100);
+  assert.ok(Object.values(thirds).every((sen) => sen >= 1));
+});
+
 test("the duration and the message are required", () => {
   rejects(() => validateBundleBid(bidPayload({estimatedDuration: ""})));
   rejects(() => validateBundleBid(bidPayload({message: "   "})));
@@ -212,6 +243,86 @@ test("a bundle stops taking bids when it closes or its deadline passes", () => {
   assert.strictEqual(bundleBiddingOpen({status: "awarded"}), false);
   assert.strictEqual(
       bundleBiddingOpen({status: "cancelled", deadline: inAnHour}), false);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4: the dependent-task handover notification text and the
+// recordHandover input checks.
+// ---------------------------------------------------------------------------
+
+console.log("bundles.js handover");
+
+test("startsWhenText says 'now' with no gap, else 'after N day(s)'", () => {
+  assert.strictEqual(startsWhenText(0), "now");
+  assert.strictEqual(startsWhenText(null), "now");
+  assert.strictEqual(startsWhenText(1), "after 1 day");
+  assert.strictEqual(startsWhenText(3), "after 3 days");
+});
+
+test("the dependent-task notification names both tasks and the wait", () => {
+  const body = handoverNotificationBody("Plumbing rough-in", "Tiling", 2);
+  assert.strictEqual(body,
+      "\"Plumbing rough-in\" is done. \"Tiling\" can start after 2 days. " +
+      "Record a site handover before you begin.");
+  assert.ok(handoverNotificationBody("A", "B", 0).includes("can start now."));
+});
+
+/** A valid recordHandover payload. */
+function handoverPayload(overrides = {}) {
+  return {
+    note: "Left the key with the neighbour, photos attached.",
+    photoUrls: [`${IMG_PREFIX}jobs%2Fabc%2Fphoto.jpg?alt=media`],
+    ...overrides,
+  };
+}
+
+test("a valid handover note and photos are accepted", () => {
+  const result = validateHandover(handoverPayload());
+  assert.strictEqual(result.note,
+      "Left the key with the neighbour, photos attached.");
+  assert.strictEqual(result.photoUrls.length, 1);
+});
+
+test("a handover needs a non-empty note, at most 1000 characters", () => {
+  rejects(() => validateHandover(handoverPayload({note: ""})));
+  rejects(() => validateHandover(handoverPayload({note: "   "})));
+  rejects(() => validateHandover(handoverPayload({note: "x".repeat(1001)})));
+  validateHandover(handoverPayload({note: "x".repeat(1000)})); // exactly fine
+});
+
+test("photos are optional, capped at 5, and must be our own uploads", () => {
+  validateHandover(handoverPayload({photoUrls: undefined}));
+  rejects(() => validateHandover(
+      handoverPayload({photoUrls: Array(6).fill(`${IMG_PREFIX}x.jpg`)})));
+  rejects(() => validateHandover(
+      handoverPayload({photoUrls: ["https://evil.example/x.jpg"]})));
+  rejects(() => validateHandover(handoverPayload({photoUrls: [""]})));
+  rejects(() => validateHandover(handoverPayload({photoUrls: "not-a-list"})));
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: which participants a completed bundle task still owes a
+// `jobsCompleted` bump - a bundle counts once per participant, not per task.
+// ---------------------------------------------------------------------------
+
+console.log("bundles.js uidsToCount");
+
+test("with nobody already counted, every participant is due the bump", () => {
+  assert.deepStrictEqual(
+      uidsToCount(["provider1", "requestor1"], []),
+      ["provider1", "requestor1"]);
+});
+
+test("a uid already counted for this bundle is skipped", () => {
+  assert.deepStrictEqual(
+      uidsToCount(["provider1", "requestor1"], ["provider1"]),
+      ["requestor1"]);
+});
+
+test("once both are counted, nobody is due a further bump", () => {
+  assert.deepStrictEqual(
+      uidsToCount(["provider1", "requestor1"], ["provider1", "requestor1"]),
+      []);
 });
 
 if (failed > 0) {

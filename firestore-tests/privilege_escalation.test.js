@@ -8,8 +8,10 @@
  * (functions/index.js:240) all read `users/{uid}.role`, a client that can
  * write that field owns the admin role outright.
  *
- * Run (from this directory):
- *   npx firebase-tools emulators:exec --only firestore "npx mocha privilege_escalation.test.js --timeout 20000"
+ * Runs as part of `npm test` (see package.json), alongside rules.test.js and
+ * storage.rules.test.js, against the Firestore emulator - e.g. from this
+ * directory:
+ *   npx firebase-tools emulators:exec --only firestore "npm test"
  */
 
 const fs = require("fs");

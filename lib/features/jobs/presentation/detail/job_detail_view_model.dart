@@ -2,6 +2,7 @@ import '../../../../core/util/money.dart';
 import '../../../auth/domain/app_user.dart';
 import '../../../auth/domain/user_role.dart';
 import '../../domain/bid.dart';
+import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 
 /// Who is looking at a job detail screen, resolved from the job and the
@@ -64,6 +65,10 @@ enum JobActionKind {
   /// Scrolls to the milestone tracker to approve/request changes on a
   /// proposed plan.
   reviewPlan,
+
+  /// Opens the bundle's award screen, where a still-open live bundle task's
+  /// bids are compared rather than in this job's own (empty) bid list.
+  viewBundle,
 }
 
 /// A role-resolved call to action: a label, what it does ([kind]), an
@@ -141,10 +146,15 @@ class JobDetailViewModel {
 }
 
 /// Builds the [JobDetailViewModel] for [me] looking at [job], with [myBid]
-/// set when they're a provider who has already bid on it. Pure and
-/// widget-free - safe to unit test directly over the role × status matrix
-/// without pumping any widgets.
-JobDetailViewModel buildJobDetailVm(Job job, AppUser? me, Bid? myBid) {
+/// set when they've already bid, and [myBundleBid] their package bid when
+/// [job] is a live bundle task (which never has a per-job [myBid]). Pure and
+/// widget-free - safe to unit test over the role x status matrix directly.
+JobDetailViewModel buildJobDetailVm(
+  Job job,
+  AppUser? me,
+  Bid? myBid, {
+  BundleBid? myBundleBid,
+}) {
   switch (_resolveRole(job, me, myBid)) {
     case JobViewerRole.owner:
       return _forOwner(job);
@@ -153,7 +163,7 @@ JobDetailViewModel buildJobDetailVm(Job job, AppUser? me, Bid? myBid) {
     case JobViewerRole.bidder:
       return _forBidder(job, myBid!);
     case JobViewerRole.browser:
-      return _forBrowser(job, me);
+      return _forBrowser(job, me, myBundleBid);
     case JobViewerRole.outsider:
       return _forOutsider(job);
   }
@@ -185,6 +195,26 @@ JobDetailViewModel _forOwner(Job job) {
   switch (job.status) {
     case JobStatus.open:
       final n = job.bidCount;
+      // A live bundle task's `bidCount` counts package bids on the whole
+      // bundle, so it gets its own headline/action pointing at that screen.
+      if (job.isLiveBundleTask) {
+        return JobDetailViewModel(
+          role: JobViewerRole.owner,
+          statusHeadline: n > 0
+              ? '$n package bid${n == 1 ? '' : 's'} cover this task.'
+              : 'Waiting for providers to bid on this bundle.',
+          primaryAction: const NextAction(
+            label: 'View bundle',
+            kind: JobActionKind.viewBundle,
+          ),
+          waitingLine: n > 0 ? null : 'No bids yet. Check back soon.',
+          showBids: false,
+          showMilestones: false,
+          showAddress: false,
+          showReviewPrompt: false,
+          showCancel: true,
+        );
+      }
       return JobDetailViewModel(
         role: JobViewerRole.owner,
         statusHeadline: n > 0
@@ -334,11 +364,36 @@ JobDetailViewModel _forBidder(Job job, Bid myBid) {
   );
 }
 
-JobDetailViewModel _forBrowser(Job job, AppUser? me) {
+JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
   final isProvider = me?.role == UserRole.provider;
   final verified = me?.verificationStatus == 'approved';
   final deadlinePassed =
       job.deadline != null && job.deadline!.isBefore(DateTime.now());
+
+  // A live bundle task never has a per-job bid, so a provider who already
+  // covered it via a package bid still resolves as a plain browser - check
+  // this first, ahead of the verified/deadline gates they already cleared.
+  if (isProvider &&
+      job.isLiveBundleTask &&
+      myBundleBid != null &&
+      myBundleBid.status == BundleBidStatus.pending &&
+      myBundleBid.coversTask(job.id)) {
+    final price = myBundleBid.priceFor(job.id)!;
+    return JobDetailViewModel(
+      role: JobViewerRole.browser,
+      statusHeadline: 'You bid ${formatRm(price)} on this task as part of '
+          'a package bid.',
+      primaryAction: const NextAction(
+        label: 'Edit your bundle bid',
+        kind: JobActionKind.submitBid,
+      ),
+      showBids: true,
+      showMilestones: false,
+      showAddress: false,
+      showReviewPrompt: false,
+      showCancel: false,
+    );
+  }
 
   final String headline;
   NextAction? action;

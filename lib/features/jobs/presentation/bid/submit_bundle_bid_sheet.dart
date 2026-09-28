@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../../../core/config/platform_config.dart';
 import '../../../../core/util/money.dart';
+import '../../../../core/util/service_categories.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../auth/domain/app_user.dart';
@@ -68,8 +69,9 @@ class SubmitBundleBidSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       // Keep the form above the keyboard.
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: _SubmitBundleBidForm(
         bundle: bundle,
         tasks: tasks,
@@ -111,16 +113,28 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
   String? _duration;
   bool _escrowAcknowledged = false;
 
-  /// Set when submit is blocked by the unticked escrow box. This used to be a
-  /// snackbar, which anchors to the underlying route's Scaffold and therefore
-  /// renders *behind* this bottom sheet: the provider tapped Submit, saw
-  /// nothing at all happen, and abandoned their only revenue action.
+  /// Set when submit is blocked by the unticked escrow box - a snackbar here
+  /// would render behind the sheet, so the provider would see nothing happen.
   bool _showEscrowError = false;
 
   /// Set when submit is attempted with no task ticked.
   bool _showNoTaskError = false;
 
   bool get _isUpdate => widget.existing != null;
+
+  /// Judged against the bundle's own snapshot caps, like `awardBundle` does,
+  /// not the live config - falls back to it only when both caps are unset.
+  int get _consolidationCapPct =>
+      widget.bundle.consolidationCapPct == 0 &&
+          widget.bundle.consolidationCapSen == 0
+      ? PlatformConfig.consolidationCapPct
+      : widget.bundle.consolidationCapPct;
+
+  int get _consolidationCapSen =>
+      widget.bundle.consolidationCapPct == 0 &&
+          widget.bundle.consolidationCapSen == 0
+      ? PlatformConfig.consolidationCapSen
+      : widget.bundle.consolidationCapSen;
 
   @override
   void initState() {
@@ -196,9 +210,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
       widget.tasks.where((t) => _ticked[t.id] == true).toList();
 
   int get _tickedTaskTotalSen => _tickedTasks.fold(
-        0,
-        (sum, t) => sum + (parseRmToSen(_prices[t.id]!.text) ?? 0),
-      );
+    0,
+    (sum, t) => sum + (parseRmToSen(_prices[t.id]!.text) ?? 0),
+  );
 
   Future<void> _submit() async {
     final tickedTasks = _tickedTasks;
@@ -219,8 +233,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
       taskPrices: {
         for (final t in tickedTasks) t.id: parseRmToSen(_prices[t.id]!.text)!,
       },
-      bundlePriceSen:
-          bundlePriceText.isEmpty ? null : parseRmToSen(bundlePriceText),
+      bundlePriceSen: bundlePriceText.isEmpty
+          ? null
+          : parseRmToSen(bundlePriceText),
       allOrNothing: _allOrNothing,
       estimatedDuration: _duration!,
       message: _message.text.trim(),
@@ -230,10 +245,13 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
       // the pop below, leaving the sheet up for an extra frame.
       unawaited(HapticFeedback.mediumImpact());
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-            Text(_isUpdate ? 'Bundle bid updated!' : 'Bundle bid submitted!'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isUpdate ? 'Bundle bid updated!' : 'Bundle bid submitted!',
+          ),
+        ),
+      );
     }
   }
 
@@ -243,8 +261,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     if (ok && mounted) {
       unawaited(HapticFeedback.mediumImpact());
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Bundle bid withdrawn.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Bundle bid withdrawn.')));
     }
   }
 
@@ -267,23 +286,26 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               widget.bundle.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
               '${widget.tasks.length} tasks • pick the ones you can do',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 16),
             InfoBanner(
               icon: Icons.info_outline,
               title: 'Bidding on more tasks helps you win',
-              body: 'The requestor is shown the option with the fewest '
+              body:
+                  'The requestor is shown the option with the fewest '
                   'providers whenever it costs at most '
-                  '${PlatformConfig.consolidationCapPct}% and '
-                  '${formatRm(PlatformConfig.consolidationCapSen)} more than '
+                  '$_consolidationCapPct% and '
+                  '${formatRm(_consolidationCapSen)} more than '
                   'the cheapest total - so covering more of these tasks can '
                   'win you the whole bundle.',
             ),
@@ -296,8 +318,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                 padding: const EdgeInsets.only(bottom: 16),
                 child: Text(
                   'Pick at least one task to bid on.',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.error),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
                 ),
               ),
             AppTextField(
@@ -306,8 +329,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               hint: '0.00',
               prefixText: 'RM ',
               helperText: 'Charged only if you win every task you picked',
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               validator: (v) {
                 final text = v?.trim() ?? '';
                 if (text.isEmpty) return null;
@@ -374,8 +398,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                 padding: const EdgeInsets.only(left: 16, top: 4),
                 child: Text(
                   'Please tick this to confirm you understand, then submit.',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.error),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
                 ),
               ),
             const SizedBox(height: 8),
@@ -419,8 +444,19 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
             child: Text(
               'Bid together with ${lotPartners.map((t) => t.title).join(', ')}'
               ' - splitting this group between providers isn\'t allowed.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        if (licenceNoticeFor(task.category) != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 8),
+            child: Text(
+              licenceNoticeFor(task.category)!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         if (ticked)
@@ -431,8 +467,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               label: 'Price if you get only this task (RM)',
               hint: '0.00',
               prefixText: 'RM ',
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               validator: (v) {
                 final sen = parseRmToSen(v);
                 if (sen == null) return 'Enter a price for this task.';

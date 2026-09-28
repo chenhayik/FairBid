@@ -54,6 +54,11 @@ abstract interface class JobRepository {
 
   Stream<List<Job>> watchBundleTasks(String bundleId);
 
+  /// One-shot read of [bundleId]'s tasks, same ordering as
+  /// [watchBundleTasks]. Used where a live query's cached first event could
+  /// silently miss some tasks - e.g. opening the bid sheet.
+  Future<List<Job>> getBundleTasks(String bundleId);
+
   Future<Job?> getById(String id);
 
   /// Streams one job, emitting on every change; null when it doesn't exist.
@@ -81,6 +86,14 @@ abstract interface class JobRepository {
   /// the `logJobPosted`/`logJobStatusChange`/`logMilestoneStatusChange` Cloud
   /// Functions.
   Stream<List<JobEvent>> watchJobEvents(String jobId);
+
+  /// Records the site handover for a task that starts after another, via
+  /// `recordHandover`. Throws [FirebaseFunctionsException] on refusal.
+  Future<void> recordHandover({
+    required String jobId,
+    required String note,
+    List<String> photoUrls,
+  });
 
   /// Streams the jobs on a user's watchlist (Saved Jobs screen), for the
   /// bookmarked ids in [jobIds], newest first. Yields an empty list without
@@ -166,14 +179,22 @@ class FirestoreJobRepository implements JobRepository {
 
   @override
   Stream<List<Job>> watchBundleTasks(String bundleId) {
-    // Needs the (bundleId ASC, bundleOrder ASC) composite index declared in
-    // firestore.indexes.json - an equality filter plus an orderBy on a
-    // different field always does.
+    // Needs the (bundleId ASC, bundleOrder ASC) composite index in
+    // firestore.indexes.json, as any equality filter + orderBy does.
     return _jobs
         .where('bundleId', isEqualTo: bundleId)
         .orderBy('bundleOrder')
         .snapshots()
         .map(_toJobs);
+  }
+
+  @override
+  Future<List<Job>> getBundleTasks(String bundleId) async {
+    final snapshot = await _jobs
+        .where('bundleId', isEqualTo: bundleId)
+        .orderBy('bundleOrder')
+        .get();
+    return _toJobs(snapshot);
   }
 
   @override
@@ -238,6 +259,19 @@ class FirestoreJobRepository implements JobRepository {
               data['at'] = (data['at'] as Timestamp?)?.toDate();
               return JobEvent.fromMap(doc.id, data);
             }).toList());
+  }
+
+  @override
+  Future<void> recordHandover({
+    required String jobId,
+    required String note,
+    List<String> photoUrls = const [],
+  }) async {
+    await _functions.httpsCallable('recordHandover').call<void>({
+      'jobId': jobId,
+      'note': note,
+      'photoUrls': photoUrls,
+    });
   }
 
   @override
@@ -342,6 +376,7 @@ class FirestoreJobRepository implements JobRepository {
     data['cancellationRequestedAt'] =
         (data['cancellationRequestedAt'] as Timestamp?)?.toDate();
     data['cancelledAt'] = (data['cancelledAt'] as Timestamp?)?.toDate();
+    data['releasedAt'] = (data['releasedAt'] as Timestamp?)?.toDate();
     return Job.fromMap(doc.id, data);
   }
 }

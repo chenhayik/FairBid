@@ -128,6 +128,7 @@ class Job {
     this.startsAfterJobId,
     this.gapDays,
     this.bundleTaskCount,
+    this.releasedAt,
   });
 
   final String id;
@@ -202,7 +203,19 @@ class Job {
   /// never written back in [toMap].
   final int? bundleTaskCount;
 
+  /// Set by `awardBundle` when this task was left unawarded (the bundle went
+  /// to a different provider, or no bid covered it). From then on it is an
+  /// ordinary job: it takes ordinary per-job bids rather than the bundle's
+  /// package bids. Server-owned, so it is never written back in [toMap].
+  final DateTime? releasedAt;
+
   bool get isBundleTask => bundleId != null;
+
+  /// Whether this task still bids as part of its bundle's sealed package -
+  /// i.e. it belongs to a bundle and hasn't been released back to ordinary
+  /// bidding. Awarding/cancelling for a live bundle task happen for the whole
+  /// bundle, not the task itself.
+  bool get isLiveBundleTask => bundleId != null && releasedAt == null;
 
   /// Fields written to Firestore. `createdAt`/`bidCount`/`status` for a new job
   /// are set by the repository, so they are omitted here.
@@ -253,8 +266,9 @@ class Job {
         bundleId: m['bundleId'] as String?,
         bundleOrder: (m['bundleOrder'] as num?)?.toInt(),
         lotId: m['lotId'] as String?,
-        startsAfterJobId:m['startsAfterJobId'] as String?,
-        gapDays: (m['gapDays']as num?)?.toInt(),
+        startsAfterJobId: m['startsAfterJobId'] as String?,
+        gapDays: (m['gapDays'] as num?)?.toInt(),
         bundleTaskCount: (m['bundleTaskCount'] as num?)?.toInt(),
+        releasedAt: m['releasedAt'] as DateTime?,
       );
 }

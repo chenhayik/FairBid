@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/config/platform_config.dart';
+import '../../../../core/util/bundle_templates.dart';
 import '../../../../core/util/service_categories.dart';
 import '../../../../core/location/address_hint.dart';
 import '../../../../core/location/region.dart';
@@ -67,18 +68,25 @@ class _PostJobViewState extends State<_PostJobView> {
   DateTime? _deadline;
 
   /// The tasks beyond the first, added with "Add another task". Empty for an
-  /// ordinary single-task job - which is what keeps that path exactly as it
-  /// was: the form only becomes a bundled posting once this has something in
-  /// it.
+  /// ordinary single-task job, keeping that path unchanged until it isn't.
   final List<_TaskFields> _extraTasks = [];
 
   /// The bundled posting's own title and summary, asked for only in bundle
-  /// mode. A bundle is a posting in its own right: this is what a provider
-  /// reads at the top of the bid sheet, above the individual tasks.
+  /// mode - what a provider reads atop the bid sheet, above the tasks.
   final _postingTitle = TextEditingController();
   final _postingSummary = TextEditingController();
 
   bool get _isBundle => _extraTasks.isNotEmpty;
+
+  /// Task 1's template-derived lot/dependency, set only by "Start from a
+  /// template" and dropped together by "Clear template" - never by hand.
+  String? _task1LotId;
+  int? _task1StartsAfterIndex;
+  int? _task1GapDays;
+
+  /// True once a template has filled the tasks below, until "Clear
+  /// template" - drives that action and each task card's dependency note.
+  bool _templateApplied = false;
 
   /// True while the location shown is still the requestor's saved default
   /// (from onboarding) and hasn't been overridden by picking a new one.
@@ -200,15 +208,157 @@ class _PostJobViewState extends State<_PostJobView> {
 
   void _clearDeadline() => setState(() => _deadline = null);
 
-  void _addTask() => setState(() => _extraTasks.add(_TaskFields()));
+  void _addTask() {
+    final added = _TaskFields();
+    setState(() => _extraTasks.add(added));
+    // The button sits halfway down a long form, so without this the tap has
+    // no visible result.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = added.key.currentContext;
+      if (target == null) return;
+      Scrollable.ensureVisible(target,
+          duration: const Duration(milliseconds: 300), alignment: 0.1);
+    });
+  }
 
   void _removeTask(int index) =>
       setState(() => _extraTasks.removeAt(index).dispose());
 
-  /// The posting summary to send when the requestor leaves it blank: the task
-  /// titles, which is what a provider wants to see first anyway.
-  /// `createBundle` requires a description, and this beats making someone
-  /// write out in prose what the form already knows.
+  /// Whether the requestor has typed anything into task 1 or the extra tasks
+  /// already - the "Replace your tasks with this template?" confirmation
+  /// only fires when there's something to lose.
+  bool get _hasTaskContent =>
+      _title.text.trim().isNotEmpty ||
+      _description.text.trim().isNotEmpty ||
+      context.read<PostJobController>().category != null ||
+      _extraTasks.isNotEmpty;
+
+  /// Opens the template picker, confirming first if it would overwrite typed
+  /// content, then applies whichever template was picked.
+  Future<void> _pickTemplate() async {
+    if (_hasTaskContent) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Replace your tasks with this template?'),
+          content: const Text(
+              'The tasks you\'ve typed so far will be replaced.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    final template = await showModalBottomSheet<BundleTemplate>(
+      context: context,
+      builder: (_) => const _TemplateSheet(),
+    );
+    if (template == null || !mounted) return;
+    _applyTemplate(template);
+  }
+
+  /// Replaces task 1 and every extra task with [template]'s tasks (blank
+  /// descriptions, for the requestor to fill in); lot/dependency carries over.
+  void _applyTemplate(BundleTemplate template) {
+    for (final task in _extraTasks) {
+      task.dispose();
+    }
+    final first = template.tasks.first;
+    context.read<PostJobController>().setCategory(first.category);
+    setState(() {
+      _extraTasks.clear();
+      _title.text = first.title;
+      _task1LotId = first.lotId;
+      _task1StartsAfterIndex = first.startsAfter;
+      _task1GapDays = first.gapDays;
+      for (final t in template.tasks.skip(1)) {
+        _extraTasks.add(_TaskFields()
+          ..title.text = t.title
+          ..category = t.category
+          ..lotId = t.lotId
+          ..startsAfterIndex = t.startsAfter
+          ..gapDays = t.gapDays
+          ..fromTemplate = true);
+      }
+      if (_postingTitle.text.trim().isEmpty) {
+        _postingTitle.text = template.name;
+      }
+      _templateApplied = true;
+    });
+  }
+
+  /// Drops every task's lot/dependency link, so the requestor can freely
+  /// remove tasks again. The tasks themselves - titles, categories - stay.
+  void _clearTemplate() {
+    setState(() {
+      _task1LotId = null;
+      _task1StartsAfterIndex = null;
+      _task1GapDays = null;
+      for (final task in _extraTasks) {
+        task.lotId = null;
+        task.startsAfterIndex = null;
+        task.gapDays = null;
+        task.fromTemplate = false;
+      }
+      _templateApplied = false;
+    });
+  }
+
+  /// The title of the task at [index] in the whole task list (0 = task 1),
+  /// for the "Starts after ..." / "Same provider as ..." notes.
+  String _titleAt(int index) {
+    final title =
+        index == 0 ? _title.text.trim() : _extraTasks[index - 1].title.text.trim();
+    return title.isEmpty ? 'Task ${index + 1}' : title;
+  }
+
+  /// The other tasks sharing [lotId], by title, excluding the task at
+  /// [myIndex] itself.
+  List<String> _lotPartnerTitles(String lotId, int myIndex) {
+    final titles = <String>[];
+    if (myIndex != 0 && _task1LotId == lotId) titles.add(_titleAt(0));
+    for (var i = 0; i < _extraTasks.length; i++) {
+      if (myIndex != i + 1 && _extraTasks[i].lotId == lotId) {
+        titles.add(_titleAt(i + 1));
+      }
+    }
+    return titles;
+  }
+
+  /// The read-only dependency note shown under the task at [myIndex], or
+  /// null when it carries no template link.
+  String? _dependencyNote({
+    required int myIndex,
+    String? lotId,
+    int? startsAfterIndex,
+    int? gapDays,
+  }) {
+    final lines = <String>[];
+    if (startsAfterIndex != null) {
+      final after = _titleAt(startsAfterIndex);
+      lines.add(gapDays != null && gapDays > 0
+          ? 'Starts after $after, $gapDays day${gapDays == 1 ? '' : 's'} later'
+          : 'Starts after $after');
+    }
+    if (lotId != null) {
+      final partners = _lotPartnerTitles(lotId, myIndex);
+      if (partners.isNotEmpty) {
+        lines.add('Same provider as: ${partners.join(', ')}');
+      }
+    }
+    return lines.isEmpty ? null : lines.join('\n');
+  }
+
+  /// The posting summary to send when the requestor leaves it blank: the
+  /// task titles, since `createBundle` requires a description regardless.
   String _composedSummary() {
     final titles = [
       _title.text.trim(),
@@ -266,10 +416,8 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
-  /// Posts every task as one bundle. The first task is the form's own
-  /// fields; the rest come from the cards below them. Its budget stays in the
-  /// "When & budget" section, where it has always been, and each added task
-  /// carries its own.
+  /// Posts every task as one bundle. Task 1 is the form's own fields, with
+  /// its budget in "When & budget"; each added task carries its own.
   Future<void> _submitBundle(
       PostJobController controller, JobLocation location) async {
     final summary = _postingSummary.text.trim();
@@ -288,6 +436,9 @@ class _PostJobViewState extends State<_PostJobView> {
             maxSen: parseRmToSen(_budgetMax.text),
             hourly: _hourly,
           ),
+          lotId: _task1LotId,
+          startsAfterIndex: _task1StartsAfterIndex,
+          gapDays: _task1GapDays,
         ),
         for (final task in _extraTasks)
           BundleTaskDraft(
@@ -298,6 +449,9 @@ class _PostJobViewState extends State<_PostJobView> {
               minSen: parseRmToSen(task.budgetMin.text),
               maxSen: parseRmToSen(task.budgetMax.text),
             ),
+            lotId: task.lotId,
+            startsAfterIndex: task.startsAfterIndex,
+            gapDays: task.gapDays,
           ),
       ],
     );
@@ -310,6 +464,60 @@ class _PostJobViewState extends State<_PostJobView> {
 
   void _snack(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
+
+  /// One rough note becomes a whole draft: title, category, description and
+  /// a budget range, filled into whatever the form has left empty.
+  Future<void> _draftFromNote() async {
+    final note = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const _DraftSheet(),
+    );
+    if (note == null || !mounted) return;
+    if (note.length < 3) {
+      _snack('Tell us a bit more first, e.g. "leaking pipe under sink".');
+      return;
+    }
+    final draft = await context.read<PostJobController>().suggestDraft(note);
+    if (!mounted) return;
+    if (draft == null) {
+      _snack('Couldn\'t draft it right now. Fill the form in yourself.');
+      return;
+    }
+    _applyDraft(draft);
+  }
+
+  /// Fills only the fields the requestor has left empty, so a draft can never
+  /// overwrite something they typed themselves.
+  void _applyDraft(JobDraft draft) {
+    final controller = context.read<PostJobController>();
+    final filled = <String>[];
+    if (_title.text.trim().isEmpty) {
+      _title.text = draft.title;
+      filled.add('title');
+    }
+    if (controller.category == null) {
+      controller.setCategory(draft.category);
+      filled.add('category');
+    }
+    if (_description.text.trim().isEmpty) {
+      _description.text = draft.description;
+      filled.add('description');
+    }
+    final minSen = draft.minSen;
+    final maxSen = draft.maxSen;
+    if (minSen != null && maxSen != null &&
+        _budgetMin.text.trim().isEmpty && _budgetMax.text.trim().isEmpty) {
+      _budgetMin.text = (minSen / 100).toStringAsFixed(2);
+      _budgetMax.text = (maxSen / 100).toStringAsFixed(2);
+      filled.add('budget');
+    }
+    setState(() {});
+    _snack(filled.isEmpty
+        ? 'Your form already has all of this, so nothing changed.'
+        : 'Filled in ${filled.join(', ')}. Check each one before posting.');
+  }
 
   /// Gemini description helper: expands whatever rough note is in the
   /// description field into an editable draft. Failures are soft - the form
@@ -331,8 +539,21 @@ class _PostJobViewState extends State<_PostJobView> {
       _snack('Couldn\'t get a suggestion right now.');
       return;
     }
+    final previous = _description.text;
     _description.text = suggestion;
-    _snack('Draft written. Edit it to match your situation.');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Text('Draft written. Edit it to match your situation.'),
+      // persist: false - a SnackBar with an action defaults to persisting
+      // forever, which would queue every later _snack behind it.
+      persist: false,
+      duration: const Duration(seconds: 6),
+      action: SnackBarAction(
+        label: 'Undo',
+        onPressed: () {
+          if (mounted) _description.text = previous;
+        },
+      ),
+    ));
   }
 
   /// Gemini fair-price guide: fetches an indicative RM range shown beside the
@@ -390,29 +611,14 @@ class _PostJobViewState extends State<_PostJobView> {
                   style: theme.textTheme.bodyMedium
                       ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
+                const SizedBox(height: 16),
+                _DraftCard(
+                  busy: controller.assistingDraft,
+                  onTap: controller.isBusy ? null : _draftFromNote,
+                ),
                 const SizedBox(height: 24),
                 if (controller.errorMessage != null)
                   ErrorBanner(controller.errorMessage!),
-
-                // ---- The posting itself (bundle mode only) ----
-                if (_isBundle) ...[
-                  const _SectionHeader('Your posting'),
-                  const SizedBox(height: 12),
-                  AppTextField(
-                    controller: _postingTitle,
-                    label: 'Posting title',
-                    hint: 'e.g. Bathroom refresh',
-                    textInputAction: TextInputAction.next,
-                    validator: (v) => Validators.required(v, 'Posting title'),
-                  ),
-                  AppTextField(
-                    controller: _postingSummary,
-                    label: 'Posting summary (optional)',
-                    hint: 'Leave blank and we\'ll list your tasks.',
-                    maxLines: 3,
-                  ),
-                  const SizedBox(height: 8),
-                ],
 
                 // ---- The basics (required) ----
                 _SectionHeader(_isBundle ? 'Task 1' : 'The basics'),
@@ -420,6 +626,9 @@ class _PostJobViewState extends State<_PostJobView> {
                 Text('Category', style: theme.textTheme.labelLarge),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
+                  // Without this the button takes the width of its widest
+                  // item ("Moving & Delivery") and overflows a narrow phone.
+                  isExpanded: true,
                   initialValue: controller.category,
                   hint: const Text('Select a category...'),
                   items: [
@@ -429,6 +638,14 @@ class _PostJobViewState extends State<_PostJobView> {
                   onChanged: controller.setCategory,
                   validator: (v) => v == null ? 'Pick a category.' : null,
                 ),
+                if (_dependencyNote(
+                      myIndex: 0,
+                      lotId: _task1LotId,
+                      startsAfterIndex: _task1StartsAfterIndex,
+                      gapDays: _task1GapDays,
+                    )
+                    case final note?)
+                  _DependencyNote(text: note),
                 const SizedBox(height: 16),
                 AppTextField(
                   controller: _title,
@@ -457,23 +674,55 @@ class _PostJobViewState extends State<_PostJobView> {
                 // ---- The other tasks of a bundled posting ----
                 for (var i = 0; i < _extraTasks.length; i++)
                   _TaskCard(
+                    key: _extraTasks[i].key,
                     number: i + 2,
                     fields: _extraTasks[i],
-                    onRemove: () => _removeTask(i),
+                    onRemove: _extraTasks[i].fromTemplate
+                        ? null
+                        : () => _removeTask(i),
                     onCategory: (v) =>
                         setState(() => _extraTasks[i].category = v),
+                    note: _dependencyNote(
+                      myIndex: i + 1,
+                      lotId: _extraTasks[i].lotId,
+                      startsAfterIndex: _extraTasks[i].startsAfterIndex,
+                      gapDays: _extraTasks[i].gapDays,
+                    ),
                   ),
                 const SizedBox(height: 8),
-                if (_extraTasks.length + 1 < PlatformConfig.maxBundleTasks)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: controller.isBusy ? null : _addTask,
-                      icon: const Icon(Icons.add),
-                      label: Text(_isBundle
-                          ? 'Add another task'
-                          : 'Add another task to this posting'),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: controller.isBusy ? null : _pickTemplate,
+                      icon: const Icon(Icons.checklist_rtl),
+                      label: const Text('Start from a template'),
                     ),
+                    if (_templateApplied)
+                      TextButton(
+                        onPressed: controller.isBusy ? null : _clearTemplate,
+                        child: const Text('Clear template'),
+                      ),
+                  ],
+                ),
+                if (_extraTasks.length + 1 < PlatformConfig.maxBundleTasks)
+                  Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: controller.isBusy ? null : _addTask,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add another task'),
+                      ),
+                      if (_isBundle)
+                        Expanded(
+                          child: Text(
+                            '${_extraTasks.length + 1} tasks in this posting',
+                            textAlign: TextAlign.end,
+                            maxLines: 2,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ),
+                    ],
                   )
                 else
                   Padding(
@@ -529,10 +778,8 @@ class _PostJobViewState extends State<_PostJobView> {
                   hint: 'JPEG or PNG',
                   busy: controller.uploadingPhoto,
                 ),
-                // A bundle's tasks carry the shared photos, but
-                // `createBundle` writes no video and no service address, so
-                // both are hidden rather than silently dropped. The address
-                // can still be added per task once the posting is up.
+                // `createBundle` writes no video or service address, so both
+                // are hidden in bundle mode (anything already added says so).
                 if (!_isBundle) ...[
                   const SizedBox(height: 16),
                   Text('Video (optional)', style: theme.textTheme.labelLarge),
@@ -549,6 +796,20 @@ class _PostJobViewState extends State<_PostJobView> {
                       icon: Icons.videocam_outlined,
                       hint: 'Up to 60 seconds, under 45 MB',
                       busy: controller.uploadingVideo,
+                    ),
+                ] else ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'These photos are shared by every task. A bundled posting '
+                    'carries no video.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                  if (controller.videoUrl != null)
+                    _DroppedField(
+                      message: 'The video you added will not be posted.',
+                      actionLabel: 'Remove it',
+                      onAction: controller.removeVideo,
                     ),
                 ],
 
@@ -584,19 +845,25 @@ class _PostJobViewState extends State<_PostJobView> {
                     address: controller.pendingAddress,
                     onTap: _pickAddress,
                   )
-                else
+                else ...[
                   Text(
                     'Add the exact address from each task once the posting '
                     'is up.',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
+                  if (controller.pendingAddress != null)
+                    _DroppedField(
+                      message: 'The service address you added will not be '
+                          'posted.',
+                      actionLabel: 'Clear it',
+                      onAction: () => controller.setAddress(null),
+                    ),
+                ],
 
                 // ---- When & budget (optional) ----
                 const SizedBox(height: 24),
-                _SectionHeader(_isBundle
-                    ? 'When (shared) & task 1 budget (optional)'
-                    : 'When & budget (optional)'),
+                const _SectionHeader('When & budget (optional)'),
                 const SizedBox(height: 12),
                 _DeadlineField(
                   deadline: _deadline,
@@ -605,6 +872,9 @@ class _PostJobViewState extends State<_PostJobView> {
                 ),
                 const SizedBox(height: 16),
                 _BudgetFields(
+                  // Every added task carries its own budget in its card, so
+                  // this one has to say whose it is.
+                  label: _isBundle ? 'Budget for task 1' : 'Budget',
                   controller: controller,
                   budgetMin: _budgetMin,
                   budgetMax: _budgetMax,
@@ -612,6 +882,28 @@ class _PostJobViewState extends State<_PostJobView> {
                   onHourly: (v) => setState(() => _hourly = v),
                   onSuggestPrice: controller.isBusy ? null : _suggestPrice,
                 ),
+
+                // ---- Naming the posting (bundle mode only) ----
+                // Last, not first: nothing required may land off-screen when
+                // a task is added, and naming is easier once tasks exist.
+                if (_isBundle) ...[
+                  const SizedBox(height: 24),
+                  const _SectionHeader('Name this posting'),
+                  const SizedBox(height: 12),
+                  AppTextField(
+                    controller: _postingTitle,
+                    label: 'Posting title',
+                    hint: 'e.g. Bathroom refresh',
+                    textInputAction: TextInputAction.next,
+                    validator: (v) => Validators.required(v, 'Posting title'),
+                  ),
+                  AppTextField(
+                    controller: _postingSummary,
+                    label: 'Posting summary (optional)',
+                    hint: 'Leave blank and we\'ll list your tasks.',
+                    maxLines: 3,
+                  ),
+                ],
 
                 const SizedBox(height: 24),
                 PrimaryButton(
@@ -632,15 +924,210 @@ class _PostJobViewState extends State<_PostJobView> {
   }
 }
 
-/// The controllers behind one added task. Kept in a class so adding and
-/// removing a task is a single list operation, and so every field it owns is
-/// disposed with it.
+/// A field a bundled posting cannot carry, with the tap that clears it.
+class _DroppedField extends StatelessWidget {
+  const _DroppedField({
+    required this.message,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  final String message;
+  final String actionLabel;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(Icons.info_outline, size: 16, color: context.fairbid.warningText),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(message,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: context.fairbid.warningText)),
+        ),
+        TextButton(onPressed: onAction, child: Text(actionLabel)),
+      ],
+    );
+  }
+}
+
+/// The assist entry point: one note in, a whole draft post out.
+class _DraftCard extends StatelessWidget {
+  const _DraftCard({required this.busy, required this.onTap});
+
+  final bool busy;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppCard(
+      onTap: busy ? null : onTap,
+      child: Row(
+        children: [
+          Icon(Icons.auto_awesome, color: context.fairbid.verified),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Describe it once, we'll fill this in",
+                    style: theme.textTheme.titleMedium),
+                const SizedBox(height: 2),
+                Text(
+                  'Say what needs doing in your own words. Everything stays '
+                  'yours to edit.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          if (busy)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Collects the rough note, and hands it back to the form.
+class _DraftSheet extends StatefulWidget {
+  const _DraftSheet();
+
+  @override
+  State<_DraftSheet> createState() => _DraftSheetState();
+}
+
+class _DraftSheetState extends State<_DraftSheet> {
+  final _note = TextEditingController();
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('What needs doing?',
+                style: Theme.of(context).textTheme.headlineMedium),
+            const SizedBox(height: 12),
+            AppTextField(
+              controller: _note,
+              label: 'In your own words',
+              hint: 'e.g. kitchen tap drips all night, upstairs unit, I have '
+                  'the washer already',
+              maxLines: 4,
+            ),
+            const SizedBox(height: 8),
+            PrimaryButton(
+              label: 'Draft my post',
+              onPressed: () => Navigator.of(context).pop(_note.text.trim()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Lists [kBundleTemplates] for the requestor to start from; picking one
+/// pops it back to `_pickTemplate`.
+class _TemplateSheet extends StatelessWidget {
+  const _TemplateSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Start from a template', style: theme.textTheme.headlineMedium),
+            const SizedBox(height: 8),
+            for (final template in kBundleTemplates)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(template.name),
+                subtitle: Text('${template.tasks.length} tasks'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).pop(template),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A read-only note under a task card, for the template-derived dependency/
+/// lot links `_PostJobViewState._dependencyNote` computes.
+class _DependencyNote extends StatelessWidget {
+  const _DependencyNote({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.link, size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(text,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The controllers behind one added task, kept in a class so adding/removing
+/// a task is a single list operation and every field is disposed with it.
 class _TaskFields {
+  /// Identifies this card so adding one can scroll it into view.
+  final key = GlobalKey();
+
   final title = TextEditingController();
   final description = TextEditingController();
   final budgetMin = TextEditingController();
   final budgetMax = TextEditingController();
   String? category;
+
+  /// Template-derived, read-only lot/dependency links - see
+  /// `_PostJobViewState._applyTemplate`/`_clearTemplate`.
+  String? lotId;
+  int? startsAfterIndex;
+  int? gapDays;
+
+  /// True while this task still carries its template's links - hides the
+  /// remove button, since deleting it would break a link or split a lot.
+  bool fromTemplate = false;
 
   void dispose() {
     title.dispose();
@@ -650,25 +1137,24 @@ class _TaskFields {
   }
 }
 
-/// One added task of a bundled posting: its own category, title, description
-/// and optional budget - the fields `BundleTaskDraft` carries. Task 1 uses
-/// the form's own fields above, so this starts at "Task 2".
-///
-/// Lots and finish-to-start dependencies are deliberately absent: the spec
-/// keeps them read-only in v1, coming from templates rather than from the
-/// requestor's own editing.
+/// One added task of a bundled posting ("Task 2" on, since Task 1 uses the
+/// form's own fields). Lots/dependencies are read-only in v1 - only ever
+/// from a template ([note]) - so [onRemove] is null on a linked task.
 class _TaskCard extends StatelessWidget {
   const _TaskCard({
+    super.key,
     required this.number,
     required this.fields,
     required this.onRemove,
     required this.onCategory,
+    this.note,
   });
 
   final int number;
   final _TaskFields fields;
-  final VoidCallback onRemove;
+  final VoidCallback? onRemove;
   final ValueChanged<String?> onCategory;
+  final String? note;
 
   @override
   Widget build(BuildContext context) {
@@ -685,17 +1171,19 @@ class _TaskCard extends StatelessWidget {
                   child: Text('Task $number',
                       style: theme.textTheme.titleMedium),
                 ),
-                IconButton(
-                  tooltip: 'Remove task $number',
-                  icon: const Icon(Icons.close),
-                  onPressed: onRemove,
-                ),
+                if (onRemove != null)
+                  IconButton(
+                    tooltip: 'Remove task $number',
+                    icon: const Icon(Icons.close),
+                    onPressed: onRemove,
+                  ),
               ],
             ),
             const SizedBox(height: 8),
             Text('Category', style: theme.textTheme.labelLarge),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               initialValue: fields.category,
               hint: const Text('Select a category...'),
               items: [
@@ -705,6 +1193,7 @@ class _TaskCard extends StatelessWidget {
               onChanged: onCategory,
               validator: (v) => v == null ? 'Pick a category.' : null,
             ),
+            if (note != null) _DependencyNote(text: note!),
             const SizedBox(height: 16),
             AppTextField(
               controller: fields.title,
@@ -908,6 +1397,7 @@ class _AddressField extends StatelessWidget {
 /// always visible.
 class _BudgetFields extends StatelessWidget {
   const _BudgetFields({
+    this.label = 'Budget',
     required this.controller,
     required this.budgetMin,
     required this.budgetMax,
@@ -916,6 +1406,7 @@ class _BudgetFields extends StatelessWidget {
     required this.onSuggestPrice,
   });
 
+  final String label;
   final PostJobController controller;
   final TextEditingController budgetMin;
   final TextEditingController budgetMax;
@@ -936,7 +1427,7 @@ class _BudgetFields extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: Text('Budget', style: theme.textTheme.labelLarge),
+              child: Text(label, style: theme.textTheme.labelLarge),
             ),
             _AssistButton(
               label: 'Suggest a fair range',

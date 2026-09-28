@@ -11,9 +11,11 @@ import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/email_verification_banner.dart';
 import '../../jobs/data/bid_repository.dart';
+import '../../jobs/data/bundle_bid_repository.dart';
 import '../../jobs/data/job_repository.dart';
 import '../../jobs/data/milestone_repository.dart';
 import '../../jobs/domain/bid.dart';
+import '../../jobs/domain/bundle_bid.dart';
 import '../../jobs/domain/job.dart';
 import '../../jobs/domain/milestone.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
@@ -139,7 +141,8 @@ class _ActiveJobsStat extends StatelessWidget {
   }
 }
 
-/// Live count of the provider's still-pending bids.
+/// Live count of the provider's still-pending bids - ordinary per-job bids
+/// plus package bids on a bundle.
 class _PendingBidsStat extends StatelessWidget {
   const _PendingBidsStat({required this.uid});
   final String? uid;
@@ -152,15 +155,30 @@ class _PendingBidsStat extends StatelessWidget {
     return KeyedStreamBuilder<List<Bid>>(
       cacheKey: uid,
       create: () => context.read<BidRepository>().watchMyBids(uid!),
-      builder: (context, snapshot) {
-        if (snapshot.hasError ||
-            snapshot.connectionState == ConnectionState.waiting) {
-          return const StatCard(label: 'Pending Bids', value: '-');
-        }
-        final pending = (snapshot.data ?? [])
-            .where((b) => b.status == BidStatus.pending)
-            .length;
-        return StatCard(label: 'Pending Bids', value: '$pending');
+      builder: (context, bidSnapshot) {
+        return KeyedStreamBuilder<List<BundleBid>>(
+          cacheKey: uid,
+          create: () =>
+              context.read<BundleBidRepository>().watchMyBundleBids(uid!),
+          builder: (context, bundleBidSnapshot) {
+            if (bidSnapshot.hasError ||
+                bundleBidSnapshot.hasError ||
+                bidSnapshot.connectionState == ConnectionState.waiting ||
+                bundleBidSnapshot.connectionState == ConnectionState.waiting) {
+              return const StatCard(label: 'Pending Bids', value: '-');
+            }
+            final pending = (bidSnapshot.data ?? [])
+                .where((b) => b.status == BidStatus.pending)
+                .length;
+            final pendingBundles = (bundleBidSnapshot.data ?? [])
+                .where((b) => b.status == BundleBidStatus.pending)
+                .length;
+            return StatCard(
+              label: 'Pending Bids',
+              value: '${pending + pendingBundles}',
+            );
+          },
+        );
       },
     );
   }

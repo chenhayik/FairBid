@@ -57,8 +57,12 @@ class _AppTextFieldState extends State<AppTextField> {
         children: [
           Row(
             children: [
-              Text(widget.label, style: theme.textTheme.labelLarge),
-              const Spacer(),
+              // Expanded: the label takes all the free width (wrapping
+              // rather than overflowing a narrow screen), pushing any
+              // trailing widget flush to the row's right edge.
+              Expanded(
+                child: Text(widget.label, style: theme.textTheme.labelLarge),
+              ),
               if (widget.labelTrailing != null) widget.labelTrailing!,
             ],
           ),

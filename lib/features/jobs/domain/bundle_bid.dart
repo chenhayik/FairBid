@@ -7,31 +7,37 @@ enum BundleBidStatus {
   accepted,
   partlyAccepted,
   rejected,
-  withdrawn;
+  withdrawn,
+
+  /// The bundle was cancelled while this bid was still pending.
+  closed;
 
   String get storage => switch (this) {
-        BundleBidStatus.pending => 'pending',
-        BundleBidStatus.accepted => 'accepted',
-        BundleBidStatus.partlyAccepted => 'partly_accepted',
-        BundleBidStatus.rejected => 'rejected',
-        BundleBidStatus.withdrawn => 'withdrawn',
-      };
+    BundleBidStatus.pending => 'pending',
+    BundleBidStatus.accepted => 'accepted',
+    BundleBidStatus.partlyAccepted => 'partly_accepted',
+    BundleBidStatus.rejected => 'rejected',
+    BundleBidStatus.withdrawn => 'withdrawn',
+    BundleBidStatus.closed => 'closed',
+  };
 
   String get label => switch (this) {
-        BundleBidStatus.pending => 'Pending',
-        BundleBidStatus.accepted => 'Accepted',
-        BundleBidStatus.partlyAccepted => 'Partly accepted',
-        BundleBidStatus.rejected => 'Rejected',
-        BundleBidStatus.withdrawn => 'Withdrawn',
-      };
+    BundleBidStatus.pending => 'Pending',
+    BundleBidStatus.accepted => 'Accepted',
+    BundleBidStatus.partlyAccepted => 'Partly accepted',
+    BundleBidStatus.rejected => 'Rejected',
+    BundleBidStatus.withdrawn => 'Withdrawn',
+    BundleBidStatus.closed => 'Closed',
+  };
 
   static BundleBidStatus fromStorage(String? value) => switch (value) {
-        'accepted' => BundleBidStatus.accepted,
-        'partly_accepted' => BundleBidStatus.partlyAccepted,
-        'rejected' => BundleBidStatus.rejected,
-        'withdrawn' => BundleBidStatus.withdrawn,
-        _ => BundleBidStatus.pending,
-      };
+    'accepted' => BundleBidStatus.accepted,
+    'partly_accepted' => BundleBidStatus.partlyAccepted,
+    'rejected' => BundleBidStatus.rejected,
+    'withdrawn' => BundleBidStatus.withdrawn,
+    'closed' => BundleBidStatus.closed,
+    _ => BundleBidStatus.pending,
+  };
 }
 
 /// A provider's package bid on a bundle. Stored at
@@ -60,7 +66,9 @@ class BundleBid {
     required this.estimatedDuration,
     this.message = '',
     this.status = BundleBidStatus.pending,
+    this.bundleTitle = 'Bundle',
     this.createdAt,
+    this.updatedAt,
   });
 
   /// The parent bundle's id (the doc's path, not a stored field).
@@ -98,7 +106,16 @@ class BundleBid {
   final String estimatedDuration;
   final String message;
   final BundleBidStatus status;
+
+  /// Snapshot of the bundle's title at bid time, stamped server-side so the
+  /// provider's Pending Bids list can show which bundle this is without a
+  /// second read of the bundle document.
+  final String bundleTitle;
   final DateTime? createdAt;
+
+  /// When this bid was last submitted or edited. Unlike [createdAt] - which
+  /// stays fixed across edits - this moves every time `submitBundleBid` runs.
+  final DateTime? updatedAt;
 
   /// How many tasks this bid covers.
   int get taskCount => taskPrices.length;
@@ -144,7 +161,9 @@ class BundleBid {
       estimatedDuration: m['estimatedDuration'] as String? ?? '',
       message: m['message'] as String? ?? '',
       status: BundleBidStatus.fromStorage(m['status'] as String?),
+      bundleTitle: m['bundleTitle'] as String? ?? 'Bundle',
       createdAt: m['createdAt'] as DateTime?,
+      updatedAt: m['updatedAt'] as DateTime?,
     );
   }
 }

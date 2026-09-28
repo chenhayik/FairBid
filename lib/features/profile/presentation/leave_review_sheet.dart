@@ -22,12 +22,17 @@ class LeaveReviewSheet extends StatefulWidget {
     required this.reviewer,
     required this.revieweeId,
     required this.revieweeName,
+    this.bundleId,
   });
 
   final Job job;
   final AppUser reviewer;
   final String revieweeId;
   final String revieweeName;
+
+  /// The bundle to key the review by, when [job] is still a live bundle
+  /// task; null reviews it by job id as today.
+  final String? bundleId;
 
   /// Opens the sheet. Resolves to `true` once a review exists for this job
   /// (freshly left, or already present), or `null`/`false` if dismissed.
@@ -37,6 +42,7 @@ class LeaveReviewSheet extends StatefulWidget {
     required AppUser reviewer,
     required String revieweeId,
     required String revieweeName,
+    String? bundleId,
   }) {
     return showModalBottomSheet<bool>(
       context: context,
@@ -47,6 +53,7 @@ class LeaveReviewSheet extends StatefulWidget {
         reviewer: reviewer,
         revieweeId: revieweeId,
         revieweeName: revieweeName,
+        bundleId: bundleId,
       ),
     );
   }
@@ -87,9 +94,11 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
       jobTitle: widget.job.title,
     );
     try {
-      await context
-          .read<ReviewRepository>()
-          .leaveReview(revieweeId: widget.revieweeId, review: review);
+      await context.read<ReviewRepository>().leaveReview(
+            revieweeId: widget.revieweeId,
+            review: review,
+            bundleId: widget.bundleId,
+          );
       unawaited(HapticFeedback.mediumImpact());
       if (!mounted) return;
       Navigator.of(context).pop(true);

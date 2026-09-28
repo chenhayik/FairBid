@@ -43,6 +43,12 @@ abstract interface class BundleBidRepository {
   /// read rather than a query - mirrors `BidRepository.watchMyBid`.
   Stream<BundleBid?> watchMyBundleBid(String bundleId, String providerId);
 
+  /// One-shot read of the signed-in provider's own bid on [bundleId], or
+  /// null. Used where a live stream's first event isn't safe to trust - e.g.
+  /// opening the bid sheet - so the caller gets a single up-to-date snapshot
+  /// rather than whatever the local cache serves first.
+  Future<BundleBid?> getMyBundleBid(String bundleId, String providerId);
+
   /// Streams every bid on [bundleId] - the requestor's view of their own
   /// bundle. Mirrors `BidRepository.watchBids`.
   Stream<List<BundleBid>> watchBundleBids(String bundleId);
@@ -60,8 +66,8 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
   FirestoreBundleBidRepository({
     FirebaseFirestore? firestore,
     FirebaseFunctions? functions,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        _functions = functions ?? FirebaseFunctions.instance;
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
+       _functions = functions ?? FirebaseFunctions.instance;
 
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
@@ -119,10 +125,16 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
   }
 
   @override
+  Future<BundleBid?> getMyBundleBid(String bundleId, String providerId) async {
+    final doc = await _bundleBids(bundleId).doc(providerId).get();
+    return doc.exists ? _fromDoc(bundleId, doc) : null;
+  }
+
+  @override
   Stream<List<BundleBid>> watchBundleBids(String bundleId) {
-    return _bundleBids(bundleId).snapshots().map((snapshot) => [
-          for (final doc in snapshot.docs) _fromDoc(bundleId, doc),
-        ]);
+    return _bundleBids(bundleId).snapshots().map(
+      (snapshot) => [for (final doc in snapshot.docs) _fromDoc(bundleId, doc)],
+    );
   }
 
   @override
@@ -132,11 +144,13 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
         .where('providerId', isEqualTo: providerId)
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .map((snapshot) => [
-              for (final doc in snapshot.docs)
-                // A bundle bid's parent's parent is its bundle document.
-                _fromDoc(doc.reference.parent.parent!.id, doc),
-            ]);
+        .map(
+          (snapshot) => [
+            for (final doc in snapshot.docs)
+              // A bundle bid's parent's parent is its bundle document.
+              _fromDoc(doc.reference.parent.parent!.id, doc),
+          ],
+        );
   }
 
   /// Normalises Firestore Timestamps to DateTime before building the
@@ -147,6 +161,7 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
   ) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});
     data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
+    data['updatedAt'] = (data['updatedAt'] as Timestamp?)?.toDate();
     return BundleBid.fromMap(bundleId, doc.id, data);
   }
 }

@@ -25,7 +25,6 @@ class BundleRejectedException implements Exception {
 /// keep using [JobRepository] - including `watchBundleTasks`, which lives
 /// there because it returns [Job]s.
 abstract interface class BundleRepository {
-
   Future<String> create({
     required String title,
     required String description,
@@ -54,6 +53,14 @@ abstract interface class BundleRepository {
   /// from the stored bids. Empty when no bid covers anything yet.
   Future<List<BundleAwardOption>> previewAward(String bundleId);
 
+  /// Prices the requestor's own picks (task id -> provider id) through
+  /// `previewBundleAward`. Returns the priced pick (key `'manual'`) or, when
+  /// the server refuses it, the problems it found instead - never both.
+  Future<({BundleAwardOption? option, List<String> problems})> priceManualAward(
+    String bundleId,
+    Map<String, String> providerByTaskId,
+  );
+
   /// Awards the bundle: every task in [providerByTaskId] goes to that
   /// provider, the rest are released back to ordinary bidding.
   ///
@@ -69,13 +76,12 @@ abstract interface class BundleRepository {
   });
 }
 
-
 class FirestoreBundleRepository implements BundleRepository {
   FirestoreBundleRepository({
     FirebaseFirestore? firestore,
     FirebaseFunctions? functions,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        _functions = functions ?? FirebaseFunctions.instance;
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
+       _functions = functions ?? FirebaseFunctions.instance;
 
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
@@ -121,7 +127,6 @@ class FirestoreBundleRepository implements BundleRepository {
       'description': description,
       'location': location.toMap(),
       'photoUrls': photoUrls,
-
       if (deadline != null) 'deadlineMillis': deadline.millisecondsSinceEpoch,
       'tasks': [for (final task in tasks) task.toMap()],
     });
@@ -149,17 +154,23 @@ class FirestoreBundleRepository implements BundleRepository {
 
   @override
   Future<void> cancelBundle(String id) async {
-    await _functions.httpsCallable('cancelBundle').call<void>({
-      'bundleId': id,
-    });
+    try {
+      await _functions.httpsCallable('cancelBundle').call<void>({
+        'bundleId': id,
+      });
+    } on FirebaseFunctionsException catch (e) {
+      throw BundleRejectedException(
+        e.message ?? 'Could not cancel the bundle. Please try again.',
+      );
+    }
   }
 
   @override
   Future<List<BundleAwardOption>> previewAward(String bundleId) async {
     try {
-      final result = await _functions
-          .httpsCallable('previewBundleAward')
-          .call({'bundleId': bundleId});
+      final result = await _functions.httpsCallable('previewBundleAward').call({
+        'bundleId': bundleId,
+      });
       final options = (result.data as Map)['options'] as List? ?? const [];
       return [
         for (final option in options.whereType<Map>())
@@ -169,6 +180,31 @@ class FirestoreBundleRepository implements BundleRepository {
       throw BundleRejectedException(
         e.message ?? 'Could not work out the award options.',
       );
+    }
+  }
+
+  @override
+  Future<({BundleAwardOption? option, List<String> problems})> priceManualAward(
+    String bundleId,
+    Map<String, String> providerByTaskId,
+  ) async {
+    try {
+      final result = await _functions.httpsCallable('previewBundleAward').call({
+        'bundleId': bundleId,
+        'providerByTaskId': providerByTaskId,
+      });
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final manual = data['manual'];
+      final problems =
+          (data['problems'] as List?)?.whereType<String>().toList() ?? const [];
+      return (
+        option: manual is Map
+            ? BundleAwardOption.fromMap(Map<String, dynamic>.from(manual))
+            : null,
+        problems: problems,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      throw BundleRejectedException(e.message ?? 'Could not price your pick.');
     }
   }
 

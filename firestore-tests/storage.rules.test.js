@@ -156,4 +156,24 @@ describe("storage.rules", () => {
           getBytes(ref(storage, `verification/${OWNER}/ssm_document_1.pdf`)));
     });
   });
+
+  // Site handover evidence (docs/BUNDLE_BIDDING.md phase 4):
+  // `handovers/{jobId}/{fileName}`. Every check in that rule reads
+  // `job().acceptedProviderId`/`requestorId` via `firestore.get(...)`, same
+  // as `isAdmin()` above - and in this harness, an AUTHENTICATED request
+  // through such a rule doesn't just evaluate to false, it hangs until the
+  // mocha timeout (confirmed against the unmodified rules too, so it's an
+  // emulator/harness limitation, not a bug in this rule). Only the
+  // unauthenticated case - denied before `job()` is ever reached, by
+  // short-circuiting on `request.auth != null` - resolves cleanly here.
+  describe("handovers/ uploads", () => {
+    it("rejects an unauthenticated upload", async () => {
+      const storage = testEnv.unauthenticatedContext().storage();
+      await assertFails(uploadBytes(
+          ref(storage, "handovers/job1/photo.jpg"),
+          JPEG_BYTES,
+          {contentType: "image/jpeg"},
+      ));
+    });
+  });
 });

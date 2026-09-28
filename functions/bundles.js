@@ -1,48 +1,29 @@
 // Bundled job postings - phases 1 and 2 of docs/BUNDLE_BIDDING.md.
-//
-// A bundle is one posting that groups 2-6 related tasks. bundles/{bundleId}
-// holds the shared fields (requestor, title, location, photos, deadline).
-// Each task is an ordinary job in jobs/{jobId} tagged with
-// bundleId/bundleOrder, so nothing downstream (escrow, milestones, chat,
-// disputes, cancellation) needs to learn a new shape - an awarded task is
-// still a one-provider job.
-//
-// createBundle is the only writer of either collection. firestore.rules
-// enforces that: client writes to bundles/ are denied, and a client-created
-// job carrying bundle fields is rejected. So the cross-references authored
-// here (task order, lot membership, dependencies, consolidation-cap
-// snapshot) are exactly what the phase-3 award engine can trust.
-//
-// Lives in its own module because index.js is already long; re-exported
-// there the same way ssm.js is.
+// A bundle groups 2-6 tasks, each stored as an ordinary job (tagged
+// bundleId/bundleOrder) so nothing downstream needs a new shape.
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-// Imported modularly rather than via admin.firestore.* - see ssm.js: the
-// legacy accessor reads as undefined once the Functions emulator proxies
-// the admin SDK.
+// Imported modularly rather than via admin.firestore.* - the legacy
+// accessor reads undefined once the Functions emulator proxies the SDK.
 const {FieldValue, Timestamp} = require("firebase-admin/firestore");
+const {notifyUser, IMG_PREFIX} = require("./common");
 
-// Bundle size limits. Must match PlatformConfig.minBundleTasks /
-// maxBundleTasks (lib/core/config/platform_config.dart). Upper bound keeps
-// the phase-3 award search cheap: the exact solver walks 2^n subsets, so
-// six tasks is 64 states.
+// Bundle size limits; must match PlatformConfig.min/maxBundleTasks. Upper
+// bound keeps the phase-3 award search (2^n subsets) cheap.
 const MIN_BUNDLE_TASKS = 2;
 const MAX_BUNDLE_TASKS = 6;
 
 // Consolidation cap, snapshotted onto every bundle at creation so an award
-// is judged by the rule shown at posting time, not whatever the constant
-// says later. Must match PlatformConfig.consolidationCapPct /
-// consolidationCapSen. First read in phase 3 (previewBundleAward).
+// is judged by the rule shown at posting time. Must match PlatformConfig.
 const CONSOLIDATION_CAP_PCT = 5;
 const CONSOLIDATION_CAP_SEN = 50000; // RM 500
 
 // Same per-amount ceiling the bid rules enforce: RM 1,000,000.
 const MAX_AMOUNT_SEN = 100000000;
 
-// Copy of kServiceCategories (lib/core/util/service_categories.dart). A
-// task with a category outside this list would never show in the feed's
-// category filter, so it's checked here rather than trusting the form.
+// Copy of kServiceCategories. A task outside this list would never show in
+// the feed's category filter, so it's checked here rather than trusted.
 const CATEGORIES = [
   "Cleaning", "Plumbing", "Electrical", "Aircon Servicing", "Home Repair",
   "Moving & Delivery", "Tutoring", "IT & Tech Support", "Design & Creative",
@@ -126,9 +107,8 @@ function checkPhotos(raw) {
   return raw;
 }
 
-// Validates the task list and returns one clean object per task.
-// startsAfterIndex stays an index here; the caller resolves it to a real
-// job id once the ids exist.
+// Validates the task list; startsAfterIndex stays an index here, resolved
+// to a real job id by the caller once ids exist.
 function checkTasks(list) {
   if (!Array.isArray(list) || list.length < MIN_BUNDLE_TASKS ||
       list.length > MAX_BUNDLE_TASKS) {
@@ -147,8 +127,7 @@ function checkTasks(list) {
       throw bad(`${position} has a budget range that is back to front.`);
     }
     // Dependencies are finish-to-start and may only point at an earlier
-    // task. That rule alone makes a cycle impossible - no graph walk
-    // needed, and the stored order is always a valid schedule.
+    // task, so a cycle is impossible and no graph walk is needed.
     const after = t.startsAfterIndex;
     if (after != null &&
         (!Number.isInteger(after) || after < 0 || after >= i)) {
@@ -177,9 +156,8 @@ function checkTasks(list) {
   });
 }
 
-// Validates a createBundle payload and returns the clean values to store.
-// Pure - no Firestore, no auth - so bundles.test.js can pin every rule
-// without an emulator.
+// Validates a createBundle payload; pure (no Firestore/auth) so
+// bundles.test.js can pin every rule without an emulator.
 function validateBundle(data) {
   const payload = data || {};
   return {
@@ -193,12 +171,8 @@ function validateBundle(data) {
 }
 
 // Creates one bundled posting: the bundles/{bundleId} doc plus one ordinary
-// job per task, in a single atomic batch.
-//
-// A batch rather than a transaction: every write creates a brand-new
-// document, and the one thing read here (the caller's profile) is never
-// written back, so there's no read-modify-write to protect. acceptBid needs
-// a transaction because it re-reads a wallet balance it then changes.
+// job per task, in a single atomic batch (no read-modify-write to protect,
+// unlike acceptBid which re-reads a balance it then changes).
 exports.createBundle = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const {title, description, location, photoUrls, deadline, tasks} =
@@ -217,9 +191,8 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
         "a mistake.");
   }
 
-  // Ids are minted locally - .doc() with no argument allocates one without
-  // a round trip - so a task can reference the job id of the task it
-  // follows before anything is written.
+  // Ids are minted locally (.doc() with no argument, no round trip) so a
+  // task can reference the job id it follows before anything is written.
   const bundleRef = db.collection("bundles").doc();
   const jobRefs = tasks.map(() => db.collection("jobs").doc());
   const requestor = {
@@ -235,9 +208,8 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
       title: task.title,
       description: task.description,
       category: task.category,
-      // Copies of the bundle's shared fields, so a task renders in the
-      // feed, Saved Jobs and job detail as an ordinary job - no bundle
-      // lookup needed.
+      // Copies of the bundle's shared fields, so a task renders as an
+      // ordinary job everywhere - no bundle lookup needed.
       location,
       photoUrls,
       ...(deadline ? {deadline} : {}),
@@ -295,9 +267,8 @@ function docId(value, name) {
 }
 
 /**
- * Whether a bundle still takes bids: open AND not past its deadline. The
- * bundle-level twin of the `jobBiddingOpen` rule, so a late bid cannot sneak
- * in during the lag before the expiry sweep runs.
+ * Whether a bundle still takes bids: open AND not past its deadline, the
+ * bundle-level twin of the `jobBiddingOpen` rule.
  */
 function bundleBiddingOpen(bundle) {
   return bundle.status === "open" &&
@@ -305,10 +276,8 @@ function bundleBiddingOpen(bundle) {
 }
 
 /**
- * The provider's price for each task they picked: a map of job id to whole
- * sen. Validated here rather than in firestore.rules because the rules
- * language cannot walk a map's entries - which is the whole reason a bundle
- * bid is written by this callable instead of straight from the app.
+ * The provider's price per picked task (job id to whole sen). Validated
+ * here, not in rules, because the rules language cannot walk a map's entries.
  */
 function checkTaskPrices(raw) {
   const prices = raw == null ? {} : raw;
@@ -335,11 +304,29 @@ function taskTotal(taskPrices) {
   return Object.values(taskPrices).reduce((sum, sen) => sum + sen, 0);
 }
 
+/** Splits a bundle price across tasks in proportion to their own prices. */
+// The last task absorbs the rounding remainder so amounts add up exactly.
+// Lives here (not bundle_award.js) because validateBundleBid needs it too.
+function splitBundlePrice(taskPrices, bundlePriceSen) {
+  const taskIds = Object.keys(taskPrices);
+  const priceTotal = taskIds.reduce((sum, id) => sum + taskPrices[id], 0);
+  const amounts = {};
+  let allocated = 0;
+  taskIds.forEach((taskId, i) => {
+    if (i === taskIds.length - 1) {
+      amounts[taskId] = bundlePriceSen - allocated;
+      return;
+    }
+    const share = Math.floor(bundlePriceSen * taskPrices[taskId] / priceTotal);
+    amounts[taskId] = share;
+    allocated += share;
+  });
+  return amounts;
+}
+
 /**
- * Validates a `submitBundleBid` payload and returns the clean values to
- * store. Pure - no Firestore, no auth - so bundles.test.js can pin every rule
- * without an emulator. Everything that needs the bundle itself (which tasks
- * it has, its lots, whether it still takes bids) is checked in the callable.
+ * Validates a `submitBundleBid` payload; pure so bundles.test.js can pin
+ * every rule without an emulator. Bundle-dependent checks live in the callable.
  */
 function validateBundleBid(data) {
   const payload = data || {};
@@ -350,12 +337,18 @@ function validateBundleBid(data) {
     if (bundlePriceSen === 0) {
       throw bad("Your bundle price must be above RM 0.");
     }
-    // A bundle price is the discount for winning the whole bid. At or above
-    // the sum of the task prices it is not a discount at all, and the phase-3
-    // award engine would never pick it - so it is a slip worth catching here.
+    // A bundle price at or above the task prices summed isn't a discount,
+    // and the phase-3 award engine would never pick it - worth catching here.
     if (bundlePriceSen >= taskTotalSen) {
       throw bad("Your bundle price must be lower than your task prices " +
           "added up.");
+    }
+    // A task whose share rounds below 1 sen would be awarded at RM 0, and
+    // proposeMilestonePlan requires every milestone above zero.
+    const shares = splitBundlePrice(taskPrices, bundlePriceSen);
+    if (Object.values(shares).some((sen) => sen < 1)) {
+      throw bad("Your bundle price is too low to share across every task " +
+          "you picked.");
     }
   }
   return {
@@ -370,9 +363,8 @@ function validateBundleBid(data) {
 }
 
 /**
- * Tasks sharing a `lotId` are bid on and awarded together (waterproofing then
- * tiling, say), so a bid that picks one of them must pick all of them.
- * Checked against the task documents, because only they carry the lot.
+ * Tasks sharing a `lotId` are bid on and awarded together, so a bid that
+ * picks one of them must pick all of them. Checked against the task docs.
  */
 function checkLots(taskSnaps, picked) {
   const lots = {};
@@ -388,12 +380,6 @@ function checkLots(taskSnaps, picked) {
           "every task in the group, or none of them.");
     }
   });
-}
-
-/** Loads a bundle's task jobs, in `taskIds` order. */
-function readTasks(db, taskIds) {
-  if (taskIds.length === 0) return Promise.resolve([]);
-  return db.getAll(...taskIds.map((jobId) => db.doc(`jobs/${jobId}`)));
 }
 
 /** The caller's profile, rejected unless they may bid right now. */
@@ -415,61 +401,64 @@ async function biddingProvider(db, uid) {
 
 /**
  * One provider's sealed package bid on a bundle, stored at
- * `bundles/{bundleId}/bundleBids/{uid}` - written here and nowhere else,
- * because firestore.rules denies every client write to it.
- *
- * Why a callable rather than a rules-checked write like an ordinary per-job
- * bid: the prices live in a map, one entry per task, and the rules language
- * cannot walk a map's entries. A rule could check that the map's KEYS are
- * tasks of this bundle and nothing more, leaving every price itself
- * unchecked - and the phase-3 award engine moves real money against those
- * numbers. Doing it here also lets the server stamp the Trust Score snapshot
- * from the profile rather than pin a value the client sent, and keeps each
- * task's `bidCount` in step with the bid inside one transaction.
- *
- * A transaction, not a batch (unlike createBundle): re-bidding reads the
- * provider's existing bid to see which tasks joined or left it, then writes
- * counters worked out from what it read.
+ * `bundles/{bundleId}/bundleBids/{uid}` - written here, not by rules, since
+ * the rules language cannot validate a map of per-task prices. A transaction
+ * (not a batch): re-bidding reads the existing bid to adjust bidCount.
  */
 exports.submitBundleBid = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
   const bid = validateBundleBid(data);
+  const picked = Object.keys(bid.taskPrices);
 
   const db = admin.firestore();
-  const [user, bundleSnap] = await Promise.all([
-    biddingProvider(db, uid),
-    db.doc(`bundles/${bundleId}`).get(),
-  ]);
-  const bundle = bundleSnap.data();
-  if (!bundle) {
+  const user = await biddingProvider(db, uid);
+
+  const bundleRef = db.doc(`bundles/${bundleId}`);
+  const bidRef = db.doc(`bundles/${bundleId}/bundleBids/${uid}`);
+  const providerName = user.displayName || "Provider";
+
+  // Cheap pre-check outside the transaction so an obviously-doomed call
+  // fails fast; the authoritative checks repeat inside the transaction below.
+  const cheapBundle = (await bundleRef.get()).data();
+  if (!cheapBundle) {
     throw new functions.https.HttpsError(
         "not-found", "That bundle no longer exists.");
   }
-  if (bundle.requestorId === uid) {
-    throw new functions.https.HttpsError(
-        "permission-denied", "You cannot bid on your own bundle.");
-  }
-  if (!bundleBiddingOpen(bundle)) {
-    throw new functions.https.HttpsError(
-        "failed-precondition", "This bundle is no longer taking bids.");
-  }
 
-  const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
-  const picked = Object.keys(bid.taskPrices);
-  if (picked.some((jobId) => !taskIds.includes(jobId))) {
-    throw bad("Those tasks are not part of this bundle.");
-  }
-  const taskSnaps = await readTasks(db, taskIds);
-  if (taskSnaps.some((snap) =>
-    picked.includes(snap.id) && snap.data()?.status !== "open")) {
-    throw bad("One of the tasks you picked is no longer open.");
-  }
-  checkLots(taskSnaps, picked);
-
-  const bidRef = db.doc(`bundles/${bundleId}/bundleBids/${uid}`);
   await db.runTransaction(async (tx) => {
-    const existing = await tx.get(bidRef);
+    // The bundle must be read first: its taskIds turn `picked` into task
+    // refs, and a transaction may not read after it has written.
+    const bundleSnap = await tx.get(bundleRef);
+    const bundle = bundleSnap.data();
+    if (!bundle) {
+      throw new functions.https.HttpsError(
+          "not-found", "That bundle no longer exists.");
+    }
+    if (bundle.requestorId === uid) {
+      throw new functions.https.HttpsError(
+          "permission-denied", "You cannot bid on your own bundle.");
+    }
+    if (!bundleBiddingOpen(bundle)) {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "This bundle is no longer taking bids.");
+    }
+
+    const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
+    if (picked.some((jobId) => !taskIds.includes(jobId))) {
+      throw bad("Those tasks are not part of this bundle.");
+    }
+
+    const taskRefs = taskIds.map((jobId) => db.doc(`jobs/${jobId}`));
+    const [existing, ...taskSnaps] = taskRefs.length === 0 ?
+        [await tx.get(bidRef)] :
+        await tx.getAll(bidRef, ...taskRefs);
+    if (taskSnaps.some((snap) =>
+      picked.includes(snap.id) && snap.data()?.status !== "open")) {
+      throw bad("One of the tasks you picked is no longer open.");
+    }
+    checkLots(taskSnaps, picked);
+
     const before = existing.exists ?
         Object.keys(existing.data().taskPrices || {}) :
         [];
@@ -481,7 +470,7 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
     }
     tx.set(bidRef, {
       providerId: uid,
-      providerName: user.displayName || "Provider",
+      providerName,
       ...(user.profilePhotoUrl ? {providerPhotoUrl: user.profilePhotoUrl} : {}),
       // Stamped from the profile, never from the payload: a provider must not
       // be able to dress their own bid in a better Trust Score.
@@ -494,8 +483,16 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
       allOrNothing: bid.allOrNothing,
       estimatedDuration: bid.estimatedDuration,
       message: bid.message,
+      // So the provider's Pending Bids list can show which bundle this is
+      // without reading the bundle document itself.
+      bundleTitle: bundle.title || "Bundle",
       status: "pending",
-      createdAt: FieldValue.serverTimestamp(),
+      // An edit keeps the original submission time; only a brand-new bid
+      // gets a fresh createdAt.
+      createdAt: existing.exists ?
+          existing.data().createdAt :
+          FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     // Each task counts the bids that cover it, so only the tasks that joined
     // or left this bid move - re-bidding the same tasks changes nothing.
@@ -503,6 +500,18 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
       tx.update(db.doc(`jobs/${jobId}`), {bidCount: FieldValue.increment(1)}));
     before.filter((jobId) => !picked.includes(jobId)).forEach((jobId) =>
       tx.update(db.doc(`jobs/${jobId}`), {bidCount: FieldValue.increment(-1)}));
+
+    // Only a brand-new bid is announced - an edit doesn't need a second
+    // notification, and bids are sealed, so the price never appears here.
+    if (!existing.exists) {
+      notifyUser(tx, bundle.requestorId, {
+        type: "bid_received",
+        title: "New bid on your bundle",
+        body: `${providerName} bid on ${picked.length} task(s) of ` +
+            `"${bundle.title || "a bundle"}".`,
+        route: `/bundles/${bundleId}`,
+      });
+    }
   });
 
   return {
@@ -515,13 +524,8 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
 
 /**
  * Withdraws the caller's own bundle bid and gives back the `bidCount` it
- * added to every task it covered.
- *
- * Allowed only while the bundle still takes bids - the same window in which
- * the bid could be edited. Once bidding closes the requestor is choosing
- * between the bids in front of them, and one vanishing mid-decision would
- * pull a task out of an award they were about to make. A bid that has already
- * been decided is refused for the same reason, with a clearer message.
+ * added. Allowed only while bidding is open - once closed, a vanishing bid
+ * could pull a task out of an award the requestor was about to make.
  */
 exports.withdrawBundleBid = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -559,14 +563,10 @@ exports.withdrawBundleBid = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Cancels an open bundle and every task still open under it, in one batch.
- *
- * It has to be one action. A provider bids on the package, so letting the
- * requestor cancel a single task would break an all-or-nothing bid or split a
- * lot - which is why firestore.rules freezes a task's status while its bundle
- * is open, and why this runs on the server. Tasks that have already left
- * 'open' (an awarded one, or one the expiry sweep closed) are left alone, and
- * the existing `logJobStatusChange` trigger writes each task's timeline entry.
+ * Cancels an open bundle and every still-open task under it, plus every
+ * pending bid, in one transaction - cancelling a single task would break an
+ * all-or-nothing bid or split a lot. Runs as a transaction (not a batch) so
+ * it can't race awardBundle moving the same tasks to 'in_progress'.
  */
 exports.cancelBundle = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -574,45 +574,287 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
 
   const db = admin.firestore();
   const bundleRef = db.doc(`bundles/${bundleId}`);
-  const bundle = (await bundleRef.get()).data();
-  if (!bundle) {
-    throw new functions.https.HttpsError(
-        "not-found", "That bundle no longer exists.");
-  }
-  if (bundle.requestorId !== uid) {
-    throw new functions.https.HttpsError(
-        "permission-denied",
-        "Only the requestor who posted this bundle can cancel it.");
-  }
-  if (bundle.status !== "open") {
-    throw new functions.https.HttpsError(
-        "failed-precondition", "This bundle is no longer open.");
-  }
 
-  const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
-  const taskSnaps = await readTasks(db, taskIds);
-  const batch = db.batch();
-  let cancelled = 0;
-  taskSnaps.forEach((snap) => {
-    if (snap.data()?.status !== "open") return;
-    cancelled++;
-    batch.update(snap.ref, {
+  const taskCount = await db.runTransaction(async (tx) => {
+    // The bundle first: its taskIds are what turns into task refs, and a
+    // transaction may not read after it has written.
+    const bundleSnap = await tx.get(bundleRef);
+    const bundle = bundleSnap.data();
+    if (!bundle) {
+      throw new functions.https.HttpsError(
+          "not-found", "That bundle no longer exists.");
+    }
+    if (bundle.requestorId !== uid) {
+      throw new functions.https.HttpsError(
+          "permission-denied",
+          "Only the requestor who posted this bundle can cancel it.");
+    }
+    if (bundle.status !== "open") {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "This bundle is no longer open.");
+    }
+
+    const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
+    const taskRefs = taskIds.map((jobId) => db.doc(`jobs/${jobId}`));
+    // A query inside a transaction (see awardBundle's pending-bids read)
+    // closes a bid submitted in the gap the old batch write left open.
+    const [taskSnaps, pendingBids] = await Promise.all([
+      taskRefs.length === 0 ? Promise.resolve([]) : tx.getAll(...taskRefs),
+      tx.get(db.collection(`bundles/${bundleId}/bundleBids`)
+          .where("status", "==", "pending")),
+    ]);
+
+    let cancelled = 0;
+    taskSnaps.forEach((snap) => {
+      if (snap.data()?.status !== "open") return;
+      cancelled++;
+      tx.update(snap.ref, {
+        status: "cancelled",
+        cancelledBy: uid,
+        cancelledAt: FieldValue.serverTimestamp(),
+        cancellationReason:
+            "The requestor cancelled the bundle this task was part of.",
+      });
+    });
+
+    // The bundle was called off, not decided on its merits, so a pending bid
+    // is 'closed' rather than 'rejected' - and each bidder is told why.
+    pendingBids.docs.forEach((doc) => {
+      tx.update(doc.ref, {status: "closed"});
+      notifyUser(tx, doc.id, {
+        type: "cancellation",
+        title: "Bundle cancelled",
+        body: `The requestor cancelled "${bundle.title || "a bundle"}", ` +
+            "so your bid is closed.",
+        route: null,
+      });
+    });
+
+    tx.update(bundleRef, {
       status: "cancelled",
       cancelledBy: uid,
       cancelledAt: FieldValue.serverTimestamp(),
-      cancellationReason:
-          "The requestor cancelled the bundle this task was part of.",
+    });
+
+    return cancelled;
+  });
+
+  return {taskCount};
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4: bundle expiry, the dependent-task handover, and release/ordering.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every 6 hours, expires any still-open bundle past its deadline and closes
+ * its pending bids; `closeExpiredJobs` already cancels the open tasks.
+ */
+exports.closeExpiredBundles = functions.pubsub
+    .schedule("every 6 hours")
+    .onRun(async () => {
+      const db = admin.firestore();
+      const now = Timestamp.now();
+      const snap = await db.collection("bundles")
+          .where("status", "==", "open")
+          .where("deadline", "<=", now)
+          .get();
+
+      let closed = 0;
+      for (const doc of snap.docs) {
+        const didClose = await db.runTransaction(async (tx) => {
+          // Re-read inside the transaction: an award could have landed on
+          // this bundle in the gap between the query above and now.
+          const bundleSnap = await tx.get(doc.ref);
+          const bundle = bundleSnap.data();
+          if (!bundle || bundle.status !== "open") return false;
+
+          const pendingBids = await tx.get(db
+              .collection(`bundles/${doc.id}/bundleBids`)
+              .where("status", "==", "pending"));
+          tx.update(doc.ref, {
+            status: "expired",
+            expiredAt: FieldValue.serverTimestamp(),
+          });
+          pendingBids.docs.forEach((bidDoc) => {
+            tx.update(bidDoc.ref, {status: "closed"});
+            notifyUser(tx, bidDoc.id, {
+              type: "cancellation",
+              title: "Bundle closed",
+              body: `Bidding on "${bundle.title || "a bundle"}" closed ` +
+                  "without an award, so your bid is closed.",
+              route: null,
+            });
+          });
+          return true;
+        });
+        if (didClose) closed++;
+      }
+      functions.logger.info(`closeExpiredBundles: closed ${closed} bundle(s)`);
+    });
+
+/** "after 3 days" / "now" - the wait a dependent task's provider is told. */
+function startsWhenText(gapDays) {
+  if (!gapDays || gapDays <= 0) return "now";
+  return `after ${gapDays} day${gapDays === 1 ? "" : "s"}`;
+}
+
+/**
+ * The handover notification body for a dependent task's provider once the
+ * task it follows completes. Pure so bundles.test.js can pin the wording.
+ */
+function handoverNotificationBody(completedTitle, dependentTitle, gapDays) {
+  return `"${completedTitle}" is done. "${dependentTitle}" can start ` +
+      `${startsWhenText(gapDays)}. Record a site handover before you begin.`;
+}
+
+/**
+ * When a bundle task completes, tells the provider of any task that starts
+ * after it. A retried trigger may double-notify, an acceptable cost.
+ */
+exports.notifyDependentTask = functions.firestore
+    .document("jobs/{jobId}")
+    .onUpdate(async (change, context) => {
+      const before = change.before.data();
+      const after = change.after.data();
+      if (before.status === "completed" || after.status !== "completed") {
+        return;
+      }
+      if (!after.bundleId) return; // only bundle tasks have dependents
+
+      const jobId = context.params.jobId;
+      const db = admin.firestore();
+      const dependents = await db.collection("jobs")
+          .where("startsAfterJobId", "==", jobId)
+          .get();
+      if (dependents.empty) return;
+
+      const batch = db.batch();
+      dependents.docs.forEach((doc) => {
+        const dependent = doc.data();
+        if (!dependent.acceptedProviderId ||
+            dependent.status !== "in_progress") {
+          return;
+        }
+        notifyUser(batch, dependent.acceptedProviderId, {
+          type: "handover",
+          title: "You can start soon",
+          body: handoverNotificationBody(
+              after.title || "Task", dependent.title || "Task",
+              dependent.gapDays || 0),
+          route: `/jobs/${doc.id}`,
+        });
+      });
+      await batch.commit();
+    });
+
+/** A note is required text; photos are optional Storage download URLs. */
+const MAX_HANDOVER_NOTE_LEN = 1000;
+const MAX_HANDOVER_PHOTOS = 5;
+
+/** Handover photo URLs: our own Storage uploads only, at most 5 of them. */
+function checkHandoverPhotos(raw) {
+  if (raw == null) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_HANDOVER_PHOTOS ||
+      !raw.every((url) =>
+        typeof url === "string" && url !== "" && url.startsWith(IMG_PREFIX))) {
+    throw bad("Those handover photos are not valid.");
+  }
+  return raw;
+}
+
+/**
+ * Validates a `recordHandover` payload. Pure - no Firestore, no auth - so
+ * bundles.test.js can pin every rule without an emulator.
+ */
+function validateHandover(data) {
+  const payload = data || {};
+  return {
+    note: text(payload.note, "Handover note", MAX_HANDOVER_NOTE_LEN),
+    photoUrls: checkHandoverPhotos(payload.photoUrls),
+  };
+}
+
+/**
+ * Records the site handover (photos + note) on the job's timeline -
+ * evidence for disputes, not a payment gate. One per task: a fixed event id
+ * makes a second attempt fail with `already-exists` rather than overwrite.
+ */
+exports.recordHandover = functions.https.onCall(async (data, context) => {
+  const uid = callerUid(context);
+  const jobId = docId(data?.jobId, "Job");
+  const {note, photoUrls} = validateHandover(data);
+
+  const db = admin.firestore();
+  const jobRef = db.doc(`jobs/${jobId}`);
+  const userRef = db.doc(`users/${uid}`);
+  const eventRef = jobRef.collection("events").doc("handover");
+
+  await db.runTransaction(async (tx) => {
+    const [jobSnap, userSnap, eventSnap] =
+        await tx.getAll(jobRef, userRef, eventRef);
+    const job = jobSnap.data();
+    if (!job) {
+      throw new functions.https.HttpsError(
+          "not-found", "That job no longer exists.");
+    }
+    if (userSnap.data()?.suspended === true) {
+      throw new functions.https.HttpsError(
+          "permission-denied",
+          "Your account is suspended. Contact support if you think this " +
+          "is a mistake.");
+    }
+    if (job.acceptedProviderId !== uid) {
+      throw new functions.https.HttpsError(
+          "permission-denied",
+          "Only the accepted provider can record a handover.");
+    }
+    if (job.status !== "in_progress") {
+      throw bad("This job is not in progress.");
+    }
+    if (!job.startsAfterJobId) {
+      throw bad("This task does not depend on another task.");
+    }
+    if (eventSnap.exists) {
+      throw new functions.https.HttpsError(
+          "already-exists",
+          "A handover has already been recorded for this task.");
+    }
+
+    tx.set(eventRef, {
+      type: "handover",
+      title: "Site handover recorded",
+      note,
+      photoUrls,
+      by: uid,
+      at: FieldValue.serverTimestamp(),
+    });
+    notifyUser(tx, job.requestorId, {
+      type: "handover",
+      title: "Site handover recorded",
+      body: `${userSnap.data()?.displayName || "The provider"} recorded ` +
+          `the site handover for "${job.title || "a task"}".`,
+      route: `/jobs/${jobId}`,
     });
   });
-  batch.update(bundleRef, {
-    status: "cancelled",
-    cancelledBy: uid,
-    cancelledAt: FieldValue.serverTimestamp(),
-  });
-  await batch.commit();
 
-  return {taskCount: cancelled};
+  return {ok: true};
 });
+
+// ---------------------------------------------------------------------------
+// Phase 5: trust/reviews count a bundle once per participant, not once per
+// task.
+// ---------------------------------------------------------------------------
+
+/**
+ * Which of a completed job's participants are still due their first
+ * `jobsCompleted` bump for this bundle. `alreadyCounted` is the subset that
+ * already has a `bundles/{bundleId}/completionCounts/{uid}` marker; for a
+ * job with no bundle, pass an empty array and everyone is due the bump.
+ */
+function uidsToCount(participants, alreadyCounted) {
+  return participants.filter((uid) => !alreadyCounted.includes(uid));
+}
 
 // Exported for bundles.test.js only. index.js re-exports just the
 // callables, and the Firebase CLI deploys only what index.js exports.
@@ -620,8 +862,14 @@ exports.validateBundle = validateBundle;
 exports.validateBundleBid = validateBundleBid;
 exports.checkLots = checkLots;
 exports.bundleBiddingOpen = bundleBiddingOpen;
+exports.splitBundlePrice = splitBundlePrice;
+exports.startsWhenText = startsWhenText;
+exports.handoverNotificationBody = handoverNotificationBody;
+exports.validateHandover = validateHandover;
+exports.uidsToCount = uidsToCount;
 
-// Shared with bundle_award.js.
+// Shared with bundle_award.js and the posting assist in index.js.
+exports.CATEGORIES = CATEGORIES;
 exports.callerUid = callerUid;
 exports.bad = bad;
-exports.docId = docId;    
+exports.docId = docId;

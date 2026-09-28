@@ -345,6 +345,89 @@ describe("Reviews", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Reviews on a bundled task - one review per reviewer per counterparty per
+// bundle (not per task), so the doc id is keyed to the bundle.
+// ---------------------------------------------------------------------------
+describe("Reviews - bundled tasks", () => {
+  const REQUESTOR = "requestor3";
+  const PROVIDER = "provider3";
+  const BUNDLE_ID = "bundle-rev";
+  const TASK_A = "task-rev-a";
+  const TASK_B = "task-rev-b";
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      [`users/${PROVIDER}`, {role: "provider"}],
+      [
+        `bundles/${BUNDLE_ID}`,
+        {requestorId: REQUESTOR, status: "awarded", taskIds: [TASK_A, TASK_B]},
+      ],
+      [
+        `jobs/${TASK_A}`,
+        {
+          requestorId: REQUESTOR,
+          acceptedProviderId: PROVIDER,
+          status: "completed",
+          bundleId: BUNDLE_ID,
+        },
+      ],
+      [
+        `jobs/${TASK_B}`,
+        {
+          requestorId: REQUESTOR,
+          acceptedProviderId: PROVIDER,
+          status: "completed",
+          bundleId: BUNDLE_ID,
+        },
+      ],
+    ]);
+  });
+
+  it("allows a bundle-keyed id for a review on a bundled task", async () => {
+    const db = dbAs(REQUESTOR);
+    const reviewId = `${BUNDLE_ID}_${REQUESTOR}`;
+    await assertSucceeds(
+        setDoc(doc(db, `users/${PROVIDER}/reviews/${reviewId}`), {
+          reviewerId: REQUESTOR,
+          jobId: TASK_A,
+          rating: 5,
+        }));
+  });
+
+  it("denies a job-keyed id for a review on a bundled task", async () => {
+    const db = dbAs(REQUESTOR);
+    const reviewId = `${TASK_A}_${REQUESTOR}`;
+    await assertFails(
+        setDoc(doc(db, `users/${PROVIDER}/reviews/${reviewId}`), {
+          reviewerId: REQUESTOR,
+          jobId: TASK_A,
+          rating: 5,
+        }));
+  });
+
+  it("denies a second review for another task of the same bundle and pair", async () => {
+    const db = dbAs(REQUESTOR);
+    const reviewId = `${BUNDLE_ID}_${REQUESTOR}`;
+    await assertSucceeds(
+        setDoc(doc(db, `users/${PROVIDER}/reviews/${reviewId}`), {
+          reviewerId: REQUESTOR,
+          jobId: TASK_A,
+          rating: 5,
+        }));
+    // The doc now exists, so this hits the doc-exists write path, which the
+    // update rule restricts to flagging - not a second, differently-scored
+    // review for the other task.
+    await assertFails(
+        setDoc(doc(db, `users/${PROVIDER}/reviews/${reviewId}`), {
+          reviewerId: REQUESTOR,
+          jobId: TASK_B,
+          rating: 4,
+        }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Bundles - bundles/{bundleId} plus the bundle fields on a task job.
 //
 // A bundle and its tasks are authored only by the createBundle Cloud Function
@@ -454,6 +537,13 @@ describe("Bundles", () => {
     }));
   });
 
+  it("denies the owner writing releasedAt on their task", async () => {
+    // Server-owned, like bundleId: only awardBundle (admin SDK) sets it,
+    // when a task goes unawarded back to ordinary bidding.
+    await assertFails(updateDoc(
+        doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {releasedAt: new Date()}));
+  });
+
   it("still lets the owner edit an ordinary field on a bundle task", async () => {
     await assertSucceeds(updateDoc(
         doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {title: "Re-tile the shower"}));
@@ -474,6 +564,17 @@ describe("Bundles", () => {
   it("leaves bidding on an ordinary single-task job exactly as it was", async () => {
     await assertSucceeds(setDoc(
         doc(dbAs(PROVIDER), `jobs/plain1/bids/${PROVIDER}`), validBid()));
+  });
+
+  it("denies a client reading or writing a completionCounts marker", async () => {
+    // Server-owned by onJobCompleted (admin SDK); no rule matches this
+    // subcollection, so it falls to the default deny.
+    const db = dbAs(PROVIDER);
+    await assertFails(
+        getDoc(doc(db, `bundles/${BUNDLE_ID}/completionCounts/${PROVIDER}`)));
+    await assertFails(setDoc(
+        doc(db, `bundles/${BUNDLE_ID}/completionCounts/${PROVIDER}`),
+        {jobId: TASK_ID, at: serverTimestamp()}));
   });
 });
 

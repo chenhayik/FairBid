@@ -61,6 +61,13 @@ abstract interface class DocumentStorageRepository {
     required XFile file,
   });
 
+  /// Uploads a site handover photo under `handovers/{jobId}/`, writable
+  /// only by the job's accepted provider (see `storage.rules`).
+  Future<String> uploadHandoverPhoto({
+    required String jobId,
+    required XFile file,
+  });
+
   /// Best-effort delete of a previously uploaded file (failures are non-fatal).
   Future<void> deleteByUrl(String url);
 }
@@ -152,6 +159,15 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   }) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     return _upload('disputes/$uid/$timestamp', file);
+  }
+
+  @override
+  Future<String> uploadHandoverPhoto({
+    required String jobId,
+    required XFile file,
+  }) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    return _upload('handovers/$jobId/$timestamp', file);
   }
 
   @override

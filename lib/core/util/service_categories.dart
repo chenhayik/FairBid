@@ -58,3 +58,12 @@ String? suggestedCategoryFor(String? natureOfBusiness) {
   }
   return null;
 }
+
+/// Licensing note for a category that legally requires a registered/licensed
+/// tradesperson in Malaysia, or null when [category] has none.
+String? licenceNoticeFor(String category) => switch (category) {
+      'Electrical' => 'Electrical work in Malaysia must be done by an '
+          'Energy Commission-registered contractor.',
+      'Plumbing' => 'Major plumbing work may need a SPAN-licensed plumber.',
+      _ => null,
+    };

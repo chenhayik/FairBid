@@ -1,26 +1,26 @@
 import 'job.dart';
 
-enum BundleStatus{
+enum BundleStatus {
   open,
   awarded,
   cancelled,
   expired;
 
-  String get storage => switch (this){
-    BundleStatus.open => "open",
+  String get storage => switch (this) {
+    BundleStatus.open => 'open',
     BundleStatus.awarded => 'awarded',
     BundleStatus.cancelled => 'cancelled',
-    BundleStatus.expired => "expired"
+    BundleStatus.expired => 'expired',
   };
 
-  String get label => switch (this){
-    BundleStatus.open => "Open",
+  String get label => switch (this) {
+    BundleStatus.open => 'Open',
     BundleStatus.awarded => 'Awarded',
     BundleStatus.cancelled => 'Cancelled',
-    BundleStatus.expired => "Expired"
+    BundleStatus.expired => 'Expired',
   };
 
-  static BundleStatus fromStorage(String? value) => switch (value){
+  static BundleStatus fromStorage(String? value) => switch (value) {
     'awarded' => BundleStatus.awarded,
     'cancelled' => BundleStatus.cancelled,
     'expired' => BundleStatus.expired,
@@ -43,8 +43,8 @@ class Bundle {
     this.consolidationCapPct = 0,
     this.consolidationCapSen = 0,
     this.createdAt,
-    this. deadline,
-});
+    this.deadline,
+  });
 
   final String id;
   final String requestorId;
@@ -67,9 +67,11 @@ class Bundle {
 
   int get taskCount => taskIds.length;
 
-  bool get biddingOpen => status == BundleStatus.open && (deadline == null || DateTime.now().isBefore(deadline!));
+  bool get biddingOpen =>
+      status == BundleStatus.open &&
+      (deadline == null || DateTime.now().isBefore(deadline!));
 
-  // Buld bundle object from a document id
+  // Builds a Bundle from its document id and data map.
   factory Bundle.fromMap(String id, Map<String, dynamic> m) => Bundle(
     id: id,
     requestorId: m['requestorId'] as String? ?? '',
@@ -79,18 +81,14 @@ class Bundle {
     description: m['description'] as String? ?? '',
     location: JobLocation.fromMap(m['location'] as Map<String, dynamic>?),
     photoUrls:
-    (m['photoUrls'] as List?)?.whereType<String>().toList() ?? const [],
+        (m['photoUrls'] as List?)?.whereType<String>().toList() ?? const [],
     status: BundleStatus.fromStorage(m['status'] as String?),
-    taskIds:
-    (m['taskIds'] as List?)?.whereType<String>().toList() ?? const [],
-    consolidationCapPct:
-    (m['consolidationCapPct'] as num?)?.toInt() ?? 0,
-    consolidationCapSen:
-    (m['consolidationCapSen'] as num?)?.toInt() ?? 0,
+    taskIds: (m['taskIds'] as List?)?.whereType<String>().toList() ?? const [],
+    consolidationCapPct: (m['consolidationCapPct'] as num?)?.toInt() ?? 0,
+    consolidationCapSen: (m['consolidationCapSen'] as num?)?.toInt() ?? 0,
     createdAt: m['createdAt'] as DateTime?,
     deadline: m['deadline'] as DateTime?,
   );
-
 }
 
 class BundleTaskDraft {
@@ -109,14 +107,13 @@ class BundleTaskDraft {
   final String category;
   final JobBudget? budget;
 
-
-  // All tasks with the same lot id must receive a bid together and awarded to a provider together
+  // Tasks sharing a lotId are bid on and awarded together.
   final String? lotId;
 
-  // the order of task completion can be null if task is singular
+  // Which earlier task this one follows; null if it can start anytime.
   final int? startsAfterIndex;
 
-// Days to wait after the previous task is completed before starting the next
+  // Days to wait after that earlier task completes before this one starts.
   final int? gapDays;
 
   Map<String, dynamic> toMap() => {

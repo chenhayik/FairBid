@@ -11,13 +11,16 @@ import '../../../../core/config/platform_config.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/util/motion.dart';
+import '../../../../core/util/service_categories.dart';
 import '../../../../core/util/time_ago.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/user_chip.dart';
 import '../../../auth/domain/app_user.dart';
+import '../../../auth/domain/user_role.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../../../messages/data/chat_repository.dart';
 import '../../../profile/data/public_profile_repository.dart';
+import '../../../profile/data/review_repository.dart';
 import '../../../profile/presentation/leave_review_sheet.dart';
 import '../../data/bid_repository.dart';
 import '../../data/bundle_bid_repository.dart';
@@ -25,17 +28,21 @@ import '../../data/bundle_repository.dart';
 import '../../data/job_repository.dart';
 import '../../data/milestone_repository.dart';
 import '../../domain/bid.dart';
+import '../../domain/bundle.dart';
+import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 import '../../domain/job_event.dart';
 import '../../domain/milestone.dart';
 import '../bid/submit_bid_sheet.dart';
 import '../bid/submit_bundle_bid_sheet.dart';
 import '../widgets/bid_card.dart';
+import '../widgets/insufficient_balance_dialog.dart';
 import 'job_address_card.dart';
 import 'job_detail_view_model.dart';
 import 'job_video_player.dart';
 import 'milestone_section.dart';
 import 'photo_viewer_screen.dart';
+import 'record_handover_sheet.dart';
 
 /// Full job detail. One [CustomScrollView] with a FIXED slot order for every
 /// viewer - a status headline, hero facts, the counterparty, description and
@@ -134,43 +141,64 @@ Future<void> _openJobChat(BuildContext context, Job job) async {
   }
 }
 
-/// Opens the bid sheet appropriate for [job]: the bundle package sheet when
-/// the task belongs to a bundle - a per-job bid on a bundle task is refused
-/// by the rules, since the provider bids on the package instead - otherwise
-/// the ordinary [SubmitBidSheet]. Shared by the bottom bar's primary action
-/// and the inline "Submit a bid" button in the bids slot, so both entry
-/// points onto a bundle task open the right form.
+/// Opens the right bid sheet for [job]: the bundle package sheet for a live
+/// bundle task (rules refuse a per-job bid there), otherwise [SubmitBidSheet].
+/// Reads the bundle/tasks/bid one-shot and concurrently, to avoid a
+/// partially-cached task list; failures are caught here and shown as a snackbar.
 Future<void> _openBidSheet(BuildContext context, Job job, AppUser bidder) async {
-  if (!job.isBundleTask) {
+  if (!job.isLiveBundleTask) {
     SubmitBidSheet.show(context, job: job, bidder: bidder);
     return;
   }
   final bundleId = job.bundleId!;
-  final bundle = await context.read<BundleRepository>().getById(bundleId);
-  if (!context.mounted) return;
-  if (bundle == null || !bundle.biddingOpen) {
+  try {
+    // A single `Future.wait` keeps exactly one `await`/`context.mounted`
+    // check before every `context` use below, satisfying the linter's gap check.
+    final results = await Future.wait<Object?>([
+      context.read<BundleRepository>().getById(bundleId),
+      context.read<JobRepository>().getBundleTasks(bundleId),
+      context.read<BundleBidRepository>().getMyBundleBid(bundleId, bidder.uid),
+    ]);
+    if (!context.mounted) return;
+    final bundle = results[0] as Bundle?;
+    final tasks = results[1] as List<Job>;
+    final existing = results[2] as BundleBid?;
+
+    if (bundle == null || !bundle.biddingOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This bundle is no longer accepting bids.'),
+        ),
+      );
+      return;
+    }
+    final taskIds = tasks.map((t) => t.id).toSet();
+    if (!bundle.taskIds.every(taskIds.contains)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Couldn't load every task in this bundle. Check your "
+            'connection and try again.',
+          ),
+        ),
+      );
+      return;
+    }
+    SubmitBundleBidSheet.show(
+      context,
+      bundle: bundle,
+      tasks: tasks,
+      bidder: bidder,
+      existing: existing,
+    );
+  } catch (_) {
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('This bundle is no longer accepting bids.'),
+        content: Text("Couldn't open the bid form. Please try again."),
       ),
     );
-    return;
   }
-  final tasks =
-      await context.read<JobRepository>().watchBundleTasks(bundleId).first;
-  if (!context.mounted) return;
-  final existing = await context
-      .read<BundleBidRepository>()
-      .watchMyBundleBid(bundleId, bidder.uid)
-      .first;
-  if (!context.mounted) return;
-  SubmitBundleBidSheet.show(
-    context,
-    bundle: bundle,
-    tasks: tasks,
-    bidder: bidder,
-    existing: existing,
-  );
 }
 
 /// Withdraws the provider's own bid on [jobId], after confirmation. Shared
@@ -234,6 +262,7 @@ IconData _timelineIcon(String type) => switch (type) {
   'refunded' => Icons.undo,
   'completed' => Icons.check_circle_outline,
   'cancelled' => Icons.cancel_outlined,
+  'handover' => Icons.inventory_2_outlined,
   _ => Icons.circle,
 };
 
@@ -281,6 +310,20 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
       ? context.read<BidRepository>().watchMyBid(widget.job.id, _myUid!)
       : null;
 
+  /// Only a provider on a still-open live bundle task can have a package bid
+  /// worth watching - the only way the view model learns they cover it,
+  /// since such a task never has a per-job [_myBid] of its own.
+  late final bool _tracksMyBundleBid =
+      _myUid != null &&
+      widget.job.isLiveBundleTask &&
+      context.read<AuthController>().user?.role == UserRole.provider;
+
+  late final Stream<BundleBid?>? _myBundleBid = _tracksMyBundleBid
+      ? context
+          .read<BundleBidRepository>()
+          .watchMyBundleBid(widget.job.bundleId!, _myUid!)
+      : null;
+
   /// Feeds both the milestone tracker slot and the bottom bar's fund/
   /// release/deliver refinement, so they never disagree about which
   /// milestone is current.
@@ -323,17 +366,16 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         if (me != null) _openBidSheet(context, job, me);
       case JobActionKind.getVerified:
         context.push('/onboarding');
+      case JobActionKind.viewBundle:
+        context.push('/bundles/${job.bundleId}');
     }
   }
 
-  /// Cancels [job]. A task belonging to a still-open bundle can't be
-  /// cancelled on its own - `firestore.rules` freezes its `status` while the
-  /// bundle is open, since it may be part of an all-or-nothing bid or a lot -
-  /// so this cancels the whole bundle instead, through
-  /// [BundleRepository.cancelBundle]. An ordinary job keeps using
-  /// [JobRepository.cancelOpenJob], unchanged.
+  /// Cancels [job]. A task of a still-open bundle can't be cancelled alone,
+  /// so this cancels the whole bundle via [BundleRepository.cancelBundle];
+  /// an ordinary job keeps using [JobRepository.cancelOpenJob].
   Future<void> _cancelJob(BuildContext context, Job job) async {
-    final isBundleTask = job.isBundleTask;
+    final isBundleTask = job.isLiveBundleTask;
     final taskCount = job.bundleTaskCount;
     final bundleBody = taskCount != null
         ? 'All $taskCount tasks in this bundle will be cancelled and '
@@ -372,6 +414,12 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
       } else {
         await context.read<JobRepository>().cancelOpenJob(job.id);
       }
+    } on BundleRejectedException catch (e) {
+      // The server writes these to be read by a requestor, so shown as-is.
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -462,19 +510,37 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   Widget build(BuildContext context) {
     final job = widget.job;
     final me = context.watch<AuthController>().user;
+    final bundleBidStream = _myBundleBid;
+
+    Widget withMyBundleBid(Bid? myBid) {
+      if (bundleBidStream == null) {
+        return _scaffold(context, job, me, myBid, null);
+      }
+      return StreamBuilder<BundleBid?>(
+        stream: bundleBidStream,
+        builder: (context, snapshot) =>
+            _scaffold(context, job, me, myBid, snapshot.data),
+      );
+    }
+
     final bidStream = _myBid;
     if (bidStream == null) {
-      return _scaffold(context, job, me, null);
+      return withMyBundleBid(null);
     }
     return StreamBuilder<Bid?>(
       stream: bidStream,
-      builder: (context, snapshot) =>
-          _scaffold(context, job, me, snapshot.data),
+      builder: (context, snapshot) => withMyBundleBid(snapshot.data),
     );
   }
 
-  Widget _scaffold(BuildContext context, Job job, AppUser? me, Bid? myBid) {
-    final vm = buildJobDetailVm(job, me, myBid);
+  Widget _scaffold(
+    BuildContext context,
+    Job job,
+    AppUser? me,
+    Bid? myBid,
+    BundleBid? myBundleBid,
+  ) {
+    final vm = buildJobDetailVm(job, me, myBid, myBundleBid: myBundleBid);
     final cancelEntry = _cancelMenuEntry(job, vm);
 
     return Scaffold(
@@ -547,10 +613,28 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
           ? _CancellationResponseCard(job: job, role: vm.role)
           : null,
     );
-    add(job.isBundleTask
+    add(job.isLiveBundleTask
         ? _BundleTaskBanner(job: job, isOwner: isOwner)
-        : null);
+        : job.isBundleTask
+            ? _ReleasedBundleTaskBanner(job: job, isOwner: isOwner)
+            : null);
+    add(
+      vm.role == JobViewerRole.acceptedProvider &&
+              job.status == JobStatus.inProgress &&
+              job.startsAfterJobId != null
+          ? _HandoverBanner(job: job)
+          : null,
+    );
     add(_HeroFacts(job: job));
+    add(
+      licenceNoticeFor(job.category) != null
+          ? InfoBanner(
+              icon: Icons.verified_user_outlined,
+              title: 'Licensing',
+              body: licenceNoticeFor(job.category)!,
+            )
+          : null,
+    );
     add(
       showCounterparty
           ? _CounterpartyCard(job: job, isOwnerView: isOwner)
@@ -635,6 +719,79 @@ class _BundleTaskBanner extends StatelessWidget {
               'happens for the whole bundle at once.'
           : 'This task is bid on together with the rest of its bundle, as '
               'one package.',
+    );
+  }
+}
+
+/// Slot 2b (released variant): a task the bundle's award left unawarded -
+/// from then on it takes ordinary bids and can be cancelled on its own, so
+/// this replaces [_BundleTaskBanner] once `job.releasedAt` is set.
+class _ReleasedBundleTaskBanner extends StatelessWidget {
+  const _ReleasedBundleTaskBanner({required this.job, required this.isOwner});
+  final Job job;
+  final bool isOwner;
+
+  @override
+  Widget build(BuildContext context) {
+    return InfoBanner(
+      icon: Icons.inventory_2_outlined,
+      // The owner can still see the bundle it came from.
+      trailing: isOwner
+          ? TextButton(
+              onPressed: () => context.push('/bundles/${job.bundleId}'),
+              child: const Text('View bundle'),
+            )
+          : null,
+      title: 'Released from its bundle',
+      body: "This task wasn't awarded with the rest of its bundle, so it "
+          'now takes ordinary bids.',
+    );
+  }
+}
+
+/// Slot 2c: prompts the accepted provider of a task that starts after
+/// another to record the site handover before starting. Hides itself once
+/// the timeline already has a `handover` event.
+class _HandoverBanner extends StatefulWidget {
+  const _HandoverBanner({required this.job});
+  final Job job;
+
+  @override
+  State<_HandoverBanner> createState() => _HandoverBannerState();
+}
+
+class _HandoverBannerState extends State<_HandoverBanner> {
+  late final Stream<List<JobEvent>> _events =
+      context.read<JobRepository>().watchJobEvents(widget.job.id);
+
+  Future<void> _recordHandover(BuildContext context) async {
+    final recorded =
+        await RecordHandoverSheet.show(context, jobId: widget.job.id);
+    if (recorded == true && context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Handover recorded.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<JobEvent>>(
+      stream: _events,
+      builder: (context, snapshot) {
+        final events = snapshot.data ?? const <JobEvent>[];
+        if (events.any((e) => e.type == 'handover')) {
+          return const SizedBox.shrink();
+        }
+        return InfoBanner(
+          icon: Icons.inventory_2_outlined,
+          title: 'Site handover',
+          body: 'Record the site handover before you start.',
+          trailing: TextButton(
+            onPressed: () => _recordHandover(context),
+            child: const Text('Record handover'),
+          ),
+        );
+      },
     );
   }
 }
@@ -1154,31 +1311,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
     }
 
     if (failure is InsufficientBalanceException) {
-      final e = failure;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Not enough balance'),
-          content: Text(
-            'You need ${formatRm(e.shortfallSen)} more available '
-            'to accept this bid (available: ${formatRm(e.availableSen)}, '
-            'required: ${formatRm(e.requiredSen)}).',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                context.push('/profile/earnings');
-              },
-              child: const Text('Top up'),
-            ),
-          ],
-        ),
-      );
+      await showInsufficientBalanceDialog(context, failure);
     } else if (failure is BidAcceptRaceException) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1486,8 +1619,70 @@ class _LeaveReviewCard extends StatefulWidget {
   State<_LeaveReviewCard> createState() => _LeaveReviewCardState();
 }
 
+/// Whether a completed bundle task's review is ready, still waiting on the
+/// provider's other tasks in the same bundle, or already left.
+enum _ReviewGate { ready, waiting, alreadyReviewed }
+
 class _LeaveReviewCardState extends State<_LeaveReviewCard> {
   bool _submitted = false;
+
+  /// Any bundle task - released or still live - reviews by bundle id (the
+  /// rules key on `bundleId` alone) and needs the gate resolved first.
+  String? get _bundleId => widget.job.bundleId;
+
+  /// Null while an ordinary job's gate is trivially "ready", or while a
+  /// bundle task's gate is still being resolved.
+  _ReviewGate? _gate;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_bundleId == null) {
+      _gate = _ReviewGate.ready;
+    } else {
+      _resolveGate(_bundleId!);
+    }
+  }
+
+  /// For any bundle task: already reviewed for this bundle wins outright;
+  /// otherwise the review only opens once none of this provider's other
+  /// tasks in the bundle are still in progress.
+  Future<void> _resolveGate(String bundleId) async {
+    final me = context.read<AuthController>().user;
+    if (me == null) return;
+    // Read both repositories before the first await, so nothing below reads
+    // `context` across an async gap.
+    final reviews = context.read<ReviewRepository>();
+    final jobs = context.read<JobRepository>();
+    try {
+      final alreadyReviewed = await reviews.hasReviewed(
+        revieweeId: widget.revieweeId,
+        jobId: widget.job.id,
+        reviewerId: me.uid,
+        bundleId: bundleId,
+      );
+      if (alreadyReviewed) {
+        if (mounted) setState(() => _gate = _ReviewGate.alreadyReviewed);
+        return;
+      }
+      final tasks = await jobs.getBundleTasks(bundleId);
+      final providerId = widget.job.acceptedProviderId;
+      final stillGoing = tasks.any(
+        (t) =>
+            t.acceptedProviderId == providerId &&
+            t.status == JobStatus.inProgress,
+      );
+      if (mounted) {
+        setState(
+          () => _gate = stillGoing ? _ReviewGate.waiting : _ReviewGate.ready,
+        );
+      }
+    } catch (_) {
+      // leaveReview's own dedupe transaction still guards the actual write,
+      // so fail open rather than block the prompt on a failed lookup.
+      if (mounted) setState(() => _gate = _ReviewGate.ready);
+    }
+  }
 
   Future<void> _open() async {
     final me = context.read<AuthController>().user;
@@ -1498,19 +1693,32 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
       reviewer: me,
       revieweeId: widget.revieweeId,
       revieweeName: widget.revieweeName,
+      bundleId: _bundleId,
     );
     if (ok == true && mounted) setState(() => _submitted = true);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_submitted) {
+    if (_submitted || _gate == _ReviewGate.alreadyReviewed) {
       return InfoBanner(
         icon: Icons.check_circle_outline,
         title: 'Review submitted',
         body: 'Thanks, your feedback helps keep FairBid fair.',
         color: context.fairbid.successText,
       );
+    }
+    if (_gate == _ReviewGate.waiting) {
+      return InfoBanner(
+        icon: Icons.hourglass_empty,
+        title: 'Almost there',
+        body: 'You can review ${widget.revieweeName} once all their tasks '
+            'in this bundle are done.',
+      );
+    }
+    if (_gate == null) {
+      // Resolving a bundle task's gate.
+      return const SizedBox.shrink();
     }
     return PrimaryButton(
       label: 'Review ${widget.revieweeName}',
@@ -1620,6 +1828,18 @@ class _ActivityTimelineState extends State<_ActivityTimeline> {
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
                               ),
+                              if (event.note != null &&
+                                  event.note!.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  event.note!,
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                              ],
+                              if (event.photoUrls.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                _TimelinePhotos(urls: event.photoUrls),
+                              ],
                             ],
                           ),
                         ),
@@ -1631,6 +1851,45 @@ class _ActivityTimelineState extends State<_ActivityTimeline> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Thumbnail strip for a timeline event's photos (e.g. `handover`). Tapping
+/// one opens the same full-size viewer the job's own Photos list uses.
+class _TimelinePhotos extends StatelessWidget {
+  const _TimelinePhotos({required this.urls});
+  final List<String> urls;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final (i, url) in urls.indexed)
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () =>
+                PhotoViewerScreen.show(context, photoUrls: urls, initialIndex: i),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                url,
+                width: 64,
+                height: 64,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  width: 64,
+                  height: 64,
+                  color: context.fairbid.borderSubtle,
+                  child: Icon(Icons.broken_image_outlined,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

@@ -18,16 +18,16 @@ service cloud.firestore {
       return isSignedIn() && roleOf(request.auth.uid) == 'admin';
     }
 
-   function jobTakesOrdinaryBids(jobId) {
+    function jobTakesOrdinaryBids(jobId) {
       let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
       return !('bundleId' in job)
           || get(/databases/$(database)/documents/bundles/$(job.bundleId))
               .data.status != 'open';
     }
 
-  function bundleFields() {
+    function bundleFields() {
       return ['bundleId', 'bundleOrder', 'bundleTaskCount', 'lotId',
-              'startsAfterJobId', 'gapDays'];
+              'startsAfterJobId', 'gapDays', 'releasedAt'];
     }
     function noBundleFieldWrites() {
       return !request.resource.data.diff(resource.data).affectedKeys()
@@ -146,6 +146,13 @@ service cloud.firestore {
           return get(/databases/$(database)/documents/jobs/$(jobId)).data;
         }
 
+        // A bundled task is reviewed once per bundle, not once per task, so
+        // its id is keyed to the bundle instead of the task's own jobId.
+        function expectedReviewId(job, jobId) {
+          return ('bundleId' in job ? job.bundleId : jobId)
+              + '_' + request.auth.uid;
+        }
+
         allow read: if isSignedIn();
         allow create: if isSignedIn()
                       && !isSuspended()
@@ -161,13 +168,17 @@ service cloud.firestore {
                       && request.resource.data.rating is int
                       && request.resource.data.rating >= 1
                       && request.resource.data.rating <= 5
-                      // One review per reviewer per job: the doc id is bound
-                      // to the job + reviewer, matching the client's
+                      // One review per reviewer per job (or, for a bundled
+                      // task, per bundle): the doc id is bound to the
+                      // job/bundle + reviewer, matching the client's
                       // deterministic id (see review_repository.dart), so a
-                      // reviewer can't spam multiple reviews for one job under
-                      // different doc ids.
-                      && reviewId == request.resource.data.jobId
-                          + '_' + request.auth.uid;
+                      // reviewer can't spam multiple reviews under different
+                      // doc ids - and a second task of the same bundle just
+                      // hits this same doc, which the update rule below
+                      // restricts to flagging.
+                      && reviewId == expectedReviewId(
+                          jobData(request.resource.data.jobId),
+                          request.resource.data.jobId);
         // One narrow carve-out from immutability: reporting a review for
         // moderation may set the flag fields, once. Hiding/keeping (and the
         // Trust Score reversal) is exclusively the moderateReview Cloud
@@ -288,13 +299,8 @@ service cloud.firestore {
                    'cancellationRequestedAt', 'cancelledAt', 'cancelledBy']);
     }
 
-    // A task of a still-open bundle cannot be cancelled on its own.
-    // Providers bid on the package, so dropping one task out from under
-    // them would break an all-or-nothing bid or split a lot. The
-    // requestor cancels the whole posting through the cancelBundle
-    // callable instead, which cancels every task with it (admin SDK,
-    // bypasses rules). Once the bundle leaves 'open' its tasks are
-    // ordinary jobs again, so this only bites while bids are live.
+    // A task of a still-open bundle cannot be cancelled on its own - that
+    // would break an all-or-nothing bid or split a lot. Use cancelBundle.
     function bundleTaskStatusWriteOk() {
       return request.resource.data.status == resource.data.status
           || !('bundleId' in resource.data)
@@ -420,19 +426,13 @@ service cloud.firestore {
         allow delete: if false;
       }
     }
-   match /bundles/{bundleId} {
+    match /bundles/{bundleId} {
       allow read: if isSignedIn();
       allow write: if false;
 
-      // Sealed package bids: one per provider per bundle, keyed by their
-      // uid. Readable by the bidder and by the bundle's requestor and no
-      // one else - a competitor who could read these prices could
-      // undercut them by a ringgit, which is the whole reason the
-      // auction is sealed.
-      //
-      // Every write is denied because submitBundleBid and
-      // withdrawBundleBid author them: the prices live in a map, and the
-      // rules language cannot walk a map's entries to check each one.
+      // Sealed bids, keyed by bidder uid, readable only by the bidder and
+      // requestor. Writes denied: authored by the callables instead, since
+      // rules can't validate a map of per-task prices.
       match /bundleBids/{providerId} {
         allow read: if isSignedIn()
                     && (request.auth.uid == providerId

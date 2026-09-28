@@ -59,6 +59,12 @@ class PostJobController extends ChangeNotifier {
   // [_errorMessage] - a missing suggestion is not a form error.
   bool assistingDescription = false;
   bool assistingPrice = false;
+  bool assistingDraft = false;
+
+  /// Set once [dispose] has run. Checked by [_notify] so a suggestion that
+  /// completes after the screen was closed never calls `notifyListeners()`
+  /// on a disposed controller.
+  bool _disposed = false;
 
   /// The last suggested fair-price range, shown beside the budget fields.
   ({int minSen, int maxSen})? priceHint;
@@ -79,7 +85,8 @@ class PostJobController extends ChangeNotifier {
   /// Any of the above in flight. Used to gate actions - like the AI assists -
   /// that shouldn't run concurrently with a submit or an upload; the submit
   /// button and each UploadBox use their own specific flag above instead.
-  bool get isBusy => _isSubmitting || _uploadingPhoto || _uploadingVideo;
+  bool get isBusy =>
+      _isSubmitting || _uploadingPhoto || _uploadingVideo || assistingDraft;
 
   String? get errorMessage => _errorMessage;
 
@@ -89,13 +96,28 @@ class PostJobController extends ChangeNotifier {
   String? _addressWarning;
   String? get addressWarning => _addressWarning;
 
+  /// Drafts a whole post from [roughText], or null when none is available.
+  /// The screen decides which fields to fill.
+  Future<JobDraft?> suggestDraft(String roughText) async {
+    assistingDraft = true;
+    _notify();
+    try {
+      return await _assist.suggestDraft(
+          roughText: roughText,
+          photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
+    } finally {
+      assistingDraft = false;
+      _notify();
+    }
+  }
+
   /// Expands [roughText] into a structured description, or null when no
   /// suggestion is available. The screen decides what to do with the result.
   Future<String?> suggestDescription(String roughText) async {
     final selectedCategory = category;
     if (selectedCategory == null) return null;
     assistingDescription = true;
-    notifyListeners();
+    _notify();
     try {
       return await _assist.suggestDescription(
           category: selectedCategory,
@@ -103,7 +125,7 @@ class PostJobController extends ChangeNotifier {
           photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
     } finally {
       assistingDescription = false;
-      notifyListeners();
+      _notify();
     }
   }
 
@@ -113,7 +135,7 @@ class PostJobController extends ChangeNotifier {
     final selectedCategory = category;
     if (selectedCategory == null) return;
     assistingPrice = true;
-    notifyListeners();
+    _notify();
     try {
       priceHint = await _assist.suggestPriceRange(
           category: selectedCategory,
@@ -121,7 +143,7 @@ class PostJobController extends ChangeNotifier {
           photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
     } finally {
       assistingPrice = false;
-      notifyListeners();
+      _notify();
     }
   }
 
@@ -234,7 +256,7 @@ class PostJobController extends ChangeNotifier {
     _isSubmitting = true;
     _errorMessage = null;
     _addressWarning = null;
-    notifyListeners();
+    _notify();
     try {
       final id = await _jobs.create(job);
       final address = pendingAddress;
@@ -258,19 +280,13 @@ class PostJobController extends ChangeNotifier {
       return null;
     } finally {
       _isSubmitting = false;
-      notifyListeners();
+      _notify();
     }
   }
 
-  /// Posts several related tasks as ONE bundled posting, through the
-  /// `createBundle` Cloud Function, and returns the new bundle's id (null on
-  /// failure). Each task becomes an ordinary job carrying the bundle's id, so
-  /// the feed, escrow, chat and disputes keep working per task.
-  ///
-  /// The shared fields ([location], the photos and [deadline]) are copied onto
-  /// every task server-side. The optional video and the precise service
-  /// address have no bundle equivalent - `createBundle` writes neither - so
-  /// the form hides both once a second task is added.
+  /// Posts several related tasks as ONE bundled posting via `createBundle`,
+  /// returning the new bundle's id (null on failure). Video and the precise
+  /// service address have no bundle equivalent, so the form hides both.
   Future<String?> submitBundle({
     required String title,
     required String description,
@@ -281,7 +297,7 @@ class PostJobController extends ChangeNotifier {
     _isSubmitting = true;
     _errorMessage = null;
     _addressWarning = null;
-    notifyListeners();
+    _notify();
     try {
       return await _bundles.create(
         title: title,
@@ -301,22 +317,35 @@ class PostJobController extends ChangeNotifier {
       return null;
     } finally {
       _isSubmitting = false;
-      notifyListeners();
+      _notify();
     }
   }
 
   void _setUploadingPhoto(bool value) {
     _uploadingPhoto = value;
-    notifyListeners();
+    _notify();
   }
 
   void _setUploadingVideo(bool value) {
     _uploadingVideo = value;
-    notifyListeners();
+    _notify();
   }
 
   void _fail(String message) {
     _errorMessage = message;
-    notifyListeners();
+    _notify();
+  }
+
+  /// notifyListeners(), skipped once this controller has been disposed - a
+  /// suggestion or upload that completes after the screen was closed must
+  /// not touch a disposed ChangeNotifier.
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 }

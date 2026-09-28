@@ -61,7 +61,8 @@ class JobCard extends StatelessWidget {
                           : PillBadge(
                               label: job.status.label,
                               color: theme.colorScheme.onSurfaceVariant),
-                      if (job.bundleTaskCount != null &&
+                      if (job.isLiveBundleTask &&
+                          job.bundleTaskCount != null &&
                           job.bundleTaskCount! > 1)
                         PillBadge(
                           label: 'Part of a ${job.bundleTaskCount}-task '

@@ -94,10 +94,16 @@ exports.recomputeTrustScore = functions.firestore
       });
     });
 
+const {uidsToCount} = require("./bundles");
+
 /**
  * Producer: when a job completes (last milestone released, or a dispute
  * ruling closed it out), both participants earn a completed job toward their
- * track record. One trigger covers every completion path.
+ * track record. One trigger covers every completion path. A bundled task
+ * counts once per participant per bundle, not once per task: a
+ * `bundles/{bundleId}/completionCounts/{uid}` marker records the first task
+ * that earned each participant their bump, and later tasks of the same
+ * bundle skip a uid that already has one.
  *
  * Idempotent against at-least-once trigger retries: a `completionCounted`
  * marker is read and set on the job doc inside the same transaction as the
@@ -119,18 +125,35 @@ exports.onJobCompleted = functions.firestore
       }
       const db = admin.firestore();
       const jobRef = change.after.ref;
+      const participants =
+          [after.acceptedProviderId, after.requestorId].filter(Boolean);
+      const bundleId = after.bundleId;
+      const markerRefs = bundleId ?
+          participants.map((uid) =>
+              db.doc(`bundles/${bundleId}/completionCounts/${uid}`)) :
+          [];
+
       await db.runTransaction(async (tx) => {
-        const jobSnap = await tx.get(jobRef);
+        // All reads before any writes.
+        const [jobSnap, ...markerSnaps] =
+            await tx.getAll(jobRef, ...markerRefs);
         if (jobSnap.data()?.completionCounted === true) return; // retried event
+
+        const alreadyCounted = bundleId ?
+            participants.filter((uid, i) => markerSnaps[i].exists) :
+            [];
         const bump = {
           jobsCompleted: admin.firestore.FieldValue.increment(1),
         };
-        if (after.acceptedProviderId) {
-          tx.update(db.doc(`users/${after.acceptedProviderId}`), bump);
-        }
-        if (after.requestorId) {
-          tx.update(db.doc(`users/${after.requestorId}`), bump);
-        }
+        uidsToCount(participants, alreadyCounted).forEach((uid) => {
+          tx.update(db.doc(`users/${uid}`), bump);
+          if (bundleId) {
+            tx.set(db.doc(`bundles/${bundleId}/completionCounts/${uid}`), {
+              jobId: jobRef.id,
+              at: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        });
         tx.update(jobRef, {completionCounted: true});
       });
     });
@@ -2174,6 +2197,36 @@ const PRICE_SYSTEM = "You estimate fair market prices for home services " +
     "Never invent a price from an assumed brand name, measurement, or " +
     "detail the description does not give. Do not use em dashes.";
 
+/** System instruction for the one-shot post draft. */
+const DRAFT_SYSTEM = "You help customers on FairBid, a Malaysian " +
+    "home-services marketplace, turn one rough note into a complete job " +
+    "posting. Pick the category that fits best from the allowed list. " +
+    "Write a title of at most 8 plain words naming the job, with no price " +
+    "and no pleading. Write the description exactly as the description " +
+    "helper would: up to three sections labelled What needs doing, then " +
+    "Access & details, then Expected outcome, each label on its own line, " +
+    "bullet fragments starting with the character '•' under Access & " +
+    "details, a blank line between sections, about 50 to 80 words, plain " +
+    "prose, no markdown and no em dashes. Drop a section rather than " +
+    "padding it. Give a realistic ringgit range for the job in Malaysia. " +
+    "Never invent prices, deadlines, brand names, measurements or " +
+    "commitments the note did not state; leave out what you do not know. " +
+    "If a photo is provided, use it to be more specific.";
+
+/** Structured-output schema for the one-shot draft. */
+const DRAFT_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    title: {type: Type.STRING},
+    category: {type: Type.STRING, enum: require("./bundles").CATEGORIES},
+    description: {type: Type.STRING},
+    minRm: {type: Type.NUMBER},
+    maxRm: {type: Type.NUMBER},
+  },
+  required: ["title", "category", "description", "minRm", "maxRm"],
+  propertyOrdering: ["title", "category", "description", "minRm", "maxRm"],
+};
+
 /** Structured-output schema for the fair-price guide: a ringgit range. */
 const PRICE_SCHEMA = {
   type: Type.OBJECT,
@@ -2202,8 +2255,31 @@ function parsePriceJson(text) {
   }
 }
 
-const IMG_PREFIX =
-  "https://firebasestorage.googleapis.com/v0/b/fairbid-c9340.firebasestorage.app/o/";
+/** Parses the one-shot draft reply, or null when it is unusable. */
+// The schema constrains the shape, not the sense: a blank title or a silly
+// range still has to be caught here.
+function parseDraftJson(text) {
+  try {
+    const draft = JSON.parse(String(text));
+    const title = String(draft.title || "").trim().slice(0, 120);
+    const description = String(draft.description || "").trim();
+    const category = String(draft.category || "").trim();
+    if (title === "" || description === "") return null;
+    if (!require("./bundles").CATEGORIES.includes(category)) return null;
+    const range = parsePriceJson(text); // same minRm/maxRm sanity checks
+    return {
+      title,
+      category,
+      description,
+      minSen: range?.minSen ?? null,
+      maxSen: range?.maxSen ?? null,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+const {IMG_PREFIX} = require("./common");
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** Fetches a job photo as base64 inline data, or null (→ text-only). SSRF-
@@ -2239,7 +2315,7 @@ exports.suggestJobDetails = functions
       const category = String(data.category || "").slice(0, 60);
       const roughText = String(data.roughText || "").trim().slice(0, 600);
       const photoUrl = data.photoUrl;
-      if (kind !== "description" && kind !== "price") {
+      if (kind !== "description" && kind !== "price" && kind !== "draft") {
         throw new functions.https.HttpsError(
             "invalid-argument", "Unknown kind.");
       }
@@ -2251,7 +2327,14 @@ exports.suggestJobDetails = functions
       try {
         const ai = new GoogleGenAI({apiKey: geminiKey.value()});
 
-        const config = kind === "description" ? {
+        const config = kind === "draft" ? {
+          systemInstruction: DRAFT_SYSTEM,
+          temperature: 0.4,
+          maxOutputTokens: 768,
+          responseMimeType: "application/json",
+          responseSchema: DRAFT_SCHEMA,
+          thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
+        } : kind === "description" ? {
           systemInstruction: DESCRIPTION_SYSTEM,
           temperature: 0.4,
           maxOutputTokens: 512,
@@ -2264,7 +2347,10 @@ exports.suggestJobDetails = functions
           responseSchema: PRICE_SCHEMA,
           thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
         };
-        const text = kind === "description" ?
+        // A draft has no category yet: working it out is half the point.
+        const text = kind === "draft" ?
+            `Customer's note: ${roughText}` :
+            kind === "description" ?
             `Category: ${category}\nCustomer's note: ${roughText}` :
             `Category: ${category}\nJob description: ${roughText}`;
 
@@ -2287,6 +2373,7 @@ exports.suggestJobDetails = functions
           const description = (responseText || "").trim();
           return description === "" ? null : {description};
         }
+        if (kind === "draft") return parseDraftJson(responseText);
         return parsePriceJson(responseText);
       } catch (err) {
         const status = typeof err?.status === "number" ? err.status :
@@ -2319,3 +2406,6 @@ exports.withdrawBundleBid = require("./bundles").withdrawBundleBid;
 exports.cancelBundle = require("./bundles").cancelBundle;
 exports.previewBundleAward = require("./bundle_award").previewBundleAward;
 exports.awardBundle = require("./bundle_award").awardBundle;
+exports.closeExpiredBundles = require("./bundles").closeExpiredBundles;
+exports.notifyDependentTask = require("./bundles").notifyDependentTask;
+exports.recordHandover = require("./bundles").recordHandover;

@@ -15,6 +15,7 @@ import 'package:fairbid/core/util/money.dart';
 import 'package:fairbid/core/util/service_categories.dart';
 import 'package:fairbid/core/util/ssm_number.dart';
 import 'package:fairbid/core/widgets/app_widgets.dart';
+import 'package:fairbid/core/widgets/form_widgets.dart';
 import 'package:fairbid/features/admin/data/moderation_repository.dart';
 import 'package:fairbid/features/admin/data/stats_repository.dart';
 import 'package:fairbid/features/admin/data/user_admin_repository.dart';
@@ -81,6 +82,7 @@ import 'package:fairbid/features/wallet/domain/ledger_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geocoding/geocoding.dart' show Placemark;
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -516,14 +518,28 @@ class FakeDocumentStorageRepository implements DocumentStorageRepository {
   }) async => 'https://fake.storage/disputes/$uid';
 
   @override
+  Future<String> uploadHandoverPhoto({
+    required String jobId,
+    required XFile file,
+  }) async => 'https://fake.storage/handovers/$jobId';
+
+  @override
   Future<void> deleteByUrl(String url) async {}
 }
 
 /// In-memory [JobRepository] seeded with [jobs].
 class FakeJobRepository implements JobRepository {
-  FakeJobRepository([List<Job> jobs = const []]) : _jobs = [...jobs];
+  FakeJobRepository([
+    List<Job> jobs = const [],
+    Map<String, List<JobEvent>>? events,
+  ])  : _jobs = [...jobs],
+        _events = {
+          for (final entry in (events ?? const {}).entries)
+            entry.key: [...entry.value],
+        };
 
   final List<Job> _jobs;
+  final Map<String, List<JobEvent>> _events;
   final _addresses = <String, ServiceAddress>{};
   final _changes = StreamController<void>.broadcast();
 
@@ -563,10 +579,25 @@ class FakeJobRepository implements JobRepository {
   
   @override
   Stream<List<Job>> watchBundleTasks(String bundleId) async* {
-    final tasks = _jobs.where((j) => j.bundleId == bundleId).toList();
-    tasks.sort((a, b) => (a.bundleOrder ?? 0).compareTo(b.bundleOrder ?? 0));
-    yield tasks;
+    List<Job> tasks() {
+      final t = _jobs.where((j) => j.bundleId == bundleId).toList();
+      t.sort((a, b) => (a.bundleOrder ?? 0).compareTo(b.bundleOrder ?? 0));
+      return t;
+    }
+
+    yield tasks();
+    await for (final _ in _changes.stream) {
+      yield tasks();
+    }
   }
+
+  @override
+  Future<List<Job>> getBundleTasks(String bundleId) async {
+    final t = _jobs.where((j) => j.bundleId == bundleId).toList();
+    t.sort((a, b) => (a.bundleOrder ?? 0).compareTo(b.bundleOrder ?? 0));
+    return t;
+  }
+
   @override
   Future<Job?> getById(String id) async =>
       _jobs.cast<Job?>().firstWhere((j) => j!.id == id, orElse: () => null);
@@ -622,16 +653,49 @@ class FakeJobRepository implements JobRepository {
     _notify();
   }
 
-  /// No test currently seeds the activity timeline - an empty stream still
-  /// satisfies the interface.
+  /// Yields the timeline seeded in the constructor (or added by
+  /// [recordHandover]), re-emitting on every job/event change.
   ///
-  /// If you do seed it, yield **newest first**. The real query is
-  /// `orderBy('at', descending: true).limit(50)` and the UI renders the list
-  /// as-is; seeding oldest-first here would quietly test the opposite of
-  /// production and make `events.first` the wrong entry.
+  /// The real query is `orderBy('at', descending: true).limit(50)` and the
+  /// UI renders the list as-is, so seed **newest first** - oldest-first here
+  /// would quietly test the opposite of production and make `events.first`
+  /// the wrong entry.
   @override
   Stream<List<JobEvent>> watchJobEvents(String jobId) async* {
-    yield const [];
+    List<JobEvent> current() => _events[jobId] ?? const [];
+    yield current();
+    await for (final _ in _changes.stream) {
+      yield current();
+    }
+  }
+
+  /// Arguments of the last [recordHandover] call, or null.
+  Map<String, Object?>? lastHandover;
+
+  /// When set, thrown by the next [recordHandover] instead of recording it.
+  Object? recordHandoverError;
+
+  @override
+  Future<void> recordHandover({
+    required String jobId,
+    required String note,
+    List<String> photoUrls = const [],
+  }) async {
+    final error = recordHandoverError;
+    if (error != null) throw error;
+    lastHandover = {'jobId': jobId, 'note': note, 'photoUrls': photoUrls};
+    _events.putIfAbsent(jobId, () => []).insert(
+          0,
+          JobEvent(
+            id: 'handover',
+            type: 'handover',
+            title: 'Site handover recorded',
+            at: DateTime.now(),
+            note: note,
+            photoUrls: photoUrls,
+          ),
+        );
+    _notify();
   }
 
   @override
@@ -713,6 +777,13 @@ class FakeJobRepository implements JobRepository {
     cancellationReason: clearCancellationRequest
         ? null
         : (cancellationReason ?? j.cancellationReason),
+    bundleId: j.bundleId,
+    bundleOrder: j.bundleOrder,
+    bundleTaskCount: j.bundleTaskCount,
+    lotId: j.lotId,
+    startsAfterJobId: j.startsAfterJobId,
+    gapDays: j.gapDays,
+    releasedAt: j.releasedAt,
   );
 }
 
@@ -1239,8 +1310,9 @@ class FakeReviewRepository implements ReviewRepository {
   Future<void> leaveReview({
     required String revieweeId,
     required Review review,
+    String? bundleId,
   }) async {
-    final id = '$revieweeId/${review.jobId}_${review.reviewerId}';
+    final id = '$revieweeId/${bundleId ?? review.jobId}_${review.reviewerId}';
     if (!_ids.add(id)) throw const ReviewAlreadyExistsException();
     final sum = (ratingSums[revieweeId] ?? 0) + review.rating;
     final count = (ratingCounts[revieweeId] ?? 0) + 1;
@@ -1260,6 +1332,14 @@ class FakeReviewRepository implements ReviewRepository {
     ).reviewScore;
     left.add(review);
   }
+
+  @override
+  Future<bool> hasReviewed({
+    required String revieweeId,
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
+  }) async => _ids.contains('$revieweeId/${bundleId ?? jobId}_$reviewerId');
 
   /// Reported reviews, recorded as (revieweeId, reviewId, reason).
   final flags = <(String, String, String)>[];
@@ -1425,10 +1505,17 @@ class FakeNotificationRepository implements NotificationRepository {
 /// [AssistRepository] returning canned suggestions (or, by default, null -
 /// proving the post-job form works with the assist entirely unavailable).
 class FakeAssistRepository implements AssistRepository {
-  FakeAssistRepository({this.description, this.priceRange});
+  FakeAssistRepository({this.description, this.priceRange, this.draft});
 
   final String? description;
   final ({int minSen, int maxSen})? priceRange;
+  final JobDraft? draft;
+
+  @override
+  Future<JobDraft?> suggestDraft({
+    required String roughText,
+    String? photoUrl,
+  }) async => draft;
 
   @override
   Future<String?> suggestDescription({
@@ -1671,8 +1758,16 @@ class FakeBundleRepository implements BundleRepository {
     return 'bundle-new';
   }
 
+  /// When set, thrown by the next [cancelBundle] instead of recording it -
+  /// lets a test exercise the `BundleRejectedException` snackbar.
+  Object? cancelError;
+
   @override
-  Future<void> cancelBundle(String id) async => cancelled.add(id);
+  Future<void> cancelBundle(String id) async {
+    final error = cancelError;
+    if (error != null) throw error;
+    cancelled.add(id);
+  }
 
   /// What [previewAward] hands back; empty unless a test seeds it.
   List<BundleAwardOption> awardOptions = const [];
@@ -1680,9 +1775,30 @@ class FakeBundleRepository implements BundleRepository {
   /// Arguments of the last [award], or null when it was never called.
   Map<String, Object?>? lastAward;
 
+  /// When set, thrown by the next [award] instead of recording it - lets a
+  /// test exercise the insufficient-balance and rejected-award paths.
+  Object? awardError;
+
   @override
   Future<List<BundleAwardOption>> previewAward(String bundleId) async =>
       awardOptions;
+
+  /// What [priceManualAward] hands back; null option and no problems unless
+  /// a test seeds one or the other.
+  BundleAwardOption? manualOption;
+  List<String> manualProblems = const [];
+
+  /// The `providerByTaskId` of the last [priceManualAward] call, or null.
+  Map<String, String>? lastManualPicks;
+
+  @override
+  Future<({BundleAwardOption? option, List<String> problems})> priceManualAward(
+    String bundleId,
+    Map<String, String> providerByTaskId,
+  ) async {
+    lastManualPicks = providerByTaskId;
+    return (option: manualOption, problems: manualProblems);
+  }
 
   @override
   Future<void> award({
@@ -1691,10 +1807,13 @@ class FakeBundleRepository implements BundleRepository {
     int? expectedTotalSen,
     DateTime? releasedDeadline,
   }) async {
+    final error = awardError;
+    if (error != null) throw error;
     lastAward = {
       'bundleId': bundleId,
       'providerByTaskId': providerByTaskId,
       'expectedTotalSen': expectedTotalSen,
+      'releasedDeadline': releasedDeadline,
     };
   }
 
@@ -1765,6 +1884,13 @@ class FakeBundleBidRepository implements BundleBidRepository {
   }
 
   @override
+  Future<BundleBid?> getMyBundleBid(String bundleId, String providerId) async =>
+      _bids.cast<BundleBid?>().firstWhere(
+        (b) => b!.bundleId == bundleId && b.providerId == providerId,
+        orElse: () => null,
+      );
+
+  @override
   Stream<List<BundleBid>> watchBundleBids(String bundleId) async* {
     yield _bids.where((b) => b.bundleId == bundleId).toList();
   }
@@ -1794,6 +1920,8 @@ Job sampleJob({
   String? bundleId,
   int? bundleOrder,
   int? bundleTaskCount,
+  DateTime? releasedAt,
+  String? startsAfterJobId,
 }) => Job(
   id: id,
   requestorId: requestorId,
@@ -1813,6 +1941,8 @@ Job sampleJob({
   bundleId: bundleId,
   bundleOrder: bundleOrder,
   bundleTaskCount: bundleTaskCount,
+  releasedAt: releasedAt,
+  startsAfterJobId: startsAfterJobId,
 );
 
 /// Builds a sample pending bid on [jobId] for tests. Defaults to an
@@ -1844,6 +1974,9 @@ Bundle sampleBundle({
   String title = 'Bathroom refresh',
   List<String> taskIds = const ['job-1', 'job-2'],
   DateTime? deadline,
+  BundleStatus status = BundleStatus.open,
+  int? consolidationCapPct,
+  int? consolidationCapSen,
 }) => Bundle(
   id: id,
   requestorId: requestorId,
@@ -1852,10 +1985,11 @@ Bundle sampleBundle({
   description: 'Small bathroom, about 4 square metres.',
   location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Penang'),
   taskIds: taskIds,
-  consolidationCapPct: PlatformConfig.consolidationCapPct,
-  consolidationCapSen: PlatformConfig.consolidationCapSen,
+  consolidationCapPct: consolidationCapPct ?? PlatformConfig.consolidationCapPct,
+  consolidationCapSen: consolidationCapSen ?? PlatformConfig.consolidationCapSen,
   createdAt: DateTime.now(),
   deadline: deadline,
+  status: status,
 );
 
 Widget buildApp(
@@ -1864,6 +1998,7 @@ Widget buildApp(
   List<Bid> bids = const [],
   List<Review> reviews = const [],
   List<Milestone> milestones = const [],
+  FakeJobRepository? jobRepository,
   FakeReviewRepository? review,
   FakePublicProfileRepository? publicProfile,
   FakeUserReportRepository? userReport,
@@ -1878,7 +2013,7 @@ Widget buildApp(
   FakeBundleRepository? bundle,
   FakeBundleBidRepository? bundleBid,
 }) {
-  final jobRepo = FakeJobRepository(jobs);
+  final jobRepo = jobRepository ?? FakeJobRepository(jobs);
   final milestoneRepo = FakeMilestoneRepository(jobRepo, milestones);
   final disputeRepo = dispute ?? FakeDisputeRepository();
   disputeRepo.milestones ??= milestoneRepo;
@@ -4011,6 +4146,38 @@ void main() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Licensing notice (docs/BUNDLE_BIDDING.md "Licensing"): shown on any job's
+  // detail screen when its category needs one.
+  // -------------------------------------------------------------------------
+  group('Licence notice', () {
+    Future<void> openOwnJob(WidgetTester tester, {required String category}) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final auth = FakeAuthRepository()..seedSignedIn(UserRole.requestor);
+      await tester.pumpWidget(
+          buildApp(auth, jobs: [sampleJob(title: 'A task', category: category)]));
+      await tester.pumpAndSettle();
+      await tester.tap(find.descendant(
+          of: find.byType(NavigationBar), matching: find.text('My Jobs')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('A task'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('shows on an Electrical job', (tester) async {
+      await openOwnJob(tester, category: 'Electrical');
+      expect(find.text('Licensing'), findsOneWidget);
+      expect(find.textContaining('Energy Commission-registered contractor'),
+          findsOneWidget);
+    });
+
+    testWidgets('does not show on a Cleaning job', (tester) async {
+      await openOwnJob(tester, category: 'Cleaning');
+      expect(find.text('Licensing'), findsNothing);
+    });
+  });
+
   group('Watchlist', () {
     testWidgets('bookmarking a job on the feed toggles its saved state', (
       tester,
@@ -4379,6 +4546,15 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    // A bundle task's extra "Part of a bundle" banner pushes the inline
+    // review card (slot 10) below the fold; `.first`-picking its "Review X"
+    // text would otherwise silently hit the always-visible, pinned bottom
+    // bar's duplicate (which only scrolls, it never opens the sheet).
+    Future<void> scrollToReviewSection(WidgetTester tester) async {
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
+      await tester.pumpAndSettle();
+    }
+
     testWidgets(
       'releasing the last milestone completes the job and the requestor '
       'reviews the provider',
@@ -4550,6 +4726,281 @@ void main() {
 
       expect(find.text('You have already reviewed this job.'), findsOneWidget);
     });
+
+    testWidgets(
+      'reviewing a completed live bundle task with no other tasks pending '
+      'writes a bundle-keyed review id, unlike a plain job',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final review = FakeReviewRepository();
+        final bundleTask = sampleJob(
+          status: JobStatus.completed,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+          bundleId: 'bundle-1',
+          bundleTaskCount: 1,
+        );
+        await tester.pumpWidget(
+          buildApp(FakeAuthRepository(), jobs: [bundleTask], review: review),
+        );
+        await tester.pumpAndSettle();
+        await loginRequestor(tester);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('My Jobs'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
+        final reviewBtn = find
+            .widgetWithText(FilledButton, 'Review Pro Fixer')
+            .first;
+        await tester.ensureVisible(reviewBtn);
+        await tester.tap(reviewBtn);
+        await tester.pumpAndSettle();
+        await giveStarsAndSubmit(tester, 5);
+
+        // Bundle-keyed, not job-keyed - the plain-job test above already
+        // covers the job-keyed id via 'job-1_uid-1'.
+        expect(review.left.single.jobId, 'job-1');
+        expect(await review.hasReviewed(
+          revieweeId: 'prov-1',
+          jobId: 'job-1',
+          reviewerId: 'uid-1',
+          bundleId: 'bundle-1',
+        ), isTrue);
+        expect(await review.hasReviewed(
+          revieweeId: 'prov-1',
+          jobId: 'job-1',
+          reviewerId: 'uid-1',
+        ), isFalse);
+      },
+    );
+
+    testWidgets(
+      'reviewing a completed RELEASED bundle task still writes the '
+      'bundle-keyed id - rules key on bundleId alone, not releasedAt',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final review = FakeReviewRepository();
+        final releasedTask = sampleJob(
+          status: JobStatus.completed,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+          bundleId: 'bundle-1',
+          bundleTaskCount: 1,
+          releasedAt: DateTime.now(),
+        );
+        await tester.pumpWidget(
+          buildApp(FakeAuthRepository(), jobs: [releasedTask], review: review),
+        );
+        await tester.pumpAndSettle();
+        await loginRequestor(tester);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('My Jobs'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
+        final reviewBtn = find
+            .widgetWithText(FilledButton, 'Review Pro Fixer')
+            .first;
+        await tester.ensureVisible(reviewBtn);
+        await tester.tap(reviewBtn);
+        await tester.pumpAndSettle();
+        await giveStarsAndSubmit(tester, 5);
+
+        expect(await review.hasReviewed(
+          revieweeId: 'prov-1',
+          jobId: 'job-1',
+          reviewerId: 'uid-1',
+          bundleId: 'bundle-1',
+        ), isTrue);
+      },
+    );
+
+    testWidgets(
+      "a completed bundle task's review waits while the provider still has "
+      'another task in progress, then opens once every task is done',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final review = FakeReviewRepository();
+        final taskA = sampleJob(
+          id: 'job-1',
+          title: 'Fix leaking sink',
+          status: JobStatus.completed,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+          bundleId: 'bundle-1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+        );
+        final taskBInProgress = sampleJob(
+          id: 'job-2',
+          title: 'Retile the floor',
+          status: JobStatus.inProgress,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 20000,
+          bundleId: 'bundle-1',
+          bundleOrder: 1,
+          bundleTaskCount: 2,
+        );
+        final jobRepo = FakeJobRepository([taskA, taskBInProgress]);
+        await tester.pumpWidget(
+          buildApp(
+            FakeAuthRepository(),
+            jobRepository: jobRepo,
+            review: review,
+          ),
+        );
+        await tester.pumpAndSettle();
+        await loginRequestor(tester);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('My Jobs'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
+
+        expect(
+          find.text(
+            'You can review Pro Fixer once all their tasks in this bundle '
+            'are done.',
+          ),
+          findsOneWidget,
+        );
+        // Only the pinned bottom bar's duplicate remains - the inline slot
+        // shows the wait banner instead of a review action.
+        expect(
+          find.widgetWithText(FilledButton, 'Review Pro Fixer'),
+          findsOneWidget,
+        );
+
+        // The provider's other task finishes too - leave and reopen the job
+        // so the inline card's one-shot gate check runs again.
+        jobRepo.complete('job-2');
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
+
+        expect(
+          find.text(
+            'You can review Pro Fixer once all their tasks in this bundle '
+            'are done.',
+          ),
+          findsNothing,
+        );
+        // Both the inline action and its pinned bottom-bar duplicate show now.
+        expect(
+          find.widgetWithText(FilledButton, 'Review Pro Fixer'),
+          findsNWidgets(2),
+        );
+      },
+    );
+
+    testWidgets(
+      'reviewing one bundle task counts for the rest of the same provider\'s '
+      'tasks in the bundle',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final review = FakeReviewRepository();
+        final taskA = sampleJob(
+          id: 'job-1',
+          title: 'Fix leaking sink',
+          status: JobStatus.completed,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+          bundleId: 'bundle-1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+        );
+        final taskB = sampleJob(
+          id: 'job-2',
+          title: 'Retile the floor',
+          status: JobStatus.completed,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 20000,
+          bundleId: 'bundle-1',
+          bundleOrder: 1,
+          bundleTaskCount: 2,
+        );
+        await tester.pumpWidget(
+          buildApp(
+            FakeAuthRepository(),
+            jobs: [taskA, taskB],
+            review: review,
+          ),
+        );
+        await tester.pumpAndSettle();
+        await loginRequestor(tester);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('My Jobs'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
+        final reviewBtn = find
+            .widgetWithText(FilledButton, 'Review Pro Fixer')
+            .first;
+        await tester.ensureVisible(reviewBtn);
+        await tester.tap(reviewBtn);
+        await tester.pumpAndSettle();
+        await giveStarsAndSubmit(tester, 5);
+        await scrollToReviewSection(tester);
+        expect(find.text('Review submitted'), findsOneWidget);
+
+        // Leave and check task B - same provider, same bundle, already
+        // reviewed via task A.
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Retile the floor').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
+
+        expect(find.text('Review submitted'), findsOneWidget);
+        // Only the pinned bottom bar's duplicate remains - the inline slot
+        // shows the already-reviewed state instead of a review action.
+        expect(
+          find.widgetWithText(FilledButton, 'Review Pro Fixer'),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('Chat', () {
@@ -5585,6 +6036,118 @@ void main() {
       expect(vm.role, JobViewerRole.browser);
       expect(vm.primaryAction, isNull);
     });
+
+    test('owner + open live bundle task: headline counts package bids, '
+        'action opens the bundle', () {
+      final job = sampleJob(
+        requestorId: 'me',
+        bundleId: 'b1',
+        bundleOrder: 0,
+        bundleTaskCount: 2,
+        bidCount: 2,
+      );
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.role, JobViewerRole.owner);
+      expect(vm.statusHeadline, '2 package bids cover this task.');
+      expect(vm.primaryAction?.kind, JobActionKind.viewBundle);
+      expect(vm.primaryAction?.label, 'View bundle');
+      // The per-job bid list is always empty for a live bundle task - the
+      // bundle screen is where its bids actually live.
+      expect(vm.showBids, isFalse);
+    });
+
+    test('owner + open live bundle task with no bids yet', () {
+      final job = sampleJob(
+        requestorId: 'me',
+        bundleId: 'b1',
+        bundleOrder: 0,
+        bundleTaskCount: 2,
+      );
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.statusHeadline, 'Waiting for providers to bid on this bundle.');
+    });
+
+    test('owner + open RELEASED bundle task: reads exactly like an ordinary '
+        'job', () {
+      final job = sampleJob(
+        requestorId: 'me',
+        bundleId: 'b1',
+        bundleOrder: 0,
+        bundleTaskCount: 2,
+        bidCount: 1,
+        releasedAt: DateTime.now(),
+      );
+      final vm = buildJobDetailVm(job, testUser(), null);
+
+      expect(vm.primaryAction?.kind, JobActionKind.compareBids);
+      expect(vm.primaryAction?.label, 'Compare 1 bid');
+      expect(vm.showBids, isTrue);
+    });
+
+    test(
+      'browser + live bundle task with a pending covering bundle bid: '
+      'edits it instead of being treated as a new bidder',
+      () {
+        final job = sampleJob(
+          requestorId: 'req-9',
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+        );
+        final myBundleBid = BundleBid(
+          bundleId: 'b1',
+          providerId: 'me',
+          providerName: 'Pro Fixer',
+          taskPrices: const {'job-1': 15000, 'job-2': 20000},
+          estimatedDuration: '1 week',
+        );
+        final vm = buildJobDetailVm(
+          job,
+          testUser(role: UserRole.provider, verificationStatus: 'approved'),
+          null,
+          myBundleBid: myBundleBid,
+        );
+
+        expect(vm.role, JobViewerRole.browser);
+        expect(
+          vm.statusHeadline,
+          'You bid RM 150.00 on this task as part of a package bid.',
+        );
+        expect(vm.primaryAction?.kind, JobActionKind.submitBid);
+        expect(vm.primaryAction?.label, 'Edit your bundle bid');
+      },
+    );
+
+    test(
+      "browser + live bundle task: a bundle bid that doesn't cover this "
+      'task is still a new bidder',
+      () {
+        final job = sampleJob(
+          requestorId: 'req-9',
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+        );
+        final myBundleBid = BundleBid(
+          bundleId: 'b1',
+          providerId: 'me',
+          providerName: 'Pro Fixer',
+          taskPrices: const {'job-2': 20000},
+          estimatedDuration: '1 week',
+        );
+        final vm = buildJobDetailVm(
+          job,
+          testUser(role: UserRole.provider, verificationStatus: 'approved'),
+          null,
+          myBundleBid: myBundleBid,
+        );
+
+        expect(vm.primaryAction?.kind, JobActionKind.submitBid);
+        expect(vm.primaryAction?.label, 'Submit a bid');
+      },
+    );
   });
 
   group('Admin user suspension', () {
@@ -5977,6 +6540,7 @@ void postJobAndOnboardingTests() {
     Future<FakeBundleBidRepository> pumpSheet(
       WidgetTester tester, {
       BundleBid? existing,
+      Bundle? bundle,
     }) async {
       final bundleBids = FakeBundleBidRepository();
       await tester.pumpWidget(MaterialApp(
@@ -5985,7 +6549,8 @@ void postJobAndOnboardingTests() {
           create: (_) => SubmitBundleBidController(bundleBids),
           child: Scaffold(
             body: SubmitBundleBidSheet(
-              bundle: sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
+              bundle: bundle ??
+                  sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
               tasks: tasks,
               bidder: const AppUser(
                 uid: 'prov-1',
@@ -6082,6 +6647,255 @@ void postJobAndOnboardingTests() {
       );
       expect(bundleBids.lastSubmission, isNull);
     });
+
+    testWidgets(
+      "the consolidation banner quotes the bundle's OWN cap, not the live "
+      'platform config',
+      (tester) async {
+        await pumpSheet(
+          tester,
+          bundle: sampleBundle(
+            id: 'b1',
+            taskIds: const ['job-1', 'job-2'],
+            consolidationCapPct: 10,
+            consolidationCapSen: 20000,
+          ),
+        );
+
+        expect(
+          find.textContaining('at most 10% and RM 200.00 more than'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'a partial read of the bundle tasks blocks the sheet with a snackbar',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final auth = FakeAuthRepository()
+          ..verificationStatus = 'approved'
+          ..baseLat = 3.139
+          ..baseLng = 101.6869;
+        // Only job-1 is seeded, even though the bundle claims two tasks - a
+        // stand-in for a `getBundleTasks` read landing before every task
+        // document has synced.
+        final job = sampleJob(
+          requestorId: 'req-9',
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+        );
+        final bundles = FakeBundleRepository(
+          [sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2'])],
+        );
+        await tester.pumpWidget(buildApp(auth, jobs: [job], bundle: bundles));
+        await tester.pumpAndSettle();
+        await openRegisterAs(tester, 'Work');
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Submit a bid').first,
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text(
+            "Couldn't load every task in this bundle. Check your "
+            'connection and try again.',
+          ),
+          findsOneWidget,
+        );
+        expect(find.byType(SubmitBundleBidSheet), findsNothing);
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // A provider's package bids belong on their "Pending Bids" list alongside
+  // their ordinary per-job bids (docs/BUNDLE_BIDDING.md) - both the Provider
+  // Home stat and the My Jobs section.
+  // -------------------------------------------------------------------------
+  group('Pending bundle bids', () {
+    testWidgets(
+      'a pending bundle bid counts toward Pending Bids and shows in My '
+      'Jobs, but a closed one does not',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final pending = BundleBid(
+          bundleId: 'b1',
+          providerId: 'uid-1',
+          providerName: 'New User',
+          taskPrices: const {'job-1': 37500, 'job-2': 52000},
+          estimatedDuration: '1 week',
+          bundleTitle: 'Bathroom refresh',
+          createdAt: DateTime.now(),
+        );
+        final closed = BundleBid(
+          bundleId: 'b2',
+          providerId: 'uid-1',
+          providerName: 'New User',
+          taskPrices: const {'job-3': 10000},
+          estimatedDuration: '1 week',
+          status: BundleBidStatus.closed,
+          bundleTitle: 'Kitchen refresh',
+          createdAt: DateTime.now(),
+        );
+        final auth = FakeAuthRepository()..verificationStatus = 'approved';
+        await tester.pumpWidget(buildApp(
+          auth,
+          bundleBid: FakeBundleBidRepository([pending, closed]),
+        ));
+        await tester.pumpAndSettle();
+        await openRegisterAs(tester, 'Work');
+
+        // Provider Home's "Pending Bids" stat counts only the pending one.
+        expect(find.widgetWithText(StatCard, '1'), findsOneWidget);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('My Jobs'),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Bathroom refresh'), findsOneWidget);
+        expect(find.text('Kitchen refresh'), findsNothing);
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // My Jobs groups a bundle's tasks under one card (bundle phase 4).
+  // -------------------------------------------------------------------------
+  group('My Jobs bundle grouping', () {
+    testWidgets(
+      "a requestor's bundle shows as one card with a progress line, "
+      'and plain jobs stay unchanged',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final tasks = [
+          sampleJob(id: 'job-1', title: 'Waterproofing', bundleId: 'b1',
+              bundleOrder: 0, bundleTaskCount: 3, status: JobStatus.completed),
+          sampleJob(id: 'job-2', title: 'Tiling', bundleId: 'b1',
+              bundleOrder: 1, bundleTaskCount: 3, status: JobStatus.inProgress),
+          sampleJob(id: 'job-3', title: 'Electrical fittings', bundleId: 'b1',
+              bundleOrder: 2, bundleTaskCount: 3, status: JobStatus.open),
+          sampleJob(id: 'job-4', title: 'Fix the fence'),
+        ];
+        final auth = FakeAuthRepository()..seedSignedIn(UserRole.requestor);
+        final bundles = FakeBundleRepository([
+          sampleBundle(
+              id: 'b1',
+              title: 'Bathroom refresh',
+              taskIds: const ['job-1', 'job-2', 'job-3']),
+        ]);
+        await tester
+            .pumpWidget(buildApp(auth, jobs: tasks, bundle: bundles));
+        await tester.pumpAndSettle();
+        await tester.tap(find.descendant(
+            of: find.byType(NavigationBar), matching: find.text('My Jobs')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Bathroom refresh'), findsOneWidget);
+        expect(find.text('3 tasks · 1 in progress · 1 done · '
+            '1 open'), findsOneWidget);
+        expect(find.text('Waterproofing'), findsOneWidget);
+        expect(find.text('Tiling'), findsOneWidget);
+        expect(find.text('Electrical fittings'), findsOneWidget);
+        // A plain job (no bundleId) still renders as its own ordinary card.
+        expect(find.text('Fix the fence'), findsOneWidget);
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // A task `awardBundle` left unawarded (docs/BUNDLE_BIDDING.md): from then
+  // on it is an ordinary job, not a bundle task, for both bidding and
+  // cancelling - even though `bundleId` is still set.
+  // -------------------------------------------------------------------------
+  group('Released bundle tasks', () {
+    testWidgets(
+      "a released task's bid sheet is the ordinary one, not the bundle's",
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final auth = FakeAuthRepository()
+          ..verificationStatus = 'approved'
+          ..baseLat = 3.139
+          ..baseLng = 101.6869;
+        final job = sampleJob(
+          requestorId: 'req-9',
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+          releasedAt: DateTime.now(),
+        );
+        final bundles = FakeBundleRepository(
+            [sampleBundle(id: 'b1', status: BundleStatus.awarded)]);
+        await tester.pumpWidget(buildApp(auth, jobs: [job], bundle: bundles));
+        await tester.pumpAndSettle();
+        await openRegisterAs(tester, 'Work');
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Released from its bundle'), findsOneWidget);
+
+        await tester.tap(find.widgetWithText(FilledButton, 'Submit a bid').first);
+        await tester.pumpAndSettle();
+
+        expect(find.widgetWithText(FilledButton, 'Submit Bid'), findsOneWidget);
+        expect(find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'),
+            findsNothing);
+      },
+    );
+
+    testWidgets(
+      "the owner cancels a released task like an ordinary job, not the "
+      'bundle',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final auth = FakeAuthRepository()..walletBalanceSen = 20000;
+        final job = sampleJob(
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+          releasedAt: DateTime.now(),
+        );
+        final bundles = FakeBundleRepository(
+            [sampleBundle(id: 'b1', status: BundleStatus.awarded)]);
+        await tester.pumpWidget(buildApp(auth, jobs: [job], bundle: bundles));
+        await tester.pumpAndSettle();
+        await fillField(tester, 'Email', 'a@b.com');
+        await fillField(tester, 'Password', 'secret123');
+        await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Cancel job'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, 'Cancel Job'));
+        await tester.pumpAndSettle();
+
+        expect(bundles.cancelled, isEmpty);
+        expect(find.text('This job was cancelled.'), findsOneWidget);
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -6149,6 +6963,58 @@ void postJobAndOnboardingTests() {
       expect(find.widgetWithText(FilledButton, 'Post Job'), findsNothing);
     });
 
+    /// Taps something that may be below the fold on this long form.
+    Future<void> tapAt(WidgetTester tester, Finder finder) async {
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('adding a task counts them and asks for a posting name', (
+      tester,
+    ) async {
+      await openPostJob(tester);
+      await addTask(tester);
+
+      expect(find.text('2 tasks in this posting'), findsOneWidget);
+      // The name is asked for at the end of the form, not above the fold.
+      expect(find.text('Name this posting'), findsOneWidget);
+    });
+
+    testWidgets('the task you add is scrolled into view', (tester) async {
+      await openPostJob(tester);
+      // A phone-sized viewport, where the new card starts off screen.
+      await tester.binding.setSurfaceSize(const Size(400, 700));
+      await tester.pumpAndSettle();
+
+      await addTask(tester);
+
+      final card = tester.getRect(find.text('Task 2'));
+      expect(card.top, lessThan(700));
+      expect(card.bottom, greaterThan(0));
+    });
+
+    testWidgets('an address already added is flagged, and clears', (
+      tester,
+    ) async {
+      await openPostJob(tester);
+      await tapAt(tester,
+          find.text('Add address (only your hired provider sees it)'));
+      await fillField(tester, 'Address line 1', '12 Jalan Mawar');
+      await fillField(tester, 'Postcode', '11900');
+      await fillField(tester, 'Town/City', 'Bayan Lepas');
+      await tapAt(tester, find.widgetWithText(FilledButton, 'Save address'));
+
+      await addTask(tester);
+
+      expect(find.textContaining('service address you added will not be'),
+          findsOneWidget);
+      await tapAt(tester, find.widgetWithText(TextButton, 'Clear it'));
+      expect(find.textContaining('service address you added will not be'),
+          findsNothing);
+    });
+
     testWidgets('a two-task form posts one bundle', (tester) async {
       final bundles = await openPostJob(tester);
 
@@ -6179,6 +7045,91 @@ void postJobAndOnboardingTests() {
       expect(posted['description'],
           '2 tasks: Fix the kitchen tap, Replace the ceiling light.');
       expect(find.text('Bundle posted with 2 tasks!'), findsOneWidget);
+    });
+
+    testWidgets('a template fills the task cards and links them', (
+      tester,
+    ) async {
+      final bundles = await openPostJob(tester);
+
+      await tapAt(tester, find.text('Start from a template'));
+      await tester.tap(find.text('Bathroom renovation'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Task 1'), findsOneWidget);
+      expect(find.text('Task 2'), findsOneWidget);
+      expect(find.text('Task 3'), findsOneWidget);
+      expect(find.text('Task 4'), findsOneWidget);
+
+      // The read-only dependency notes, exactly as the spec's examples.
+      expect(find.textContaining('Starts after Plumbing rough-in'),
+          findsNWidgets(2));
+      expect(find.textContaining('Starts after Waterproofing, 2 days later'),
+          findsOneWidget);
+      expect(find.textContaining('Same provider as: Tiling'), findsOneWidget);
+      expect(find.textContaining('Same provider as: Waterproofing'),
+          findsOneWidget);
+
+      // Template-linked tasks can't be removed on their own.
+      expect(find.byTooltip('Remove task 2'), findsNothing);
+      expect(find.byTooltip('Remove task 3'), findsNothing);
+      expect(find.byTooltip('Remove task 4'), findsNothing);
+
+      await fillField(tester, 'Description', 'Full strip-out and rebuild.');
+      await fillField(tester, 'Task 2 description', 'Seal the shower floor.');
+      await fillField(tester, 'Task 3 description', 'Tile the shower walls.');
+      await fillField(
+          tester, 'Task 4 description', 'New light and extractor fan.');
+
+      final submit = find.widgetWithText(FilledButton, 'Post Bundle');
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      final tasks = bundles.lastCreate!['tasks'] as List<BundleTaskDraft>;
+      expect(tasks.map((t) => t.title), [
+        'Plumbing rough-in',
+        'Waterproofing',
+        'Tiling',
+        'Electrical fittings',
+      ]);
+      expect(tasks.map((t) => t.category),
+          ['Plumbing', 'Home Repair', 'Home Repair', 'Electrical']);
+      expect(tasks[0].lotId, isNull);
+      expect(tasks[1].lotId, 'wet-area');
+      expect(tasks[1].startsAfterIndex, 0);
+      expect(tasks[2].lotId, 'wet-area');
+      expect(tasks[2].startsAfterIndex, 1);
+      expect(tasks[2].gapDays, 2);
+      expect(tasks[3].lotId, isNull);
+      expect(tasks[3].startsAfterIndex, 0);
+      // Left empty for the requestor - a blank posting title falls back to
+      // the template's name.
+      expect(bundles.lastCreate!['title'], 'Bathroom renovation');
+    });
+
+    testWidgets("'Clear template' drops the links but keeps the tasks", (
+      tester,
+    ) async {
+      await openPostJob(tester);
+
+      await tapAt(tester, find.text('Start from a template'));
+      await tester.tap(find.text('Move-in prep'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Task 3'), findsOneWidget);
+      expect(
+          find.textContaining('Starts after Deep clean'), findsOneWidget);
+      expect(find.byTooltip('Remove task 2'), findsNothing);
+      expect(find.byTooltip('Remove task 3'), findsNothing);
+
+      await tapAt(tester, find.text('Clear template'));
+
+      expect(find.textContaining('Starts after Deep clean'), findsNothing);
+      expect(find.byTooltip('Remove task 2'), findsOneWidget);
+      expect(find.byTooltip('Remove task 3'), findsOneWidget);
+      // The tasks themselves - titles, categories - are untouched.
+      expect(find.text('Task 3'), findsOneWidget);
     });
   });
 
@@ -6224,23 +7175,45 @@ void postJobAndOnboardingTests() {
       createdAt: DateTime.now(),
     );
 
-    Future<FakeBundleRepository> pumpBundle(WidgetTester tester) async {
+    Future<FakeBundleRepository> pumpBundle(
+      WidgetTester tester, {
+      Bundle? bundle,
+    }) async {
       await tester.binding.setSurfaceSize(const Size(800, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final bundles = FakeBundleRepository([
-        sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
+        bundle ?? sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
       ])..awardOptions = [recommended];
-      await tester.pumpWidget(MaterialApp(
+      // A nested route (rather than a bare `home:`) so the screen's own
+      // `context.pop()` on a successful award has somewhere to go back to -
+      // matching how it's really reached, pushed from a job's "View bundle".
+      final router = GoRouter(
+        initialLocation: '/bundle',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => const Scaffold(body: SizedBox()),
+            routes: [
+              GoRoute(
+                path: 'bundle',
+                builder: (context, state) => MultiProvider(
+                  providers: [
+                    Provider<BundleRepository>.value(value: bundles),
+                    Provider<JobRepository>.value(
+                        value: FakeJobRepository(tasks)),
+                    Provider<BundleBidRepository>.value(
+                        value: FakeBundleBidRepository([bid()])),
+                  ],
+                  child: const BundleDetailScreen(bundleId: 'b1'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+      await tester.pumpWidget(MaterialApp.router(
         theme: AppTheme.light,
-        home: MultiProvider(
-          providers: [
-            Provider<BundleRepository>.value(value: bundles),
-            Provider<JobRepository>.value(value: FakeJobRepository(tasks)),
-            Provider<BundleBidRepository>.value(
-                value: FakeBundleBidRepository([bid()])),
-          ],
-          child: const BundleDetailScreen(bundleId: 'b1'),
-        ),
+        routerConfig: router,
       ));
       await tester.pumpAndSettle();
       return bundles;
@@ -6267,7 +7240,7 @@ void postJobAndOnboardingTests() {
           'Show award options'));
       await tester.pumpAndSettle();
       expect(find.text('Recommended'), findsOneWidget);
-      expect(find.textContaining('RM 35.00 more than the cheapest'),
+      expect(find.textContaining('RM 35.00 (4.2%) more than the cheapest'),
           findsOneWidget);
 
       await tester.tap(find.widgetWithText(FilledButton, 'Award recommended'));
@@ -6278,6 +7251,388 @@ void postJobAndOnboardingTests() {
       expect(bundles.lastAward?['providerByTaskId'],
           {'job-1': 'prov-1', 'job-2': 'prov-2'});
       expect(bundles.lastAward?['expectedTotalSen'], 87500);
+    });
+
+    testWidgets('a closed bundle hides the award buttons and explains why', (
+      tester,
+    ) async {
+      final pastDeadline = DateTime.now().subtract(const Duration(days: 1));
+      await pumpBundle(
+        tester,
+        bundle: sampleBundle(
+          id: 'b1',
+          taskIds: const ['job-1', 'job-2'],
+          deadline: pastDeadline,
+        ),
+      );
+
+      expect(find.widgetWithText(FilledButton, 'Show award options'),
+          findsNothing);
+      expect(find.textContaining('Bidding closed on'), findsOneWidget);
+      expect(find.textContaining('can no longer be awarded'), findsOneWidget);
+    });
+
+    testWidgets('a rejected award brings back "Show award options"', (
+      tester,
+    ) async {
+      final bundles = await pumpBundle(tester);
+      bundles.awardError = const BundleRejectedException('The bids changed.');
+
+      await tester.tap(
+          find.widgetWithText(FilledButton, 'Show award options'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+          find.widgetWithText(FilledButton, 'Award recommended'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Award'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('The bids changed.'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Show award options'),
+          findsOneWidget);
+      expect(find.text('Recommended'), findsNothing);
+    });
+
+    testWidgets('an insufficient balance shows the Top up dialog', (
+      tester,
+    ) async {
+      final bundles = await pumpBundle(tester);
+      bundles.awardError = const InsufficientBalanceException(
+        shortfallSen: 5000,
+        availableSen: 30000,
+        requiredSen: 35000,
+      );
+
+      await tester.tap(
+          find.widgetWithText(FilledButton, 'Show award options'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+          find.widgetWithText(FilledButton, 'Award recommended'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Award'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Not enough balance'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Top up'), findsOneWidget);
+    });
+
+    /// Picks the matrix item containing [label] in the [index]-th task's
+    /// dropdown (0 is the first task).
+    Future<void> pickManual(
+      WidgetTester tester,
+      int index,
+      String label,
+    ) async {
+      final dropdown = find.byType(DropdownButtonFormField<String?>).at(index);
+      await tester.ensureVisible(dropdown);
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining(label).last);
+      await tester.pumpAndSettle();
+    }
+
+    final manualPick = const BundleAwardOption(
+      key: 'manual',
+      label: 'Your pick',
+      totalSen: 89500,
+      providerCount: 1,
+      premiumSen: 2000,
+      weightedTrust: 700,
+      awards: [
+        BundleAwardItem(
+          providerId: 'prov-1',
+          providerName: 'Aida Renovation',
+          taskAmountsSen: {'job-1': 37500, 'job-2': 52000},
+        ),
+      ],
+    );
+
+    testWidgets('picking providers and checking the price shows "Your pick"', (
+      tester,
+    ) async {
+      final bundles = await pumpBundle(tester);
+      bundles.manualOption = manualPick;
+
+      await pickManual(tester, 0, 'Aida Renovation');
+      await pickManual(tester, 1, 'Aida Renovation');
+      await tester.tap(find.widgetWithText(FilledButton, 'Check price'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Your pick'), findsOneWidget);
+      expect(bundles.lastManualPicks, {'job-1': 'prov-1', 'job-2': 'prov-1'});
+    });
+
+    testWidgets('a manual pick the server refuses shows its problems', (
+      tester,
+    ) async {
+      final bundles = await pumpBundle(tester);
+      bundles.manualProblems = const ['Prov-1 already covers job-2 elsewhere.'];
+
+      await pickManual(tester, 0, 'Aida Renovation');
+      await tester.tap(find.widgetWithText(FilledButton, 'Check price'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Prov-1 already covers job-2 elsewhere.'),
+          findsOneWidget);
+      expect(find.text('Your pick'), findsNothing);
+    });
+
+    testWidgets('changing a pick clears the priced result', (tester) async {
+      final bundles = await pumpBundle(tester);
+      bundles.manualOption = manualPick;
+
+      await pickManual(tester, 0, 'Aida Renovation');
+      await tester.tap(find.widgetWithText(FilledButton, 'Check price'));
+      await tester.pumpAndSettle();
+      expect(find.text('Your pick'), findsOneWidget);
+
+      await pickManual(tester, 0, "Don't award");
+      expect(find.text('Your pick'), findsNothing);
+    });
+  });
+
+  group('Site handover', () {
+    /// A dependent task, already in progress, assigned to the registered
+    /// provider ('uid-1' - see `openRegisterAs`). Posted by someone else -
+    /// `sampleJob`'s own `requestorId` also defaults to 'uid-1', which would
+    /// otherwise resolve the registered user as the owner, not the provider.
+    Job dependentJob() => sampleJob(
+          requestorId: 'req-9',
+          status: JobStatus.inProgress,
+          acceptedProviderId: 'uid-1',
+          acceptedProviderName: 'New User',
+          acceptedBidAmountSen: 15000,
+          startsAfterJobId: 'job-0',
+        );
+
+    /// Registers as a provider and opens their assigned job via My Jobs.
+    Future<void> openAssignedJob(WidgetTester tester) async {
+      await openRegisterAs(tester, 'Work');
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('My Jobs'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Fix leaking sink').first);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'the accepted provider sees the banner, records a handover, then it '
+      'clears and the timeline shows the note',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final auth = FakeAuthRepository()
+          ..verificationStatus = 'approved'
+          ..baseLat = 3.139
+          ..baseLng = 101.6869;
+        await tester.pumpWidget(buildApp(auth, jobs: [dependentJob()]));
+        await tester.pumpAndSettle();
+        await openAssignedJob(tester);
+
+        expect(find.text('Record the site handover before you start.'),
+            findsOneWidget);
+
+        await tester.tap(find.widgetWithText(TextButton, 'Record handover'));
+        await tester.pumpAndSettle();
+        expect(find.text('Record Handover'), findsOneWidget);
+
+        // Empty note is rejected.
+        await tester.tap(find.widgetWithText(FilledButton, 'Submit'));
+        await tester.pumpAndSettle();
+        expect(find.text('Describe the handover.'), findsOneWidget);
+
+        await fillField(
+          tester,
+          'Handover note',
+          'Site is clear, previous task finished.',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Submit'));
+        await tester.pumpAndSettle();
+
+        // The sheet closed and the banner is gone.
+        expect(find.text('Record Handover'), findsNothing);
+        expect(find.text('Record the site handover before you start.'),
+            findsNothing);
+
+        // The timeline shows the recorded note once expanded.
+        await tester.tap(find.text('Activity'));
+        await tester.pumpAndSettle();
+        expect(find.text('Site is clear, previous task finished.'),
+            findsOneWidget);
+      },
+    );
+
+    testWidgets('a job that does not depend on another shows no banner', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final job = sampleJob(
+        requestorId: 'req-9',
+        status: JobStatus.inProgress,
+        acceptedProviderId: 'uid-1',
+        acceptedProviderName: 'New User',
+        acceptedBidAmountSen: 15000,
+      );
+      final auth = FakeAuthRepository()
+        ..verificationStatus = 'approved'
+        ..baseLat = 3.139
+        ..baseLng = 101.6869;
+      await tester.pumpWidget(buildApp(auth, jobs: [job]));
+      await tester.pumpAndSettle();
+      await openAssignedJob(tester);
+
+      expect(find.text('Record the site handover before you start.'),
+          findsNothing);
+      expect(find.widgetWithText(TextButton, 'Record handover'), findsNothing);
+    });
+  });
+
+  group('AppTextField', () {
+    testWidgets('a labelTrailing widget sits flush with the row\'s right '
+        'edge', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: AppTextField(
+            controller: TextEditingController(),
+            label: 'Password',
+            labelTrailing: const Text('Forgot?'),
+          ),
+        ),
+      ));
+
+      final row = find.ancestor(
+        of: find.text('Forgot?'),
+        matching: find.byType(Row),
+      );
+      final rowRight = tester.getRect(row).right;
+      final trailingRight = tester.getRect(find.text('Forgot?')).right;
+      // Expanded (not Flexible+Spacer) pushes the label to wrap instead of
+      // splitting the row 50/50, so the trailing widget lands flush right.
+      expect(trailingRight, closeTo(rowRight, 0.5));
+    });
+  });
+
+  group('Description assist', () {
+    Future<void> openPostJob(WidgetTester tester, {String? description}) async {
+      await tester.binding.setSurfaceSize(const Size(800, 2000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final auth = FakeAuthRepository()
+        ..defaultLat = 5.4164
+        ..defaultLng = 100.3327
+        ..defaultDistrictCode = 'TL'
+        ..defaultTown = 'George Town'
+        ..seedSignedIn(UserRole.requestor);
+      await tester.pumpWidget(buildApp(auth,
+          assist: FakeAssistRepository(description: description)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('+ Post a Job'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the written-draft Undo snackbar disappears on its own', (
+      tester,
+    ) async {
+      await openPostJob(tester, description: 'A proper description.');
+
+      final categoryDropdown =
+          find.byType(DropdownButtonFormField<String>).first;
+      await tester.ensureVisible(categoryDropdown);
+      await tester.tap(categoryDropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Plumbing').last);
+      await tester.pumpAndSettle();
+      await fillField(tester, 'Description', 'leaking pipe');
+
+      await tester.tap(find.text('Help me write this'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Draft written. Edit it to match your situation.'),
+          findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'A proper description.'),
+          findsOneWidget);
+
+      // persist: false + a fixed duration: unlike the SDK default for a
+      // SnackBar with an action (persist forever), this one times out on
+      // its own.
+      await tester.pump(const Duration(seconds: 7));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Draft written. Edit it to match your situation.'),
+          findsNothing);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The one-shot draft: one rough note fills the form, and never overwrites
+  // anything already typed.
+  // -------------------------------------------------------------------------
+  group('Drafting a post with AI', () {
+    final draft = const JobDraft(
+      title: 'Fix the kitchen tap',
+      category: 'Plumbing',
+      description: 'What needs doing\nTap drips all night.',
+      minSen: 8000,
+      maxSen: 15000,
+    );
+
+    Future<void> openPostJob(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 2000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final auth = FakeAuthRepository()
+        ..defaultLat = 5.4164
+        ..defaultLng = 100.3327
+        ..defaultDistrictCode = 'TL'
+        ..defaultTown = 'George Town'
+        ..seedSignedIn(UserRole.requestor);
+      await tester.pumpWidget(
+          buildApp(auth, assist: FakeAssistRepository(draft: draft)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('+ Post a Job'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> runDraft(WidgetTester tester) async {
+      await tester.tap(find.text("Describe it once, we'll fill this in"));
+      await tester.pumpAndSettle();
+      await fillField(tester, 'In your own words', 'kitchen tap drips');
+      await tester.tap(find.widgetWithText(FilledButton, 'Draft my post'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('one note fills the title, category and budget', (
+      tester,
+    ) async {
+      await openPostJob(tester);
+      await runDraft(tester);
+
+      expect(find.widgetWithText(TextFormField, 'Fix the kitchen tap'),
+          findsOneWidget);
+      expect(find.text('Plumbing'), findsOneWidget); // the category dropdown
+      expect(find.widgetWithText(TextFormField, '80.00'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '150.00'), findsOneWidget);
+    });
+
+    testWidgets('a draft never overwrites what you already typed', (
+      tester,
+    ) async {
+      await openPostJob(tester);
+      await fillField(tester, 'Job Title', 'My own title');
+      await runDraft(tester);
+
+      expect(find.widgetWithText(TextFormField, 'My own title'),
+          findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Fix the kitchen tap'),
+          findsNothing);
+      // The fields it did fill are named back to the requestor.
+      expect(find.textContaining('Filled in'), findsOneWidget);
     });
   });
 }

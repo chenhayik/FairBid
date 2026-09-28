@@ -35,10 +35,9 @@ class BundleAwardOption {
 
   /// The picks to send to `awardBundle`.
   Map<String, String> get providerByTaskId => {
-        for (final award in awards)
-          for (final taskId in award.taskAmountsSen.keys)
-            taskId: award.providerId,
-      };
+    for (final award in awards)
+      for (final taskId in award.taskAmountsSen.keys) taskId: award.providerId,
+  };
 
   factory BundleAwardOption.fromMap(Map<String, dynamic> m) =>
       BundleAwardOption(
@@ -50,10 +49,11 @@ class BundleAwardOption {
         weightedTrust: (m['weightedTrust'] as num?)?.toInt() ?? 0,
         uncoveredTaskIds:
             (m['uncoveredTaskIds'] as List?)?.whereType<String>().toList() ??
-                const [],
+            const [],
         warnings:
             (m['warnings'] as List?)?.whereType<String>().toList() ?? const [],
-        awards: (m['awards'] as List?)
+        awards:
+            (m['awards'] as List?)
                 ?.whereType<Map>()
                 .map((a) => BundleAwardItem.fromMap(a))
                 .toList() ??
@@ -80,12 +80,12 @@ class BundleAwardItem {
       taskAmountsSen.values.fold(0, (sum, amount) => sum + amount);
 
   factory BundleAwardItem.fromMap(Map m) => BundleAwardItem(
-        providerId: m['providerId'] as String? ?? '',
-        providerName: m['providerName'] as String? ?? 'Provider',
-        taskAmountsSen: <String, int>{
-          for (final entry in (m['taskAmountsSen'] as Map? ?? {}).entries)
-            if (entry.value is num)
-              entry.key as String: (entry.value as num).toInt(),
-        },
-      );
+    providerId: m['providerId'] as String? ?? '',
+    providerName: m['providerName'] as String? ?? 'Provider',
+    taskAmountsSen: <String, int>{
+      for (final entry in (m['taskAmountsSen'] as Map? ?? {}).entries)
+        if (entry.value is num)
+          entry.key as String: (entry.value as num).toInt(),
+    },
+  );
 }

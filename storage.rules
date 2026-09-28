@@ -61,6 +61,24 @@ service firebase.storage {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // Site handover evidence (docs/BUNDLE_BIDDING.md phase 4). A top-level
+    // collection, not nested under `jobs/`: the wide-open `jobs/{userId}/
+    // {allPaths=**}` rule above would otherwise make these world-readable.
+    match /handovers/{jobId}/{fileName} {
+      function job() {
+        return firestore.get(/databases/(default)/documents/jobs/$(jobId)).data;
+      }
+      allow read: if request.auth != null
+                  && (request.auth.uid == job().requestorId
+                      || request.auth.uid == job().acceptedProviderId
+                      || isAdmin());
+      allow write: if request.auth != null
+                   && request.auth.uid == job().acceptedProviderId
+                   && request.resource.size > 0
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
     // Profile avatars: readable by any signed-in user (unlike `verification/`,
     // these are deliberately world-readable, since the photo is denormalised
     // onto bids/jobs/chats/reviews so counterparties see a face). The owner
