@@ -182,7 +182,7 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
   const user = (await db.doc(`users/${uid}`).get()).data();
   if (user?.role !== "requestor") {
     throw new functions.https.HttpsError(
-        "permission-denied", "Only a requestor can post a bundle.");
+        "permission-denied", "Only a client can post a bundle.");
   }
   if (user.suspended === true) {
     throw new functions.https.HttpsError(
@@ -376,8 +376,8 @@ function checkLots(taskSnaps, picked) {
   Object.values(lots).forEach((lot) => {
     const inBid = lot.filter((jobId) => picked.includes(jobId));
     if (inBid.length !== 0 && inBid.length !== lot.length) {
-      throw bad("Some of these tasks have to go to the same provider. Pick " +
-          "every task in the group, or none of them.");
+      throw bad("Some of these tasks are linked and must go to the same " +
+          "provider. Pick all of them or none.");
     }
   });
 }
@@ -587,7 +587,7 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
     if (bundle.requestorId !== uid) {
       throw new functions.https.HttpsError(
           "permission-denied",
-          "Only the requestor who posted this bundle can cancel it.");
+          "Only the client who posted this bundle can cancel it.");
     }
     if (bundle.status !== "open") {
       throw new functions.https.HttpsError(
@@ -613,7 +613,7 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
         cancelledBy: uid,
         cancelledAt: FieldValue.serverTimestamp(),
         cancellationReason:
-            "The requestor cancelled the bundle this task was part of.",
+            "The client cancelled the bundle this task was part of.",
       });
     });
 
@@ -624,7 +624,7 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
       notifyUser(tx, doc.id, {
         type: "cancellation",
         title: "Bundle cancelled",
-        body: `The requestor cancelled "${bundle.title || "a bundle"}", ` +
+        body: `The client cancelled "${bundle.title || "a bundle"}", ` +
             "so your bid is closed.",
         route: null,
       });
@@ -856,6 +856,21 @@ function uidsToCount(participants, alreadyCounted) {
   return participants.filter((uid) => !alreadyCounted.includes(uid));
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6: flagging a dispute as a "split handover" one, for the deliverable
+// metric in docs/BUNDLE_BIDDING.md (how often a handover leads to a dispute).
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a dispute on `job` follows a predecessor task that went to a
+ * different provider - the split handover the phase-6 metric counts. Pure so
+ * bundles.test.js can pin it without an emulator.
+ */
+function isHandoverDispute(job, predecessorJob) {
+  if (!job.startsAfterJobId || !predecessorJob) return false;
+  return predecessorJob.acceptedProviderId !== job.acceptedProviderId;
+}
+
 // Exported for bundles.test.js only. index.js re-exports just the
 // callables, and the Firebase CLI deploys only what index.js exports.
 exports.validateBundle = validateBundle;
@@ -867,6 +882,7 @@ exports.startsWhenText = startsWhenText;
 exports.handoverNotificationBody = handoverNotificationBody;
 exports.validateHandover = validateHandover;
 exports.uidsToCount = uidsToCount;
+exports.isHandoverDispute = isHandoverDispute;
 
 // Shared with bundle_award.js and the posting assist in index.js.
 exports.CATEGORIES = CATEGORIES;

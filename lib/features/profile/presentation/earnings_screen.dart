@@ -105,7 +105,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
     int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
-      title: 'Top Up Wallet',
+      title: 'Top up wallet',
       subtitle: 'Pay by FPX or online banking (toyyibPay sandbox).',
       actionLabel: 'Continue to Payment',
       maxSen: PlatformConfig.maxTopUpSen,
@@ -182,9 +182,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
     int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
-      title: 'Demo Top Up',
+      title: 'Demo top up',
       subtitle: 'Demo top-up: this stands in for a payment gateway.',
-      actionLabel: 'Top Up',
+      actionLabel: 'Top up',
       maxSen: PlatformConfig.maxTopUpSen,
       onSubmit: (sen) async {
         await wallet.topUp(sen);
@@ -210,7 +210,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
 
     return Scaffold(
       appBar:
-          AppBar(title: Text(isProvider ? 'Earnings & Payouts' : 'My Wallet')),
+          AppBar(title: Text(isProvider ? 'Earnings & payouts' : 'My wallet')),
       body: SafeArea(
         // The top-up failure copy tells users their payment will show up here,
         // and people reach for a pull-to-refresh at exactly that moment. The
@@ -225,7 +225,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
             children: [
             _AvailableCard(
               balanceSen: user.walletBalanceSen,
-              actionLabel: isProvider ? 'Withdraw' : 'Top Up',
+              actionLabel: isProvider ? 'Withdraw' : 'Top up',
               onAction: isProvider
                   ? () => _withdraw(user.walletBalanceSen)
                   : _topUp,
@@ -332,12 +332,12 @@ class _EscrowStats extends StatelessWidget {
           return const Column(
             children: [
               StatCard(
-                label: 'In Escrow',
+                label: 'In escrow',
                 value: '-',
                 icon: Icons.lock_outline,
               ),
               SizedBox(height: 12),
-              StatCard(label: 'Total Earnings', value: '-'),
+              StatCard(label: 'Total earnings', value: '-'),
             ],
           );
         }
@@ -359,12 +359,12 @@ class _EscrowStats extends StatelessWidget {
         return Column(
           children: [
             StatCard(
-              label: 'In Escrow',
+              label: 'In escrow',
               value: formatRm(inEscrowSen),
               icon: Icons.lock_outline,
             ),
             const SizedBox(height: 12),
-            StatCard(label: 'Total Earnings', value: formatRm(earnedSen)),
+            StatCard(label: 'Total earnings', value: formatRm(earnedSen)),
           ],
         );
       },
@@ -387,7 +387,7 @@ class _PayoutMethodCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Payout Method', style: theme.textTheme.titleLarge),
+          Text('Payout method', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           if (hasMethod)
             Row(
@@ -439,7 +439,7 @@ class _TransactionHistoryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Transaction History', style: theme.textTheme.titleLarge),
+          Text('Transaction history', style: theme.textTheme.titleLarge),
           const SizedBox(height: 8),
           StreamBuilder<List<LedgerEntry>>(
             stream: stream,

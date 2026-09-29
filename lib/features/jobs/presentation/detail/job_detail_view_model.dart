@@ -1,4 +1,5 @@
 import '../../../../core/util/money.dart';
+import '../../../../core/util/plural.dart';
 import '../../../auth/domain/app_user.dart';
 import '../../../auth/domain/user_role.dart';
 import '../../domain/bid.dart';
@@ -37,7 +38,7 @@ enum JobActionKind {
   /// Opens the chat thread with the counterparty.
   message,
 
-  /// Scrolls to the leave-a-review prompt.
+  /// Opens the review sheet.
   leaveReview,
 
   /// Opens the submit-a-bid sheet.
@@ -46,46 +47,41 @@ enum JobActionKind {
   /// Deep-links into provider onboarding/verification.
   getVerified,
 
-  /// Scrolls to the viewer's own bid (paired with a secondary Withdraw).
+  /// Scrolls to the viewer's own bid.
   yourBid,
 
-  /// Scrolls to the milestone tracker to propose a plan.
+  /// Opens the propose-a-plan sheet.
   proposeMilestones,
 
-  /// Scrolls to the milestone tracker to mark the current milestone
-  /// delivered.
+  /// Marks the current milestone delivered (with confirmation).
   markDelivered,
 
-  /// Scrolls to the milestone tracker to fund the current milestone.
+  /// Funds the current milestone (with confirmation).
   fundMilestone,
 
-  /// Scrolls to the milestone tracker to release the current milestone.
+  /// Releases the current milestone (with confirmation).
   releaseMilestone,
 
-  /// Scrolls to the milestone tracker to approve/request changes on a
-  /// proposed plan.
-  reviewPlan,
+  /// Approves the provider's proposed plan (with confirmation).
+  approvePlan,
 
   /// Opens the bundle's award screen, where a still-open live bundle task's
   /// bids are compared rather than in this job's own (empty) bid list.
   viewBundle,
 }
 
-/// A role-resolved call to action: a label, what it does ([kind]), an
-/// optional short money/context line shown alongside it, and - for the
-/// bidder's "Your bid RM X" - an optional secondary label (Withdraw).
+/// A role-resolved call to action: a label, what it does ([kind]), and an
+/// optional short money/context line shown alongside it.
 class NextAction {
   const NextAction({
     required this.label,
     required this.kind,
     this.contextLine,
-    this.secondaryLabel,
   });
 
   final String label;
   final JobActionKind kind;
   final String? contextLine;
-  final String? secondaryLabel;
 }
 
 /// The pure, widget-free result of looking at one job as one viewer: what
@@ -201,7 +197,7 @@ JobDetailViewModel _forOwner(Job job) {
         return JobDetailViewModel(
           role: JobViewerRole.owner,
           statusHeadline: n > 0
-              ? '$n package bid${n == 1 ? '' : 's'} cover this task.'
+              ? '${plural(n, 'bundle bid')} ${n == 1 ? 'covers' : 'cover'} this task.'
               : 'Waiting for providers to bid on this bundle.',
           primaryAction: const NextAction(
             label: 'View bundle',
@@ -354,7 +350,6 @@ JobDetailViewModel _forBidder(Job job, Bid myBid) {
       label: 'Your bid ${formatRm(myBid.amountSen)}',
       kind: JobActionKind.yourBid,
       contextLine: myBid.estimatedDuration,
-      secondaryLabel: 'Withdraw',
     ),
     showBids: true,
     showMilestones: false,
@@ -382,12 +377,15 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
     return JobDetailViewModel(
       role: JobViewerRole.browser,
       statusHeadline: 'You bid ${formatRm(price)} on this task as part of '
-          'a package bid.',
+          'a bundle bid.',
       primaryAction: const NextAction(
-        label: 'Edit your bundle bid',
+        label: 'Edit bundle bid',
         kind: JobActionKind.submitBid,
       ),
-      showBids: true,
+      // A live bundle task never has a per-job bid of its own, so the plain
+      // bid list/action (slot 7) would show "Submit a bid" here - the
+      // widget layer renders a dedicated "Your bundle bid" card instead.
+      showBids: false,
       showMilestones: false,
       showAddress: false,
       showReviewPrompt: false,
@@ -410,7 +408,7 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
   } else {
     headline = 'Review the job, then submit your bid.';
     action = NextAction(
-      label: 'Submit a bid',
+      label: job.isLiveBundleTask ? 'Bid on this bundle' : 'Submit a bid',
       kind: JobActionKind.submitBid,
       contextLine: job.budget?.label ?? job.location.address,
     );

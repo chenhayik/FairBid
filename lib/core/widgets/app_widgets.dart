@@ -26,30 +26,44 @@ class PrimaryButton extends StatelessWidget {
     // invisible - so every commitment action in the app looked unresponsive
     // exactly while it was working. A no-op keeps the fill, and AbsorbPointer
     // below blocks the repeat tap that null was there to prevent.
-    final button = FilledButton(
-      onPressed: busy ? () {} : onPressed,
-      child: busy
-          ? Semantics(
-              label: label,
-              child: SizedBox(
-                height: 22,
-                width: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Theme.of(context).colorScheme.onPrimary,
+    // Full width by itself (not via the shared theme - see filledButtonTheme
+    // in app_theme.dart) so a bare FilledButton (dialog actions) can size to
+    // its content instead of stretching edge-to-edge.
+    final button = SizedBox(
+      width: double.infinity,
+      child: FilledButton(
+        onPressed: busy ? () {} : onPressed,
+        child: busy
+            ? Semantics(
+                label: label,
+                child: SizedBox(
+                  height: 22,
+                  width: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Theme.of(context).colorScheme.onPrimary,
+                  ),
                 ),
-              ),
-            )
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label),
-                if (trailingIcon != null) ...[
-                  const SizedBox(width: 8),
-                  Icon(trailingIcon, size: 18),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Flexible so a long label wraps/ellipses at larger text
+                  // scales instead of overflowing the button.
+                  Flexible(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  if (trailingIcon != null) ...[
+                    const SizedBox(width: 8),
+                    Icon(trailingIcon, size: 18),
+                  ],
                 ],
-              ],
-            ),
+              ),
+      ),
     );
     return busy ? AbsorbPointer(child: button) : button;
   }
@@ -160,6 +174,7 @@ class InfoBanner extends StatelessWidget {
     this.background,
     this.leftAccent = false,
     this.trailing,
+    this.bottom,
   });
 
   final IconData icon;
@@ -169,6 +184,11 @@ class InfoBanner extends StatelessWidget {
   final Color? background; // defaults to subtle blue
   final bool leftAccent; // 4px solid left border, per DESIGN.md banners
   final Widget? trailing;
+
+  /// Optional full-width widget under the title/body - e.g. an action button
+  /// that needs its own row rather than squeezing beside the text like
+  /// [trailing] does.
+  final Widget? bottom;
 
   @override
   Widget build(BuildContext context) {
@@ -203,6 +223,10 @@ class InfoBanner extends StatelessWidget {
                           color:
                               Theme.of(context).colorScheme.onSurfaceVariant,
                         )),
+                if (bottom != null) ...[
+                  const SizedBox(height: 12),
+                  bottom!,
+                ],
               ],
             ),
           ),
@@ -292,7 +316,9 @@ class AppCard extends StatelessWidget {
       child: child,
     );
     return Material(
-      color: color ?? Colors.white,
+      // Falls back to the theme's white card surface (not the scaffold
+      // background's `surface`, which is the same tint and hides the card).
+      color: color ?? Theme.of(context).colorScheme.surfaceContainerLowest,
       shape: RoundedRectangleBorder(
         borderRadius: radius,
         side: BorderSide(color: context.fairbid.borderSubtle),

@@ -11,6 +11,7 @@ class JobEvent {
     this.at,
     this.note,
     this.photoUrls = const [],
+    this.by,
   });
 
   /// The document's id (its path, not a stored field).
@@ -32,6 +33,10 @@ class JobEvent {
   /// Photos attached to the event, e.g. the `handover` event's site photos.
   final List<String> photoUrls;
 
+  /// Uid of whoever triggered the event, e.g. the provider who recorded a
+  /// `handover`. Null on event types that don't stamp one.
+  final String? by;
+
   /// Builds a [JobEvent] from a doc id and its (already Timestamp-normalised)
   /// data map.
   factory JobEvent.fromMap(String id, Map<String, dynamic> m) => JobEvent(
@@ -42,5 +47,6 @@ class JobEvent {
         note: m['note'] as String?,
         photoUrls:
             (m['photoUrls'] as List?)?.whereType<String>().toList() ?? const [],
+        by: m['by'] as String?,
       );
 }

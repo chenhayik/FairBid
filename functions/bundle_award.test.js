@@ -180,7 +180,7 @@ test("a hand-picked award may not break a bid's terms", () => {
   assert.ok(refuse({plumbing: "chandran"})[0].includes("never priced"));
   // A lot cannot be split, even between willing providers.
   assert.ok(refuse({waterproof: "aida", tiling: "dev"})
-      .some((p) => p.includes("part of a lot") || p.includes("all or nothing")));
+      .some((p) => p.includes("linked tasks") || p.includes("all or nothing")));
   // A provider who never bid at all.
   assert.ok(refuse({plumbing: "nobody"})[0].includes("No bid from provider"));
 });

@@ -22,6 +22,7 @@ class UserChip extends StatelessWidget {
     this.showAvatar = true,
     this.showChevron = true,
     this.nameStyle,
+    this.subtitleMaxLines = 1,
   });
 
   /// The profile this chip opens, via `/users/$uid`.
@@ -40,6 +41,9 @@ class UserChip extends StatelessWidget {
   /// Style for the name line. Null defers to the ambient text style, so this
   /// reads correctly dropped straight into an `AppBar` title.
   final TextStyle? nameStyle;
+
+  /// How many lines the subtitle may wrap to before ellipsising.
+  final int subtitleMaxLines;
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +74,7 @@ class UserChip extends StatelessWidget {
                   if (subtitle != null)
                     Text(
                       subtitle!,
-                      maxLines: 1,
+                      maxLines: subtitleMaxLines,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,

@@ -112,10 +112,10 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Find Jobs'),
+        title: const Text('Find jobs'),
         actions: [
           IconButton(
-            tooltip: 'Saved Jobs',
+            tooltip: 'Saved jobs',
             icon: const Icon(Icons.bookmark_border),
             onPressed: () => context.push('/jobs/saved'),
           ),

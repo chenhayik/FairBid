@@ -140,7 +140,7 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_isAmend ? 'Amend Plan' : 'Propose Milestones',
+              Text(_isAmend ? 'Amend plan' : 'Propose milestones',
                   style: theme.textTheme.headlineMedium),
               const SizedBox(height: 4),
               Text(
@@ -172,7 +172,7 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
                 ),
               const SizedBox(height: 12),
               PrimaryButton(
-                label: _isAmend ? 'Submit Changes' : 'Propose Plan',
+                label: _isAmend ? 'Submit changes' : 'Propose plan',
                 busy: _busy,
                 onPressed: _submit,
               ),

@@ -34,7 +34,7 @@ class DisputeQueueScreen extends StatelessWidget {
             const SizedBox(height: 24),
             StatCard(
               label: 'Open Disputes',
-              value: items == null ? '-' : '${items.length}',
+              value: items == null ? '-' : formatCount(items.length),
               icon: Icons.gavel_rounded,
             ),
             const SizedBox(height: 24),

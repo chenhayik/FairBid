@@ -20,7 +20,7 @@ class BidCard extends StatelessWidget {
 
   final Bid bid;
 
-  /// Shown as an "Accept Bid" button when non-null (job still open).
+  /// Shown as an "Accept bid" button when non-null (job still open).
   final VoidCallback? onAccept;
 
   /// Whether this bid's accept is in flight. Accepting runs a server
@@ -58,7 +58,7 @@ class BidCard extends StatelessWidget {
             children: [
               // Only the identity row is tappable (through to the provider's
               // public profile) - not the whole card, which already owns the
-              // Accept Bid action below.
+              // Accept bid action below.
               Expanded(
                 child: UserChip(
                   uid: bid.providerId,
@@ -120,7 +120,7 @@ class BidCard extends StatelessWidget {
           if (onAccept != null) ...[
             const SizedBox(height: 12),
             PrimaryButton(
-              label: 'Accept Bid',
+              label: 'Accept bid',
               onPressed: enabled ? onAccept : null,
               busy: busy,
             ),

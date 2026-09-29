@@ -94,7 +94,7 @@ exports.recomputeTrustScore = functions.firestore
       });
     });
 
-const {uidsToCount} = require("./bundles");
+const {uidsToCount, isHandoverDispute} = require("./bundles");
 
 /**
  * Producer: when a job completes (last milestone released, or a dispute
@@ -1342,6 +1342,12 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
           "Only a funded or delivered milestone can be disputed.");
     }
 
+    // Read before any writes: the predecessor task tells us whether this is
+    // a split handover, for the phase-6 dispute metric.
+    const predecessorJob = job.startsAfterJobId ?
+        (await tx.get(db.doc(`jobs/${job.startsAfterJobId}`))).data() || null :
+        null;
+
     tx.update(milestoneRef, {status: "disputed"});
     tx.set(disputeRef, {
       jobId,
@@ -1362,6 +1368,8 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
       rulingNote: null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       resolvedAt: null,
+      ...(job.bundleId ? {bundleId: job.bundleId} : {}),
+      handoverDispute: isHandoverDispute(job, predecessorJob),
     });
     notify(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
       type: "dispute",

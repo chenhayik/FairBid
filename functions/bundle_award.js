@@ -323,8 +323,8 @@ function checkManualAward({tasks, bids, providerByTaskId}) {
       return;
     }
     if (splitsALot(wonTaskIds, tasks)) {
-      problems.push(`${bid.providerName} would take only part of a lot, and ` +
-          "tasks in a lot go to one provider.");
+      problems.push(`${bid.providerName} would take only some of a set of ` +
+          "linked tasks, which must go to one provider.");
       return;
     }
     const amounts = isWholeBid && bid.bundlePriceSen != null ?
@@ -400,7 +400,7 @@ async function readBundleForAward(db, bundleId, uid) {
   }
   if (bundle.requestorId !== uid) {
     throw new functions.https.HttpsError(
-        "permission-denied", "Only the requestor who posted it can award " +
+        "permission-denied", "Only the client who posted it can award " +
         "this bundle.");
   }
   const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
@@ -511,7 +511,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
     const bundle = bundleSnap.data();
     if (bundle && bundle.requestorId !== uid) {
       throw new functions.https.HttpsError(
-          "permission-denied", "Only the requestor who posted it can award " +
+          "permission-denied", "Only the client who posted it can award " +
           "this bundle.");
     }
     if (!bundle || !bundleBiddingOpen(bundle)) {
@@ -641,10 +641,16 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
       });
     });
 
+    // Plain queryable fields, not a counter doc, so an admin can count()
+    // split awards straight from the bundle collection.
+    const awardedProviderCount =
+        new Set(awards.map((a) => a.providerId)).size;
     tx.update(bundleRef, {
       status: "awarded",
       awardedAt: FieldValue.serverTimestamp(),
       awardedTotalSen: totalSen,
+      awardedProviderCount,
+      splitAward: awardedProviderCount > 1,
     });
 
     return {

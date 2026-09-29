@@ -20,7 +20,7 @@ class SavedJobsScreen extends StatelessWidget {
     final watchlist = user?.watchlist ?? const [];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Saved Jobs')),
+      appBar: AppBar(title: const Text('Saved jobs')),
       body: SafeArea(
         child: KeyedStreamBuilder<List<Job>>(
           // The watchlist really does change here (bookmarking from this very

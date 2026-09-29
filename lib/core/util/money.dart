@@ -4,8 +4,14 @@ import 'package:intl/intl.dart';
 /// avoid floating-point rounding. These helpers format sen for display.
 final _rm = NumberFormat('#,##0.00');
 
-/// Formats sen as `RM 1,234.50`.
-String formatRm(int sen) => 'RM ${_rm.format(sen / 100)}';
+final _count = NumberFormat('#,##0');
+
+/// Formats a whole-number count with thousands separators: `12,345`.
+String formatCount(int n) => _count.format(n);
+
+/// Formats sen as `RM 1,234.50`. The non-breaking space keeps "RM" and the
+/// amount on one line.
+String formatRm(int sen) => 'RM\u00A0${_rm.format(sen / 100)}';
 
 /// Formats a budget range: `RM 100`, `RM 100 – RM 250`, with an optional
 /// `/hr` suffix. Returns `null` when neither bound is set.

@@ -64,7 +64,7 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(24),
             children: [
-              Text('Platform Statistics',
+              Text('Platform statistics',
                   style: theme.textTheme.headlineMedium),
               const SizedBox(height: 4),
               Text('A live snapshot of the marketplace. Pull to refresh.',
@@ -86,12 +86,16 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
                 )
               else ...[
                 StatCard(
-                  label: 'Released Volume',
+                  label: 'Released volume',
                   value: formatRm(stats.releasedVolumeSen),
                   icon: Icons.payments_outlined,
                 ),
                 const SizedBox(height: 12),
                 _StatGrid(stats: stats),
+                const SizedBox(height: 24),
+                Text('Bundles', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 12),
+                _BundleStatGrid(stats: stats),
                 const SizedBox(height: 24),
                 SecondaryButton(
                   label: _recomputing
@@ -108,6 +112,46 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
   }
 }
 
+/// Lays out stat cells two to a row, each row's cards stretched to match the
+/// row's tallest card - unlike a plain `Wrap`, which let cards on the same
+/// row sit at their own, uneven heights whenever one label/value wrapped.
+class _CardGrid extends StatelessWidget {
+  const _CardGrid({required this.cells});
+
+  final List<(String, String, IconData)> cells;
+
+  static const _columns = 2;
+  static const _spacing = 12.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = <Widget>[];
+    for (var i = 0; i < cells.length; i += _columns) {
+      final rowCells = cells.skip(i).take(_columns).toList();
+      if (i > 0) rows.add(const SizedBox(height: _spacing));
+      rows.add(
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (j, (label, value, icon)) in rowCells.indexed) ...[
+                if (j > 0) const SizedBox(width: _spacing),
+                Expanded(
+                  child: StatCard(label: label, value: value, icon: icon),
+                ),
+              ],
+              // An odd cell out on the last row keeps its column width
+              // rather than stretching to fill the row on its own.
+              if (rowCells.length < _columns) const Spacer(),
+            ],
+          ),
+        ),
+      );
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows);
+  }
+}
+
 /// Two-column grid of the count metrics.
 class _StatGrid extends StatelessWidget {
   const _StatGrid({required this.stats});
@@ -117,29 +161,58 @@ class _StatGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cells = <(String, String, IconData)>[
-      ('Clients', '${stats.requestors}', Icons.person_outline),
-      ('Providers', '${stats.providers}', Icons.handyman_outlined),
-      ('Open Jobs', '${stats.openJobs}', Icons.work_outline),
-      ('In Progress', '${stats.inProgressJobs}', Icons.timelapse_outlined),
-      ('Completed', '${stats.completedJobs}', Icons.task_alt_outlined),
+      ('Clients', formatCount(stats.requestors), Icons.person_outline),
+      ('Providers', formatCount(stats.providers), Icons.handyman_outlined),
+      ('Open jobs', formatCount(stats.openJobs), Icons.work_outline),
       (
-        'Pending Checks',
-        '${stats.pendingVerifications}',
+        'In progress',
+        formatCount(stats.inProgressJobs),
+        Icons.timelapse_outlined
+      ),
+      ('Completed', formatCount(stats.completedJobs), Icons.task_alt_outlined),
+      (
+        'Pending checks',
+        formatCount(stats.pendingVerifications),
         Icons.verified_user_outlined
       ),
-      ('Open Disputes', '${stats.openDisputes}', Icons.gavel_rounded),
-      ('Total Users', '${stats.totalUsers}', Icons.groups_outlined),
+      ('Open disputes', formatCount(stats.openDisputes), Icons.gavel_rounded),
+      ('Total users', formatCount(stats.totalUsers), Icons.groups_outlined),
     ];
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.9,
+    return _CardGrid(cells: cells);
+  }
+}
+
+/// Bundle award metrics: two side by side, plus how many handover disputes
+/// followed. Kept off a plain 2-up grid - three cells in two columns leaves
+/// a visual hole - so the third card spans the full width instead.
+class _BundleStatGrid extends StatelessWidget {
+  const _BundleStatGrid({required this.stats});
+
+  final PlatformStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final splitPct = (stats.splitAwardRate * 100).toStringAsFixed(0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final (label, value, icon) in cells)
-          StatCard(label: label, value: value, icon: icon),
+        _CardGrid(cells: [
+          (
+            'Bundles awarded',
+            formatCount(stats.bundlesAwarded),
+            Icons.inventory_2_outlined
+          ),
+          ('Split awards', '${formatCount(stats.splitAwards)} ($splitPct%)',
+              Icons.call_split),
+        ]),
+        const SizedBox(height: 12),
+        StatCard(
+          label: 'Handover disputes',
+          value: formatCount(stats.handoverDisputes),
+          // A distinct icon from "Open Disputes" above (the gavel) - this
+          // one is specifically about a handover, not any dispute.
+          icon: Icons.compare_arrows,
+        ),
       ],
     );
   }

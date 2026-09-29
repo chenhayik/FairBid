@@ -67,6 +67,13 @@ class _PostJobViewState extends State<_PostJobView> {
   bool _hourly = false;
   DateTime? _deadline;
 
+  /// Task 1's own field keys, so a failed submit can find and scroll to the
+  /// first field with an error - mirrors each added task's own keys.
+  final _task1CategoryKey = GlobalKey<FormFieldState<String>>();
+  final _task1TitleKey = GlobalKey<FormFieldState<String>>();
+  final _task1DescriptionKey = GlobalKey<FormFieldState<String>>();
+  final _postingTitleKey = GlobalKey<FormFieldState<String>>();
+
   /// The tasks beyond the first, added with "Add another task". Empty for an
   /// ordinary single-task job, keeping that path unchanged until it isn't.
   final List<_TaskFields> _extraTasks = [];
@@ -233,9 +240,19 @@ class _PostJobViewState extends State<_PostJobView> {
       context.read<PostJobController>().category != null ||
       _extraTasks.isNotEmpty;
 
-  /// Opens the template picker, confirming first if it would overwrite typed
-  /// content, then applies whichever template was picked.
+  /// Opens the template picker, then - only once a template is actually
+  /// picked, and only if it would overwrite typed content - confirms before
+  /// applying it. Confirming after picking (not before opening the sheet)
+  /// means browsing templates never interrupts the requestor with a dialog
+  /// they may not even need.
   Future<void> _pickTemplate() async {
+    final template = await showModalBottomSheet<BundleTemplate>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const _TemplateSheet(),
+    );
+    if (template == null || !mounted) return;
     if (_hasTaskContent) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -257,11 +274,6 @@ class _PostJobViewState extends State<_PostJobView> {
       );
       if (confirmed != true || !mounted) return;
     }
-    final template = await showModalBottomSheet<BundleTemplate>(
-      context: context,
-      builder: (_) => const _TemplateSheet(),
-    );
-    if (template == null || !mounted) return;
     _applyTemplate(template);
   }
 
@@ -351,7 +363,7 @@ class _PostJobViewState extends State<_PostJobView> {
     if (lotId != null) {
       final partners = _lotPartnerTitles(lotId, myIndex);
       if (partners.isNotEmpty) {
-        lines.add('Same provider as: ${partners.join(', ')}');
+        lines.add('Linked with ${partners.join(', ')} (same provider)');
       }
     }
     return lines.isEmpty ? null : lines.join('\n');
@@ -367,10 +379,43 @@ class _PostJobViewState extends State<_PostJobView> {
     return '${titles.length} tasks: ${titles.join(', ')}.';
   }
 
+  /// Scrolls the first invalid field into view and flags it with a snackbar -
+  /// otherwise a failed validate() on this long form gives no feedback at all
+  /// when every error lands off-screen.
+  void _scrollToFirstError() {
+    final keys = [
+      _task1CategoryKey,
+      _task1TitleKey,
+      _task1DescriptionKey,
+      for (final task in _extraTasks) ...[
+        task.categoryKey,
+        task.titleKey,
+        task.descriptionKey,
+      ],
+      if (_isBundle) _postingTitleKey,
+    ];
+    for (final key in keys) {
+      final state = key.currentState;
+      final fieldContext = key.currentContext;
+      if (state != null && state.hasError && fieldContext != null) {
+        Scrollable.ensureVisible(
+          fieldContext,
+          duration: const Duration(milliseconds: 300),
+          alignment: 0.2,
+        );
+        break;
+      }
+    }
+    _snack('Some fields need attention');
+  }
+
   Future<void> _submit() async {
     final controller = context.read<PostJobController>();
     final auth = context.read<AuthController>();
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      _scrollToFirstError();
+      return;
+    }
     if (controller.location == null) {
       _snack('Please pick a location on the map.');
       return;
@@ -448,6 +493,7 @@ class _PostJobViewState extends State<_PostJobView> {
             budget: JobBudget(
               minSen: parseRmToSen(task.budgetMin.text),
               maxSen: parseRmToSen(task.budgetMax.text),
+              hourly: task.hourly,
             ),
             lotId: task.lotId,
             startsAfterIndex: task.startsAfterIndex,
@@ -576,6 +622,65 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
+  /// Task 1's category, title and description fields, shared by single-job
+  /// mode (flat) and bundle mode (inside its own card) so both stay in sync.
+  List<Widget> _task1Fields(PostJobController controller, ThemeData theme) {
+    return [
+      Text('Category', style: theme.textTheme.labelLarge),
+      const SizedBox(height: 6),
+      DropdownButtonFormField<String>(
+        key: _task1CategoryKey,
+        // Without this the button takes the width of its widest item
+        // ("Moving & Delivery") and overflows a narrow phone.
+        isExpanded: true,
+        initialValue: controller.category,
+        hint: const Text('Select a category...'),
+        items: [
+          for (final c in kServiceCategories)
+            DropdownMenuItem(value: c, child: Text(c)),
+        ],
+        onChanged: controller.setCategory,
+        validator: (v) => v == null ? 'Pick a category.' : null,
+      ),
+      if (_dependencyNote(
+            myIndex: 0,
+            lotId: _task1LotId,
+            startsAfterIndex: _task1StartsAfterIndex,
+            gapDays: _task1GapDays,
+          )
+          case final note?)
+        _DependencyNote(text: note),
+      const SizedBox(height: 16),
+      AppTextField(
+        fieldKey: _task1TitleKey,
+        controller: _title,
+        // Bundle mode labels task 1 like every other task card ("Task 1
+        // title"); single-job mode keeps its own plain label.
+        label: _isBundle ? 'Task 1 title' : 'Job title',
+        hint: 'e.g. Fix leaking sink pipe',
+        textInputAction: TextInputAction.next,
+        validator: (v) => Validators.required(v, 'Title'),
+      ),
+      AppTextField(
+        fieldKey: _task1DescriptionKey,
+        controller: _description,
+        label: _isBundle ? 'Task 1 description' : 'Description',
+        hint: 'Describe what needs to be done, the problem, and any '
+            'specific requirements...',
+        maxLines: 8,
+        validator: (v) => Validators.required(v, 'Description'),
+      ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: _AssistButton(
+          label: 'Help me write this',
+          busy: controller.assistingDescription,
+          onPressed: controller.isBusy ? null : _suggestDescription,
+        ),
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<PostJobController>();
@@ -588,7 +693,7 @@ class _PostJobViewState extends State<_PostJobView> {
         // Always-visible submit feedback: a screen-wide blocking overlay, so
         // it's obvious regardless of how far down the long form the user has
         // scrolled (unlike the Post Job button's own spinner, at the bottom).
-        if (controller.isSubmitting) const _SubmitOverlay(),
+        if (controller.isSubmitting) _SubmitOverlay(isBundle: _isBundle),
       ],
     );
   }
@@ -596,7 +701,9 @@ class _PostJobViewState extends State<_PostJobView> {
   Widget _buildForm(BuildContext context, PostJobController controller,
       ThemeData theme, String uid) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Post a New Job')),
+      appBar: AppBar(
+        title: Text(_isBundle ? 'Post a bundle' : 'Post a job'),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -613,6 +720,7 @@ class _PostJobViewState extends State<_PostJobView> {
                 ),
                 const SizedBox(height: 16),
                 _DraftCard(
+                  isBundle: _isBundle,
                   busy: controller.assistingDraft,
                   onTap: controller.isBusy ? null : _draftFromNote,
                 ),
@@ -621,55 +729,35 @@ class _PostJobViewState extends State<_PostJobView> {
                   ErrorBanner(controller.errorMessage!),
 
                 // ---- The basics (required) ----
-                _SectionHeader(_isBundle ? 'Task 1' : 'The basics'),
-                const SizedBox(height: 12),
-                Text('Category', style: theme.textTheme.labelLarge),
-                const SizedBox(height: 6),
-                DropdownButtonFormField<String>(
-                  // Without this the button takes the width of its widest
-                  // item ("Moving & Delivery") and overflows a narrow phone.
-                  isExpanded: true,
-                  initialValue: controller.category,
-                  hint: const Text('Select a category...'),
-                  items: [
-                    for (final c in kServiceCategories)
-                      DropdownMenuItem(value: c, child: Text(c)),
-                  ],
-                  onChanged: controller.setCategory,
-                  validator: (v) => v == null ? 'Pick a category.' : null,
-                ),
-                if (_dependencyNote(
-                      myIndex: 0,
-                      lotId: _task1LotId,
-                      startsAfterIndex: _task1StartsAfterIndex,
-                      gapDays: _task1GapDays,
-                    )
-                    case final note?)
-                  _DependencyNote(text: note),
-                const SizedBox(height: 16),
-                AppTextField(
-                  controller: _title,
-                  label: 'Job Title',
-                  hint: 'e.g. Fix leaking sink pipe',
-                  textInputAction: TextInputAction.next,
-                  validator: (v) => Validators.required(v, 'Title'),
-                ),
-                AppTextField(
-                  controller: _description,
-                  label: 'Description',
-                  hint: 'Describe what needs to be done, the problem, and any '
-                      'specific requirements...',
-                  maxLines: 8,
-                  validator: (v) => Validators.required(v, 'Description'),
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _AssistButton(
-                    label: 'Help me write this',
-                    busy: controller.assistingDescription,
-                    onPressed: controller.isBusy ? null : _suggestDescription,
-                  ),
-                ),
+                // Bundle mode wraps task 1 in a card, its own budget inside
+                // (like every other task's card); single mode keeps the
+                // original flat layout, budget included further down.
+                if (_isBundle)
+                  AppCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text('Task 1', style: theme.textTheme.titleMedium),
+                        const SizedBox(height: 8),
+                        ..._task1Fields(controller, theme),
+                        const SizedBox(height: 8),
+                        _BudgetFields(
+                          controller: controller,
+                          budgetMin: _budgetMin,
+                          budgetMax: _budgetMax,
+                          hourly: _hourly,
+                          onHourly: (v) => setState(() => _hourly = v),
+                          onSuggestPrice:
+                              controller.isBusy ? null : _suggestPrice,
+                        ),
+                      ],
+                    ),
+                  )
+                else ...[
+                  const _SectionHeader('The basics'),
+                  const SizedBox(height: 12),
+                  ..._task1Fields(controller, theme),
+                ],
 
                 // ---- The other tasks of a bundled posting ----
                 for (var i = 0; i < _extraTasks.length; i++)
@@ -677,11 +765,13 @@ class _PostJobViewState extends State<_PostJobView> {
                     key: _extraTasks[i].key,
                     number: i + 2,
                     fields: _extraTasks[i],
-                    onRemove: _extraTasks[i].fromTemplate
-                        ? null
-                        : () => _removeTask(i),
+                    onRemove:
+                        _extraTasks[i].fromTemplate ? null : () => _removeTask(i),
+                    lockedByTemplate: _extraTasks[i].fromTemplate,
                     onCategory: (v) =>
                         setState(() => _extraTasks[i].category = v),
+                    onHourly: (v) =>
+                        setState(() => _extraTasks[i].hourly = v),
                     note: _dependencyNote(
                       myIndex: i + 1,
                       lotId: _extraTasks[i].lotId,
@@ -690,7 +780,10 @@ class _PostJobViewState extends State<_PostJobView> {
                     ),
                   ),
                 const SizedBox(height: 8),
-                Row(
+                // Wrap, not Row: at larger text scales the two buttons no
+                // longer fit on one line.
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     TextButton.icon(
                       onPressed: controller.isBusy ? null : _pickTemplate,
@@ -861,27 +954,31 @@ class _PostJobViewState extends State<_PostJobView> {
                     ),
                 ],
 
-                // ---- When & budget (optional) ----
+                // ---- When & budget ----
+                // Bundle mode's own budget lives in task 1's card now; only
+                // the deadline is shared across every task here, so the
+                // heading names just that rather than "budget" too.
                 const SizedBox(height: 24),
-                const _SectionHeader('When & budget (optional)'),
+                _SectionHeader(
+                  _isBundle ? 'Deadline (shared)' : 'When & budget (optional)',
+                ),
                 const SizedBox(height: 12),
                 _DeadlineField(
                   deadline: _deadline,
                   onTap: _pickDeadline,
                   onClear: _clearDeadline,
                 ),
-                const SizedBox(height: 16),
-                _BudgetFields(
-                  // Every added task carries its own budget in its card, so
-                  // this one has to say whose it is.
-                  label: _isBundle ? 'Budget for task 1' : 'Budget',
-                  controller: controller,
-                  budgetMin: _budgetMin,
-                  budgetMax: _budgetMax,
-                  hourly: _hourly,
-                  onHourly: (v) => setState(() => _hourly = v),
-                  onSuggestPrice: controller.isBusy ? null : _suggestPrice,
-                ),
+                if (!_isBundle) ...[
+                  const SizedBox(height: 16),
+                  _BudgetFields(
+                    controller: controller,
+                    budgetMin: _budgetMin,
+                    budgetMax: _budgetMax,
+                    hourly: _hourly,
+                    onHourly: (v) => setState(() => _hourly = v),
+                    onSuggestPrice: controller.isBusy ? null : _suggestPrice,
+                  ),
+                ],
 
                 // ---- Naming the posting (bundle mode only) ----
                 // Last, not first: nothing required may land off-screen when
@@ -891,6 +988,7 @@ class _PostJobViewState extends State<_PostJobView> {
                   const _SectionHeader('Name this posting'),
                   const SizedBox(height: 12),
                   AppTextField(
+                    fieldKey: _postingTitleKey,
                     controller: _postingTitle,
                     label: 'Posting title',
                     hint: 'e.g. Bathroom refresh',
@@ -907,7 +1005,7 @@ class _PostJobViewState extends State<_PostJobView> {
 
                 const SizedBox(height: 24),
                 PrimaryButton(
-                  label: _isBundle ? 'Post Bundle' : 'Post Job',
+                  label: _isBundle ? 'Post bundle' : 'Post job',
                   // Its own spinner reflects submitting only - the screen-wide
                   // overlay already covers that - but stays disabled during a
                   // photo/video upload too, so the job can't be created before
@@ -956,8 +1054,14 @@ class _DroppedField extends StatelessWidget {
 
 /// The assist entry point: one note in, a whole draft post out.
 class _DraftCard extends StatelessWidget {
-  const _DraftCard({required this.busy, required this.onTap});
+  const _DraftCard({
+    required this.isBundle,
+    required this.busy,
+    required this.onTap,
+  });
 
+  /// True in bundle mode, where the assist only ever fills task 1.
+  final bool isBundle;
   final bool busy;
   final VoidCallback? onTap;
 
@@ -974,8 +1078,12 @@ class _DraftCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("Describe it once, we'll fill this in",
-                    style: theme.textTheme.titleMedium),
+                Text(
+                  isBundle
+                      ? "Describe task 1 once and we'll fill it in"
+                      : "Describe it once, we'll fill this in",
+                  style: theme.textTheme.titleMedium,
+                ),
                 const SizedBox(height: 2),
                 Text(
                   'Say what needs doing in your own words. Everything stays '
@@ -1056,25 +1164,27 @@ class _TemplateSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Start from a template', style: theme.textTheme.headlineMedium),
-            const SizedBox(height: 8),
-            for (final template in kBundleTemplates)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(template.name),
-                subtitle: Text('${template.tasks.length} tasks'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).pop(template),
+    // isScrollControlled + a scrollable body (not a fixed Padding/Column) so
+    // the list of templates never overflows at larger text scales.
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Start from a template', style: theme.textTheme.headlineMedium),
+          const SizedBox(height: 8),
+          for (final template in kBundleTemplates)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(template.name),
+              subtitle: Text(
+                template.tasks.map((t) => t.title).join(' · '),
               ),
-          ],
-        ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).pop(template),
+            ),
+        ],
       ),
     );
   }
@@ -1118,6 +1228,13 @@ class _TaskFields {
   final budgetMin = TextEditingController();
   final budgetMax = TextEditingController();
   String? category;
+  bool hourly = false;
+
+  /// Field keys, so a failed submit can find and scroll to the first one
+  /// with an error.
+  final categoryKey = GlobalKey<FormFieldState<String>>();
+  final titleKey = GlobalKey<FormFieldState<String>>();
+  final descriptionKey = GlobalKey<FormFieldState<String>>();
 
   /// Template-derived, read-only lot/dependency links - see
   /// `_PostJobViewState._applyTemplate`/`_clearTemplate`.
@@ -1147,14 +1264,22 @@ class _TaskCard extends StatelessWidget {
     required this.fields,
     required this.onRemove,
     required this.onCategory,
+    required this.onHourly,
     this.note,
+    this.lockedByTemplate = false,
   });
 
   final int number;
   final _TaskFields fields;
   final VoidCallback? onRemove;
   final ValueChanged<String?> onCategory;
+  final ValueChanged<bool> onHourly;
   final String? note;
+
+  /// True while this task still carries a template's lot/dependency link -
+  /// its remove button is shown disabled, rather than hidden, so it's clear
+  /// why it can't be tapped.
+  final bool lockedByTemplate;
 
   @override
   Widget build(BuildContext context) {
@@ -1171,7 +1296,14 @@ class _TaskCard extends StatelessWidget {
                   child: Text('Task $number',
                       style: theme.textTheme.titleMedium),
                 ),
-                if (onRemove != null)
+                if (lockedByTemplate)
+                  IconButton(
+                    tooltip: 'Linked by the template. Tap Clear template to '
+                        'remove it.',
+                    icon: const Icon(Icons.close),
+                    onPressed: null,
+                  )
+                else if (onRemove != null)
                   IconButton(
                     tooltip: 'Remove task $number',
                     icon: const Icon(Icons.close),
@@ -1183,6 +1315,7 @@ class _TaskCard extends StatelessWidget {
             Text('Category', style: theme.textTheme.labelLarge),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(
+              key: fields.categoryKey,
               isExpanded: true,
               initialValue: fields.category,
               hint: const Text('Select a category...'),
@@ -1196,6 +1329,7 @@ class _TaskCard extends StatelessWidget {
             if (note != null) _DependencyNote(text: note!),
             const SizedBox(height: 16),
             AppTextField(
+              fieldKey: fields.titleKey,
               controller: fields.title,
               label: 'Task $number title',
               hint: 'e.g. Re-tile the shower wall',
@@ -1203,6 +1337,7 @@ class _TaskCard extends StatelessWidget {
               validator: (v) => Validators.required(v, 'Title'),
             ),
             AppTextField(
+              fieldKey: fields.descriptionKey,
               controller: fields.description,
               label: 'Task $number description',
               hint: 'What needs doing, and anything a provider should know...',
@@ -1234,6 +1369,12 @@ class _TaskCard extends StatelessWidget {
                 ),
               ],
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Hourly rate'),
+              value: fields.hourly,
+              onChanged: onHourly,
+            ),
           ],
         ),
       ),
@@ -1247,7 +1388,9 @@ class _TaskCard extends StatelessWidget {
 /// scrolled on the long form. Distinct from the per-upload spinner on each
 /// UploadBox, which shows instead while a photo or video is uploading.
 class _SubmitOverlay extends StatelessWidget {
-  const _SubmitOverlay();
+  const _SubmitOverlay({required this.isBundle});
+
+  final bool isBundle;
 
   @override
   Widget build(BuildContext context) {
@@ -1269,7 +1412,10 @@ class _SubmitOverlay extends StatelessWidget {
                 children: [
                   const CircularProgressIndicator(),
                   const SizedBox(height: 16),
-                  Text('Posting your job…', style: theme.textTheme.bodyLarge),
+                  Text(
+                    isBundle ? 'Posting your bundle…' : 'Posting your job…',
+                    style: theme.textTheme.bodyLarge,
+                  ),
                 ],
               ),
             ),
@@ -1377,7 +1523,7 @@ class _AddressField extends StatelessWidget {
                 address == null
                     ? 'Add address (only your hired provider sees it)'
                     : address!.summary,
-                maxLines: 1,
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodyLarge,
               ),
@@ -1397,7 +1543,6 @@ class _AddressField extends StatelessWidget {
 /// always visible.
 class _BudgetFields extends StatelessWidget {
   const _BudgetFields({
-    this.label = 'Budget',
     required this.controller,
     required this.budgetMin,
     required this.budgetMax,
@@ -1406,7 +1551,6 @@ class _BudgetFields extends StatelessWidget {
     required this.onSuggestPrice,
   });
 
-  final String label;
   final PostJobController controller;
   final TextEditingController budgetMin;
   final TextEditingController budgetMax;
@@ -1424,11 +1568,15 @@ class _BudgetFields extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
+        // Wrap, not Row: nested inside task 1's card (bundle mode) the
+        // available width is narrower than the old "When & budget" section,
+        // and "Suggest a fair range" no longer reliably fits beside the
+        // label.
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Expanded(
-              child: Text(label, style: theme.textTheme.labelLarge),
-            ),
+            Text('Budget', style: theme.textTheme.labelLarge),
             _AssistButton(
               label: 'Suggest a fair range',
               busy: controller.assistingPrice,
@@ -1464,6 +1612,7 @@ class _BudgetFields extends StatelessWidget {
                 controller: budgetMin,
                 label: 'Min (RM)',
                 hint: '0.00',
+                prefixText: 'RM ',
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
               ),
@@ -1474,6 +1623,7 @@ class _BudgetFields extends StatelessWidget {
                 controller: budgetMax,
                 label: 'Max (RM)',
                 hint: '0.00',
+                prefixText: 'RM ',
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
               ),

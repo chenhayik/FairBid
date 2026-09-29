@@ -48,14 +48,14 @@ class ProviderHomeScreen extends StatelessWidget {
                 icon: Icons.warning_amber_rounded,
                 color: context.fairbid.warningText,
                 leftAccent: true,
-                title: 'Action Required',
+                title: 'Action required',
                 body:
                     'Your verification was rejected. Please re-submit your '
                     'documents to unlock bidding.',
               ),
               const SizedBox(height: 12),
               PrimaryButton(
-                label: 'Re-submit Documents',
+                label: 'Re-submit documents',
                 onPressed: () => context.push('/onboarding'),
               ),
             ],
@@ -68,29 +68,36 @@ class ProviderHomeScreen extends StatelessWidget {
                     'approves your documents.',
               ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: StatCard(
-                    label: 'Trust Score',
-                    // Hidden until earned (verified + enough completed jobs).
-                    value: scoreVisible ? '$trustPercent%' : 'New',
-                    icon: Icons.shield_outlined,
+            // IntrinsicHeight + stretch keeps both cards in a row equally tall.
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: StatCard(
+                      label: 'Trust Score',
+                      // Hidden until earned (verified + enough completed jobs).
+                      value: scoreVisible ? '$trustPercent%' : 'New',
+                      icon: Icons.shield_outlined,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _ActiveJobsStat(uid: user?.uid),
-                ),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _ActiveJobsStat(uid: user?.uid),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(child: _PendingBidsStat(uid: user?.uid)),
-                const SizedBox(width: 12),
-                Expanded(child: _TotalEarningsStat(uid: user?.uid)),
-              ],
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: _PendingBidsStat(uid: user?.uid)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _TotalEarningsStat(uid: user?.uid)),
+                ],
+              ),
             ),
             const SizedBox(height: 32),
             Row(
@@ -122,7 +129,7 @@ class _ActiveJobsStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid == null) {
-      return const StatCard(label: 'Active Jobs', value: '0');
+      return const StatCard(label: 'Active jobs', value: '0');
     }
     return KeyedStreamBuilder<List<Job>>(
       cacheKey: uid,
@@ -130,12 +137,12 @@ class _ActiveJobsStat extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
-          return const StatCard(label: 'Active Jobs', value: '-');
+          return const StatCard(label: 'Active jobs', value: '-');
         }
         final active = (snapshot.data ?? [])
             .where((j) => j.status == JobStatus.inProgress)
             .length;
-        return StatCard(label: 'Active Jobs', value: '$active');
+        return StatCard(label: 'Active jobs', value: '$active');
       },
     );
   }
@@ -150,7 +157,7 @@ class _PendingBidsStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid == null) {
-      return const StatCard(label: 'Pending Bids', value: '0');
+      return const StatCard(label: 'Pending bids', value: '0');
     }
     return KeyedStreamBuilder<List<Bid>>(
       cacheKey: uid,
@@ -165,7 +172,7 @@ class _PendingBidsStat extends StatelessWidget {
                 bundleBidSnapshot.hasError ||
                 bidSnapshot.connectionState == ConnectionState.waiting ||
                 bundleBidSnapshot.connectionState == ConnectionState.waiting) {
-              return const StatCard(label: 'Pending Bids', value: '-');
+              return const StatCard(label: 'Pending bids', value: '-');
             }
             final pending = (bidSnapshot.data ?? [])
                 .where((b) => b.status == BidStatus.pending)
@@ -174,7 +181,7 @@ class _PendingBidsStat extends StatelessWidget {
                 .where((b) => b.status == BundleBidStatus.pending)
                 .length;
             return StatCard(
-              label: 'Pending Bids',
+              label: 'Pending bids',
               value: '${pending + pendingBundles}',
             );
           },
@@ -193,7 +200,7 @@ class _TotalEarningsStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid == null) {
-      return const StatCard(label: 'Total Earnings', value: '-');
+      return const StatCard(label: 'Total earnings', value: '-');
     }
     return KeyedStreamBuilder<List<Milestone>>(
       cacheKey: uid,
@@ -202,14 +209,14 @@ class _TotalEarningsStat extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError ||
             snapshot.connectionState == ConnectionState.waiting) {
-          return const StatCard(label: 'Total Earnings', value: '-');
+          return const StatCard(label: 'Total earnings', value: '-');
         }
         final earnedSen = (snapshot.data ?? [])
             .where((m) =>
                 m.status == MilestoneStatus.released ||
                 m.status == MilestoneStatus.resolved)
             .fold<int>(0, (sum, m) => sum + m.amountSen);
-        return StatCard(label: 'Total Earnings', value: formatRm(earnedSen));
+        return StatCard(label: 'Total earnings', value: formatRm(earnedSen));
       },
     );
   }
@@ -307,17 +314,17 @@ class _VerificationBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final (label, icon, color) = switch (status) {
       'approved' => (
-          'Identity Verified',
+          'Identity verified',
           Icons.verified,
           context.fairbid.verified
         ),
       'pending' => (
-          'Verification Pending',
+          'Verification pending',
           Icons.hourglass_top_rounded,
           context.fairbid.warningText
         ),
       'rejected' => (
-          'Verification Rejected',
+          'Verification rejected',
           Icons.error_outline,
           context.fairbid.danger
         ),

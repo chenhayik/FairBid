@@ -41,6 +41,8 @@ class FirestoreStatsRepository implements StatsRepository {
   Future<PlatformStats> load() async {
     final users = _firestore.collection('users');
     final jobs = _firestore.collection('jobs');
+    final bundles = _firestore.collection('bundles');
+    final disputes = _firestore.collection('disputes');
 
     // All aggregations run concurrently; each returns one number.
     final results = await Future.wait([
@@ -50,15 +52,18 @@ class FirestoreStatsRepository implements StatsRepository {
       _count(jobs.where('status', isEqualTo: 'in_progress')),
       _count(jobs.where('status', isEqualTo: 'completed')),
       _count(users.where('verificationStatus', isEqualTo: 'pending')),
-      _count(_firestore
-          .collection('disputes')
-          .where('status', isEqualTo: 'open')),
+      _count(disputes.where('status', isEqualTo: 'open')),
       _firestore
           .collection('transactions')
           .where('type', isEqualTo: 'release')
           .aggregate(sum('amountSen'))
           .get()
           .then((s) => (s.getSum('amountSen') ?? 0).toInt()),
+      _count(bundles.where('status', isEqualTo: 'awarded')),
+      _count(bundles
+          .where('status', isEqualTo: 'awarded')
+          .where('splitAward', isEqualTo: true)),
+      _count(disputes.where('handoverDispute', isEqualTo: true)),
     ]);
 
     return PlatformStats(
@@ -70,6 +75,9 @@ class FirestoreStatsRepository implements StatsRepository {
       pendingVerifications: results[5],
       openDisputes: results[6],
       releasedVolumeSen: results[7],
+      bundlesAwarded: results[8],
+      splitAwards: results[9],
+      handoverDisputes: results[10],
     );
   }
 }

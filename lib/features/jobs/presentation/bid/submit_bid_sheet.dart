@@ -127,7 +127,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Submit a Bid', style: theme.textTheme.headlineMedium),
+            Text('Submit a bid', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 4),
             Text(
               widget.job.title,
@@ -141,7 +141,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
               ErrorBanner(controller.errorMessage!),
             AppTextField(
               controller: _amount,
-              label: 'Your Bid (RM)',
+              label: 'Your bid (RM)',
               hint: '0.00',
               prefixText: 'RM ',
               keyboardType:
@@ -153,7 +153,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
                 return null;
               },
             ),
-            Text('Estimated Duration', style: theme.textTheme.labelLarge),
+            Text('Estimated duration', style: theme.textTheme.labelLarge),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(
               initialValue: _duration,
@@ -168,7 +168,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
             const SizedBox(height: 16),
             AppTextField(
               controller: _message,
-              label: 'Proposal Message',
+              label: 'Proposal message',
               hint: 'Explain your approach, experience and what\'s included...',
               maxLines: 4,
               validator: (v) => Validators.required(v, 'Message'),
@@ -183,9 +183,8 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
               }),
               title: Text(
                 'I understand FairBid uses milestone escrow: the client '
-                'funds the job and payment is released as work is approved. '
-                'Your money is held by FairBid, not paid out, until the '
-                'client approves the work.',
+                'funds each milestone and it\'s released to me when they '
+                'approve the work.',
                 style: theme.textTheme.bodyMedium,
               ),
             ),
@@ -200,7 +199,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
               ),
             const SizedBox(height: 8),
             PrimaryButton(
-              label: 'Submit Bid',
+              label: 'Submit bid',
               busy: controller.isBusy,
               onPressed: _submit,
             ),

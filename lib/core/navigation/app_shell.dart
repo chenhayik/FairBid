@@ -38,7 +38,7 @@ class AppShell extends StatelessWidget {
           const NavigationDestination(
             icon: Icon(Icons.work_outline),
             selectedIcon: Icon(Icons.work),
-            label: 'My Jobs',
+            label: 'My jobs',
           ),
           NavigationDestination(
             icon: _MessagesIcon(uid: uid, icon: Icons.forum_outlined),

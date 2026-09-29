@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
+import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/domain/user_role.dart';
@@ -36,7 +37,7 @@ class VerificationQueueScreen extends StatelessWidget {
             const SizedBox(height: 24),
             StatCard(
               label: 'Pending Review',
-              value: items == null ? '-' : '${items.length}',
+              value: items == null ? '-' : formatCount(items.length),
               icon: Icons.verified_user_outlined,
             ),
             const SizedBox(height: 24),

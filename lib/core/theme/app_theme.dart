@@ -93,7 +93,11 @@ class AppTheme {
 
   static const brandBlue = Color(0xFF0052FF);
 
-  static ThemeData get light {
+  /// Built once: a fresh ThemeData per rebuild never compares equal (its
+  /// state-aware button styles are closures), which re-themes the whole app.
+  static final ThemeData light = _buildLight();
+
+  static ThemeData _buildLight() {
     const colorScheme = ColorScheme(
       brightness: Brightness.light,
       primary: Color(0xFF003EC7),
@@ -114,6 +118,9 @@ class AppTheme {
       error: Color(0xFFBA1A1A),
       onError: Color(0xFFFFFFFF),
       surface: Color(0xFFF7F9FB),
+      // Cards must stand out from the F7F9FB scaffold background, so this is
+      // literal white rather than surface's own tint.
+      surfaceContainerLowest: Colors.white,
       onSurface: Color(0xFF191C1E),
       onSurfaceVariant: Color(0xFF434656),
       outline: Color(0xFF737688),
@@ -148,7 +155,13 @@ class AppTheme {
           foregroundColor: Colors.white,
           disabledBackgroundColor: brandBlue.withValues(alpha: 0.35),
           disabledForegroundColor: Colors.white,
-          minimumSize: const Size.fromHeight(52),
+          // A minimum *width* here (not `Size.fromHeight`, which is an
+          // infinite-width minimum) used to force every bare FilledButton
+          // full width, including the two side by side in a dialog's
+          // `actions` - stacking them oddly instead of sizing to their
+          // label. Pages that want a full-width button use [PrimaryButton],
+          // which applies its own full-width wrapper.
+          minimumSize: const Size(64, 52),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
           ),
@@ -158,12 +171,25 @@ class AppTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: brandBlue,
+          // `styleFrom`'s own `disabledForegroundColor` only covers the
+          // label/icon - its `side` stays a plain, always-blue BorderSide, so
+          // a disabled OutlinedButton kept its enabled-looking outline. A
+          // state-aware `side` (via copyWith, below) is needed to grey it out
+          // too.
+          disabledForegroundColor: colorScheme.onSurface.withValues(alpha: 0.38),
           minimumSize: const Size.fromHeight(52),
-          side: const BorderSide(color: brandBlue),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
           ),
           textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ).copyWith(
+          side: WidgetStateProperty.resolveWith(
+            (states) => BorderSide(
+              color: states.contains(WidgetState.disabled)
+                  ? colorScheme.onSurface.withValues(alpha: 0.12)
+                  : brandBlue,
+            ),
+          ),
         ),
       ),
     );

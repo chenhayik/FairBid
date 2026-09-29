@@ -24,7 +24,7 @@ enum MilestoneStatus {
   };
 
   String get label => switch (this) {
-    MilestoneStatus.proposed => 'Awaiting Client Approval',
+    MilestoneStatus.proposed => 'Awaiting client approval',
     MilestoneStatus.pending => 'Not funded yet',
     MilestoneStatus.funded => 'In escrow',
     MilestoneStatus.submitted => 'Delivered, awaiting release',

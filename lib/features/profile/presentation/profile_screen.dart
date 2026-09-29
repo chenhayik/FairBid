@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/config/platform_config.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../../core/widgets/user_avatar.dart';
@@ -263,7 +264,7 @@ class _AdminActivityCard extends StatelessWidget {
         final count = snapshot.data?.length;
         return StatCard(
           label: 'Pending Verifications',
-          value: count?.toString() ?? '-',
+          value: count == null ? '-' : formatCount(count),
           icon: Icons.verified_user_outlined,
         );
       },
@@ -399,7 +400,7 @@ class _EarningsNavCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(isProvider ? 'Earnings & Payouts' : 'My Wallet',
+                  Text(isProvider ? 'Earnings & payouts' : 'My wallet',
                       style: theme.textTheme.titleLarge),
                   const SizedBox(height: 2),
                   Text(

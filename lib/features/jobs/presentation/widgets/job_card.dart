@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/util/plural.dart';
 import '../../../../core/util/time_ago.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/job.dart';
+import 'status_colors.dart';
 
 /// Compact job summary used in the feed, "Jobs near you" and My Jobs.
 class JobCard extends StatelessWidget {
@@ -55,13 +57,13 @@ class JobCard extends StatelessWidget {
                         label: job.category,
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
-                      job.status == JobStatus.open
-                          ? PillBadge(
-                              label: 'Open', color: context.fairbid.verified)
-                          : PillBadge(
-                              label: job.status.label,
-                              color: theme.colorScheme.onSurfaceVariant),
-                      if (job.isLiveBundleTask &&
+                      PillBadge(
+                        label: job.status == JobStatus.open
+                            ? 'Open'
+                            : job.status.label,
+                        color: jobStatusColor(context, job.status),
+                      ),
+                      if (job.isBiddingAsBundle &&
                           job.bundleTaskCount != null &&
                           job.bundleTaskCount! > 1)
                         PillBadge(
@@ -116,26 +118,20 @@ class JobCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                if (budget != null)
-                  Flexible(
-                    child: Text(budget,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelLarge
-                            ?.copyWith(color: context.fairbid.verified)),
-                  ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '${job.bidCount} bids  •  ${timeAgo(job.createdAt)}',
-                    textAlign: TextAlign.end,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
+            // The budget gets its own line: squeezed onto a shared row with
+            // the bid count it used to clip (e.g. "RM 1,500.00 – RM…") at
+            // narrow widths.
+            if (budget != null) ...[
+              Text(budget,
+                  style: theme.textTheme.labelLarge
+                      ?.copyWith(color: context.fairbid.verified)),
+              const SizedBox(height: 4),
+            ],
+            Text(
+              '${plural(job.bidCount, 'bid')}  •  ${timeAgo(job.createdAt)}',
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             if (job.status == JobStatus.open && job.deadline != null) ...[
               const SizedBox(height: 6),

@@ -21,6 +21,8 @@ class AppTextField extends StatefulWidget {
     this.maxLength,
     this.labelTrailing,
     this.onSubmitted,
+    this.enabled = true,
+    this.fieldKey,
   });
 
   final TextEditingController controller;
@@ -36,9 +38,17 @@ class AppTextField extends StatefulWidget {
   final int maxLines;
   final int? maxLength;
 
+  /// False greys the field out and blocks input - e.g. a bundle price before
+  /// two tasks are picked.
+  final bool enabled;
+
   /// Optional widget on the right of the label row (e.g. a "Forgot?" link).
   final Widget? labelTrailing;
   final ValueChanged<String>? onSubmitted;
+
+  /// Key on the inner `TextFormField`, not this widget - lets a caller find
+  /// its `FormFieldState` (e.g. to scroll the first invalid field into view).
+  final GlobalKey<FormFieldState<String>>? fieldKey;
 
   @override
   State<AppTextField> createState() => _AppTextFieldState();
@@ -68,7 +78,9 @@ class _AppTextFieldState extends State<AppTextField> {
           ),
           const SizedBox(height: 6),
           TextFormField(
+            key: widget.fieldKey,
             controller: widget.controller,
+            enabled: widget.enabled,
             keyboardType: widget.keyboardType,
             obscureText: _hidden,
             maxLines: widget.obscure ? 1 : widget.maxLines,
@@ -80,6 +92,10 @@ class _AppTextFieldState extends State<AppTextField> {
             decoration: InputDecoration(
               hintText: widget.hint,
               helperText: widget.helperText,
+              helperMaxLines: 3,
+              // Long validation messages (e.g. the bundle-price cap) used to
+              // be clipped to one line, cutting the amount off mid-word.
+              errorMaxLines: 3,
               prefixText: widget.prefixText,
               prefixIcon:
                   widget.prefixIcon == null ? null : Icon(widget.prefixIcon),

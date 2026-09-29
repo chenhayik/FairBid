@@ -30,16 +30,21 @@ import 'propose_milestones_sheet.dart';
 ///
 /// Only the *current* step - the first milestone not yet released, Step 0
 /// while the plan is still unapproved, or any disputed milestone regardless
-/// of position - renders expanded, with the section's only filled button.
-/// Every other step collapses to one muted line; tapping a collapsed step
-/// expands it.
+/// of position - renders expanded. Every other step collapses to one muted
+/// line; tapping a collapsed step expands it. The screen's bottom bar owns
+/// the primary action (approve, fund, deliver, release) and triggers it
+/// through [MilestoneSectionState.approvePlan] / [runCurrentAction]; the
+/// section only keeps the secondary ones (request changes, amend, dispute).
 class MilestoneSection extends StatefulWidget {
-  const MilestoneSection({super.key, required this.job});
+  const MilestoneSection({super.key, required this.job, this.busy});
 
   final Job job;
 
+  /// Mirrors "an action is running", so the bottom bar can show busy too.
+  final ValueNotifier<bool>? busy;
+
   @override
-  State<MilestoneSection> createState() => _MilestoneSectionState();
+  State<MilestoneSection> createState() => MilestoneSectionState();
 }
 
 /// Terminal statuses: money has finished moving for this milestone (paid
@@ -47,7 +52,7 @@ class MilestoneSection extends StatefulWidget {
 bool _isTerminal(MilestoneStatus s) =>
     s == MilestoneStatus.released || s == MilestoneStatus.resolved;
 
-class _MilestoneSectionState extends State<MilestoneSection> {
+class MilestoneSectionState extends State<MilestoneSection> {
   // Cached so rebuilds don't resubscribe to Firestore.
   late final Stream<List<Milestone>> _milestones = context
       .read<MilestoneRepository>()
@@ -60,10 +65,18 @@ class _MilestoneSectionState extends State<MilestoneSection> {
   /// Sentinel [_busyId] value for plan-level actions (no single milestone id).
   static const _planBusyKey = '__plan__';
 
+  void _setBusy(String? id) {
+    setState(() => _busyId = id);
+    widget.busy?.value = id != null;
+  }
+
   /// The step (keyed by `'plan'`, a milestone id, or `'complete'`) the
   /// viewer tapped open manually. The current step is always expanded
   /// regardless of this.
   String? _expandedOverride;
+
+  /// The latest milestones, sorted by order, for [runCurrentAction].
+  List<Milestone> _latest = const [];
 
   void _toggleExpand(String stepId) {
     setState(() {
@@ -122,7 +135,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Mark Delivered'),
+            child: const Text('Mark delivered'),
           ),
         ],
       ),
@@ -176,7 +189,8 @@ class _MilestoneSectionState extends State<MilestoneSection> {
   }
 
   /// Requestor approves the proposed plan, making every milestone fundable.
-  Future<void> _approvePlan() async {
+  Future<void> approvePlan() async {
+    if (_busyId != null) return;
     final repo = context.read<MilestoneRepository>();
     final confirmed = await _confirm(
       title: 'Approve this plan?',
@@ -218,7 +232,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Request Changes'),
+            child: const Text('Request changes'),
           ),
         ],
       ),
@@ -253,7 +267,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
   /// Runs a plan-level [action] (approve/reject) with a busy sentinel keyed to
   /// the section, surfacing the Cloud Function's message on failure.
   Future<void> _runPlan(Future<void> Function() action) async {
-    setState(() => _busyId = _planBusyKey);
+    _setBusy(_planBusyKey);
     try {
       await action();
     } on FirebaseFunctionsException catch (e) {
@@ -271,7 +285,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _busyId = null);
+      if (mounted) _setBusy(null);
     }
   }
 
@@ -308,7 +322,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     required String step,
     bool refreshBalance = false,
   }) async {
-    setState(() => _busyId = milestone.id);
+    _setBusy(milestone.id);
     logPayment(
       '$step.requested',
       data: {
@@ -350,7 +364,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
           content: Text(message),
           action: insufficientBalance
               ? SnackBarAction(
-                  label: 'Top Up',
+                  label: 'Top up',
                   onPressed: () => context.push('/profile/earnings'),
                 )
               : null,
@@ -370,7 +384,25 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _busyId = null);
+      if (mounted) _setBusy(null);
+    }
+  }
+
+  /// Runs the current step's action - fund, deliver or release, whichever
+  /// the viewer can take - as the bottom bar's button. Does nothing when
+  /// there is none or another action is still running.
+  Future<void> runCurrentAction() async {
+    if (_busyId != null) return;
+    final myUid = context.read<AuthController>().user?.uid;
+    final currentId = _currentStepId(_latest, _planApproved(_latest));
+    for (final m in _latest) {
+      if (m.id != currentId) continue;
+      final action = _actionFor(
+        m,
+        isRequestor: myUid == widget.job.requestorId,
+        isProvider: myUid == widget.job.acceptedProviderId,
+      );
+      await action?.$2();
     }
   }
 
@@ -382,15 +414,15 @@ class _MilestoneSectionState extends State<MilestoneSection> {
   }) {
     return switch (milestone.status) {
       MilestoneStatus.pending when isRequestor => (
-        'Fund Milestone',
+        'Fund milestone',
         () => _fund(milestone),
       ),
       MilestoneStatus.funded when isProvider => (
-        'Mark as Delivered',
+        'Mark as delivered',
         () => _deliver(milestone),
       ),
       MilestoneStatus.submitted when isRequestor => (
-        'Release Payment',
+        'Release payment',
         () => _release(milestone),
       ),
       _ => null,
@@ -435,6 +467,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         }
         final milestones = [...snapshot.data ?? <Milestone>[]]
           ..sort((a, b) => a.order.compareTo(b.order));
+        _latest = milestones;
         return _buildTracker(
           context,
           job,
@@ -562,7 +595,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         Text('Payment & progress', style: theme.textTheme.titleLarge),
         const SizedBox(height: 12),
         if (milestones.isNotEmpty) ...[
-          _PlanSummaryCard(milestones: milestones),
+          _PlanSummaryCard(milestones: milestones, isProvider: isProvider),
           const SizedBox(height: 16),
         ],
         ...rows,
@@ -645,12 +678,6 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                   'payment as work is approved.',
                   style: theme.textTheme.bodyMedium,
                 ),
-                const SizedBox(height: 12),
-                PrimaryButton(
-                  label: 'Propose Milestones',
-                  onPressed: () =>
-                      ProposeMilestonesSheet.show(context, job: job),
-                ),
               ],
             )
           : Text(
@@ -672,14 +699,8 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                   style: theme.textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 12),
-                PrimaryButton(
-                  label: 'Approve Plan',
-                  busy: busy,
-                  onPressed: _approvePlan,
-                ),
-                const SizedBox(height: 8),
                 SecondaryButton(
-                  label: 'Request Changes',
+                  label: 'Request changes',
                   onPressed: busy ? null : _rejectPlan,
                 ),
               ],
@@ -762,11 +783,6 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       );
     }
 
-    final action = _actionFor(
-      m,
-      isRequestor: isRequestor,
-      isProvider: isProvider,
-    );
     final canDispute =
         m.status == MilestoneStatus.funded ||
         m.status == MilestoneStatus.submitted;
@@ -798,24 +814,20 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '$index. ${m.description}',
-                              style: theme.textTheme.bodyLarge,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: PillBadge(
-                              label: m.status.label,
-                              icon: _statusIcon(m.status),
-                              color: accent,
-                            ),
-                          ),
-                        ],
+                      Text(
+                        '$index. ${m.description}',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      // Own line so the pill keeps its full text at large
+                      // text scales instead of being squeezed and truncated.
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: PillBadge(
+                          label: m.status.label,
+                          icon: _statusIcon(m.status),
+                          color: accent,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Wrap(
@@ -897,13 +909,9 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                         )
                       else
                         _MicroProgress(status: m.status),
-                      if (action != null) ...[
+                      if (busy) ...[
                         const SizedBox(height: 12),
-                        PrimaryButton(
-                          label: action.$1,
-                          busy: busy,
-                          onPressed: () => action.$2(),
-                        ),
+                        const LinearProgressIndicator(),
                       ],
                       if (canDispute) ...[
                         const SizedBox(height: 4),
@@ -1256,8 +1264,9 @@ class _MicroProgress extends StatelessWidget {
 /// funded bar (word + icon per segment, never colour alone), and a plain-
 /// language reassurance for first-time requestors.
 class _PlanSummaryCard extends StatelessWidget {
-  const _PlanSummaryCard({required this.milestones});
+  const _PlanSummaryCard({required this.milestones, required this.isProvider});
   final List<Milestone> milestones;
+  final bool isProvider;
 
   @override
   Widget build(BuildContext context) {
@@ -1362,8 +1371,11 @@ class _PlanSummaryCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Money you fund is held by FairBid, not paid to the '
-                  'provider, until you release it.',
+                  isProvider
+                      ? 'The client funds each milestone. FairBid holds it '
+                          'and releases it to you when they approve the work.'
+                      : 'Money you fund is held by FairBid, not paid to the '
+                          'provider, until you release it.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),

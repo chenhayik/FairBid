@@ -33,6 +33,7 @@ class RecordHandoverSheet extends StatefulWidget {
 class _RecordHandoverSheetState extends State<RecordHandoverSheet> {
   static const _maxPhotos = 5;
 
+  final _formKey = GlobalKey<FormState>();
   final _note = TextEditingController();
   final _picker = ImagePicker();
   final _photoUrls = <String>[];
@@ -93,11 +94,8 @@ class _RecordHandoverSheetState extends State<RecordHandoverSheet> {
   }
 
   Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
     final note = _note.text.trim();
-    if (note.isEmpty) {
-      setState(() => _error = 'Describe the handover.');
-      return;
-    }
     setState(() {
       _busy = true;
       _error = null;
@@ -134,41 +132,48 @@ class _RecordHandoverSheetState extends State<RecordHandoverSheet> {
       ),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Record Handover', style: theme.textTheme.headlineMedium),
-            const SizedBox(height: 4),
-            Text(
-              'Note what the site looked like when you took it over.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Record site handover',
+                  style: theme.textTheme.headlineMedium),
+              const SizedBox(height: 4),
+              Text(
+                'Note what the site looked like when you took it over.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            if (_error != null) ErrorBanner(_error!),
-            AppTextField(
-              controller: _note,
-              label: 'Handover note',
-              hint: 'What condition is the site in, what was already done…',
-              maxLines: 4,
-            ),
-            const SizedBox(height: 16),
-            _HandoverPhotoRow(
-              urls: _photoUrls,
-              uploading: _uploading,
-              canAdd: _photoUrls.length < _maxPhotos && !_busy,
-              onAdd: _addPhoto,
-              onRemove: _removePhoto,
-            ),
-            const SizedBox(height: 16),
-            PrimaryButton(
-              label: 'Submit',
-              busy: _busy,
-              onPressed: _uploading ? null : _submit,
-            ),
-          ],
+              const SizedBox(height: 16),
+              if (_error != null) ErrorBanner(_error!),
+              AppTextField(
+                controller: _note,
+                label: 'Handover note',
+                hint: 'What condition is the site in, what was already done…',
+                maxLines: 4,
+                validator: (value) => (value == null || value.trim().isEmpty)
+                    ? 'Describe the handover.'
+                    : null,
+              ),
+              const SizedBox(height: 16),
+              _HandoverPhotoRow(
+                urls: _photoUrls,
+                uploading: _uploading,
+                canAdd: _photoUrls.length < _maxPhotos && !_busy,
+                onAdd: _addPhoto,
+                onRemove: _removePhoto,
+              ),
+              const SizedBox(height: 16),
+              PrimaryButton(
+                label: 'Save handover',
+                busy: _busy,
+                onPressed: _uploading ? null : _submit,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -197,7 +202,7 @@ class _HandoverPhotoRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('PHOTOS (OPTIONAL)', style: theme.textTheme.labelMedium),
+        Text('Photos (optional)', style: theme.textTheme.labelMedium),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -224,20 +229,40 @@ class _HandoverPhotoRow extends StatelessWidget {
                       ),
                     ),
                   ),
+                  // A 48dp tap target (accessibility minimum) but only a
+                  // small 24dp circle actually paints, tucked in the corner -
+                  // an IconButton's own background used to fill the whole
+                  // 48x48 box, covering most of the 72x72 thumbnail beneath
+                  // it.
                   Positioned(
                     top: 0,
                     right: 0,
-                    child: InkWell(
-                      onTap: () => onRemove(url),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.close,
-                          size: 18,
-                          color: Colors.white,
+                    child: Semantics(
+                      button: true,
+                      label: 'Remove photo',
+                      child: InkWell(
+                        onTap: () => onRemove(url),
+                        customBorder: const CircleBorder(),
+                        child: const SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: Align(
+                            alignment: Alignment.topRight,
+                            child: Padding(
+                              padding: EdgeInsets.all(4),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Padding(
+                                  padding: EdgeInsets.all(2),
+                                  child: Icon(Icons.close,
+                                      size: 16, color: Colors.white),
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),

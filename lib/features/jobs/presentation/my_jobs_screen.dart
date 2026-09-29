@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
+import '../../../core/util/plural.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
@@ -19,6 +20,7 @@ import '../domain/bundle.dart';
 import '../domain/bundle_bid.dart';
 import '../domain/job.dart';
 import 'widgets/job_card.dart';
+import 'widgets/status_colors.dart';
 
 /// The "My Jobs" tab. Requestors see the jobs they've posted; providers see
 /// the jobs they've won and their pending bids.
@@ -39,7 +41,7 @@ class MyJobsScreen extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-              child: Text('My Jobs', style: theme.textTheme.headlineMedium),
+              child: Text('My jobs', style: theme.textTheme.headlineMedium),
             ),
             Expanded(
               child: user == null
@@ -64,7 +66,7 @@ class MyJobsScreen extends StatelessWidget {
 enum _JobFilter {
   all('All'),
   open('Open'),
-  inProgress('In Progress'),
+  inProgress('In progress'),
   completed('Completed'),
   cancelled('Cancelled');
 
@@ -164,13 +166,28 @@ class _RequestorJobsState extends State<_RequestorJobs> {
     final filteredStandalone =
         standalone.where((j) => _filter.matches(j.status)).toList();
 
+    final bundleCards = <Widget>[];
+    for (final entry in tasksByBundle.entries) {
+      final bundle = bundleById[entry.key];
+      if (bundle == null) {
+        for (final task in entry.value) {
+          bundleCards
+              .add(JobCard(job: task, onTap: () => context.push('/jobs/${task.id}')));
+        }
+        continue;
+      }
+      // With a filter active, hide the card unless a task matches it, and
+      // show only the matching tasks; the progress line still counts all.
+      final visibleTasks = _filter == _JobFilter.all
+          ? entry.value
+          : entry.value.where((t) => _filter.matches(t.status)).toList();
+      if (visibleTasks.isEmpty) continue;
+      bundleCards.add(BundleJobsCard(
+          bundle: bundle, allTasks: entry.value, tasks: visibleTasks));
+    }
+
     final items = <Widget>[
-      for (final entry in tasksByBundle.entries)
-        if (bundleById[entry.key] case final bundle?)
-          BundleJobsCard(bundle: bundle, tasks: entry.value)
-        else
-          for (final task in entry.value)
-            JobCard(job: task, onTap: () => context.push('/jobs/${task.id}')),
+      ...bundleCards,
       for (final job in filteredStandalone)
         JobCard(job: job, onTap: () => context.push('/jobs/${job.id}')),
     ];
@@ -193,15 +210,26 @@ class _RequestorJobsState extends State<_RequestorJobs> {
 
 /// One requestor bundle card: title (tapping opens the bundle screen), a
 /// progress line from its tasks' statuses, status pill, and a task row each.
+///
+/// [tasks] are the rows actually shown (narrowed by the active status
+/// filter); [allTasks] always covers every task so the progress line stays
+/// accurate regardless of the filter. Defaults to showing every task.
 class BundleJobsCard extends StatelessWidget {
-  const BundleJobsCard({super.key, required this.bundle, required this.tasks});
+  const BundleJobsCard({
+    super.key,
+    required this.bundle,
+    required this.allTasks,
+    List<Job>? tasks,
+  }) : tasks = tasks ?? allTasks;
+
   final Bundle bundle;
+  final List<Job> allTasks;
   final List<Job> tasks;
 
   /// e.g. "4 tasks · 2 in progress · 1 done · 1 open".
   String get _progressLine {
     final counts = <JobStatus, int>{};
-    for (final task in tasks) {
+    for (final task in allTasks) {
       counts[task.status] = (counts[task.status] ?? 0) + 1;
     }
     final parts = [
@@ -219,9 +247,9 @@ class BundleJobsCard extends StatelessWidget {
             JobStatus.cancelled => 'cancelled',
           }}',
     ];
-    final noun = tasks.length == 1 ? 'task' : 'tasks';
+    final noun = allTasks.length == 1 ? 'task' : 'tasks';
     return [
-      '${tasks.length} $noun',
+      '${allTasks.length} $noun',
       ...parts,
     ].join(' · ');
   }
@@ -229,6 +257,10 @@ class BundleJobsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Bidding has quietly ended (past deadline, server sweep hasn't landed
+    // yet) - "Open" would otherwise mislead a requestor into thinking bids
+    // are still coming in.
+    final closed = bundle.status == BundleStatus.open && !bundle.biddingOpen;
     return AppCard(
       onTap: () => context.push('/bundles/${bundle.id}'),
       child: Column(
@@ -252,7 +284,10 @@ class BundleJobsCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               PillBadge(
-                  label: bundle.status.label, color: context.fairbid.verified),
+                  label: closed ? 'Closed' : bundle.status.label,
+                  color: closed
+                      ? theme.colorScheme.onSurfaceVariant
+                      : bundleStatusColor(context, bundle.status)),
             ],
           ),
           const SizedBox(height: 12),
@@ -280,21 +315,27 @@ class _BundleTaskRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(task.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium),
-            ),
-            const SizedBox(width: 8),
-            PillBadge(
-                label: task.status.label,
-                color: theme.colorScheme.onSurfaceVariant),
-          ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(task.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium),
+              ),
+              const SizedBox(width: 8),
+              PillBadge(
+                  label: task.status.label,
+                  color: jobStatusColor(context, task.status)),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right,
+                  size: 18, color: theme.colorScheme.onSurfaceVariant),
+            ],
+          ),
         ),
       ),
     );
@@ -393,7 +434,7 @@ class _ProviderJobs extends StatelessWidget {
                   padding: const EdgeInsets.all(24),
                   children: [
                     if (won.isNotEmpty) ...[
-                      Text('Won Jobs', style: theme.textTheme.titleLarge),
+                      Text('Won jobs', style: theme.textTheme.titleLarge),
                       const SizedBox(height: 12),
                       for (final job in won)
                         Padding(
@@ -406,7 +447,7 @@ class _ProviderJobs extends StatelessWidget {
                       const SizedBox(height: 12),
                     ],
                     if (pending.isNotEmpty || pendingBundleBids.isNotEmpty) ...[
-                      Text('Pending Bids', style: theme.textTheme.titleLarge),
+                      Text('Pending bids', style: theme.textTheme.titleLarge),
                       const SizedBox(height: 12),
                       for (final bid in pending)
                         Padding(
@@ -448,14 +489,22 @@ class _PendingBidTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(formatRm(bid.amountSen),
-                      style: theme.textTheme.titleLarge),
+                  // Scales down rather than wraps - beside the pill and
+                  // chevron, a plain wrapping Text split a large figure like
+                  // "RM 13,000.00" mid-number at larger text scales.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(formatRm(bid.amountSen),
+                        maxLines: 1, style: theme.textTheme.titleLarge),
+                  ),
                   Text('Bid ${timeAgo(bid.createdAt)}',
                       style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant)),
                 ],
               ),
             ),
+            const SizedBox(width: 12),
             PillBadge(
                 label: bid.status.label, color: context.fairbid.warningText),
             const Icon(Icons.chevron_right),
@@ -466,37 +515,67 @@ class _PendingBidTile extends StatelessWidget {
 }
 
 /// A provider's pending package bid on a bundle: title, task count, quoted
-/// total. No provider-facing bundle screen, so tapping opens the first task.
+/// total. No provider-facing bundle screen, so tapping opens the covered
+/// task with the lowest [Job.bundleOrder] - not just `taskPrices.keys.first`,
+/// which is a Firestore map and carries no ordering guarantee.
 class _PendingBundleBidTile extends StatelessWidget {
   const _PendingBundleBidTile({required this.bid});
   final BundleBid bid;
 
+  Future<void> _open(BuildContext context) async {
+    try {
+      final tasks =
+          await context.read<JobRepository>().getBundleTasks(bid.bundleId);
+      final covered = tasks.where((t) => bid.taskPrices.containsKey(t.id))
+          .toList()
+        ..sort((a, b) => (a.bundleOrder ?? 0).compareTo(b.bundleOrder ?? 0));
+      final targetId =
+          covered.isNotEmpty ? covered.first.id : bid.taskPrices.keys.first;
+      if (!context.mounted) return;
+      context.push('/jobs/$targetId');
+    } catch (_) {
+      if (!context.mounted) return;
+      context.push('/jobs/${bid.taskPrices.keys.first}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final amount = bid.bundlePriceSen != null
-        ? '${formatRm(bid.quotedTotalSen)} (bundle price)'
-        : formatRm(bid.quotedTotalSen);
+    // The "(bundle price)" note moved to the caption line below - inline, it
+    // was one more reason the amount ran out of room and wrapped mid-number.
+    final caption = [
+      bid.bundleTitle,
+      plural(bid.taskCount, 'task'),
+      if (bid.bundlePriceSen != null) 'bundle price',
+    ].join(' • ');
     return AppCard(
-        onTap: () => context.push('/jobs/${bid.taskPrices.keys.first}'),
+        onTap: () => _open(context),
         child: Row(
           children: [
             Icon(Icons.inventory_2_outlined, color: context.fairbid.verified),
             const SizedBox(width: 12),
+            // Same primary/secondary hierarchy as _PendingBidTile's amount +
+            // caption, so the two tile types read consistently in one list.
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(bid.bundleTitle, style: theme.textTheme.titleMedium),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(formatRm(bid.quotedTotalSen),
+                        maxLines: 1, style: theme.textTheme.titleLarge),
+                  ),
                   Text(
-                    '${bid.taskCount} task${bid.taskCount == 1 ? '' : 's'} • '
-                    '$amount',
+                    caption,
                     style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 12),
             PillBadge(
                 label: bid.status.label, color: context.fairbid.warningText),
             const Icon(Icons.chevron_right),

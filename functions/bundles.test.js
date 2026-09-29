@@ -9,6 +9,7 @@ const {
   handoverNotificationBody,
   validateHandover,
   uidsToCount,
+  isHandoverDispute,
 } = require("./bundles");
 const {IMG_PREFIX} = require("./common");
 
@@ -323,6 +324,38 @@ test("once both are counted, nobody is due a further bump", () => {
   assert.deepStrictEqual(
       uidsToCount(["provider1", "requestor1"], ["provider1", "requestor1"]),
       []);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6: flagging a dispute as a split handover, for the deliverable
+// metric in docs/BUNDLE_BIDDING.md.
+// ---------------------------------------------------------------------------
+
+console.log("bundles.js isHandoverDispute");
+
+test("not a handover dispute when the job has no predecessor", () => {
+  assert.strictEqual(
+      isHandoverDispute({startsAfterJobId: null}, null), false);
+  assert.strictEqual(
+      isHandoverDispute({startsAfterJobId: null}, {acceptedProviderId: "p1"}),
+      false);
+});
+
+test("not flagged when the predecessor is missing", () => {
+  assert.strictEqual(
+      isHandoverDispute({startsAfterJobId: "task1"}, null), false);
+});
+
+test("flagged when the predecessor went to a different provider", () => {
+  assert.strictEqual(isHandoverDispute(
+      {startsAfterJobId: "task1", acceptedProviderId: "p2"},
+      {acceptedProviderId: "p1"}), true);
+});
+
+test("not flagged when the same provider won both tasks", () => {
+  assert.strictEqual(isHandoverDispute(
+      {startsAfterJobId: "task1", acceptedProviderId: "p1"},
+      {acceptedProviderId: "p1"}), false);
 });
 
 if (failed > 0) {

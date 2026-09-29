@@ -76,18 +76,25 @@ GoRouter buildRouter(AuthController auth) {
       GoRoute(path: '/jobs', builder: (_, _) => const JobFeedScreen()),
       GoRoute(
           path: '/jobs/saved', builder: (_, _) => const SavedJobsScreen()),
+      // `?from=bundle` means it was opened from that task's bundle screen, so
+      // "View bundle" goes back instead of stacking another copy.
       GoRoute(
         path: '/jobs/:id',
-        builder: (_, state) =>
-            JobDetailScreen(jobId: state.pathParameters['id']!),
+        builder: (_, state) => JobDetailScreen(
+          jobId: state.pathParameters['id']!,
+          fromBundle: state.uri.queryParameters['from'] == 'bundle',
+        ),
       ),
 
-      // The requestor's view of a bundled posting: its tasks, the bids on
-      // each, and the three award options.
+      // A bundled posting: the requestor's tasks, bids and award options, or a
+      // provider's read-only view. `?fromTask=<jobId>` names the task it was
+      // opened from, so tapping that task goes back instead of stacking.
       GoRoute(
         path: '/bundles/:id',
-        builder: (_, state) =>
-            BundleDetailScreen(bundleId: state.pathParameters['id']!),
+        builder: (_, state) => BundleDetailScreen(
+          bundleId: state.pathParameters['id']!,
+          fromTaskId: state.uri.queryParameters['fromTask'],
+        ),
       ),
 
       // Admin - the verification review screen, pushed from the queue with the

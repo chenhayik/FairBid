@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
+import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../profile/presentation/widgets/review_card.dart';
 import '../data/moderation_repository.dart';
@@ -79,7 +80,7 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
             const SizedBox(height: 24),
             StatCard(
               label: 'Flagged Reviews',
-              value: items == null ? '-' : '${items.length}',
+              value: items == null ? '-' : formatCount(items.length),
               icon: Icons.flag_outlined,
             ),
             const SizedBox(height: 24),

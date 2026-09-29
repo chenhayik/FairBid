@@ -29,6 +29,7 @@ import 'package:fairbid/features/auth/data/auth_repository.dart';
 import 'package:fairbid/features/auth/domain/app_user.dart';
 import 'package:fairbid/features/auth/domain/mfa.dart';
 import 'package:fairbid/features/auth/domain/user_role.dart';
+import 'package:fairbid/features/auth/presentation/auth_controller.dart';
 import 'package:fairbid/features/auth/presentation/mfa_code_sheet.dart';
 import 'package:fairbid/features/auth/presentation/validators.dart';
 import 'package:fairbid/features/disputes/data/dispute_repository.dart';
@@ -1562,6 +1563,9 @@ class FakeStatsRepository implements StatsRepository {
             pendingVerifications: 16,
             openDisputes: 17,
             releasedVolumeSen: 1234500,
+            bundlesAwarded: 20,
+            splitAwards: 5,
+            handoverDisputes: 2,
           );
 
   final PlatformStats _stats;
@@ -2012,9 +2016,11 @@ Widget buildApp(
   FakeAssistRepository? assist,
   FakeBundleRepository? bundle,
   FakeBundleBidRepository? bundleBid,
+  FakeMilestoneRepository? milestoneRepository,
 }) {
   final jobRepo = jobRepository ?? FakeJobRepository(jobs);
-  final milestoneRepo = FakeMilestoneRepository(jobRepo, milestones);
+  final milestoneRepo =
+      milestoneRepository ?? FakeMilestoneRepository(jobRepo, milestones);
   final disputeRepo = dispute ?? FakeDisputeRepository();
   disputeRepo.milestones ??= milestoneRepo;
   return FairBidApp(
@@ -2832,7 +2838,7 @@ void main() {
       await login(tester);
 
       expect(find.byType(NavigationBar), findsOneWidget);
-      for (final tab in ['Home', 'My Jobs', 'Messages', 'Profile']) {
+      for (final tab in ['Home', 'My jobs', 'Messages', 'Profile']) {
         expect(find.text(tab), findsWidgets);
       }
     });
@@ -3040,7 +3046,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('shows Earnings & Payouts for a provider', (tester) async {
+    testWidgets('shows Earnings & payouts for a provider', (tester) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -3050,10 +3056,10 @@ void main() {
       await openRegisterAs(tester, 'Work');
       await openProfileTab(tester);
 
-      expect(find.text('Earnings & Payouts'), findsOneWidget);
+      expect(find.text('Earnings & payouts'), findsOneWidget);
     });
 
-    testWidgets('hides Earnings & Payouts for a requestor', (tester) async {
+    testWidgets('hides Earnings & payouts for a requestor', (tester) async {
       await tester.binding.setSurfaceSize(const Size(500, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -3062,7 +3068,7 @@ void main() {
       await loginRequestor(tester);
       await openProfileTab(tester);
 
-      expect(find.text('Earnings & Payouts'), findsNothing);
+      expect(find.text('Earnings & payouts'), findsNothing);
     });
 
     testWidgets('edit profile updates the name and About', (tester) async {
@@ -3185,10 +3191,10 @@ void main() {
       await openRegisterAs(tester, 'Work');
       await openProfileTab(tester);
 
-      await tester.tap(find.text('Earnings & Payouts'));
+      await tester.tap(find.text('Earnings & payouts'));
       await tester.pumpAndSettle();
 
-      expect(find.text('RM 850.00'), findsOneWidget);
+      expect(find.text('RM\u00A0850.00'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Withdraw'), findsOneWidget);
     });
 
@@ -3341,7 +3347,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Earnings & Payouts'));
+      await tester.tap(find.text('Earnings & payouts'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
@@ -3374,7 +3380,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Earnings & Payouts'));
+      await tester.tap(find.text('Earnings & payouts'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
@@ -3544,7 +3550,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Earnings & Payouts'));
+        await tester.tap(find.text('Earnings & payouts'));
         await tester.pumpAndSettle();
 
         await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
@@ -3635,19 +3641,19 @@ void main() {
 
   group('Money & distance', () {
     test('formatRm formats sen as RM', () {
-      expect(formatRm(0), 'RM 0.00');
-      expect(formatRm(12550), 'RM 125.50');
-      expect(formatRm(100000), 'RM 1,000.00');
+      expect(formatRm(0), 'RM\u00A00.00');
+      expect(formatRm(12550), 'RM\u00A0125.50');
+      expect(formatRm(100000), 'RM\u00A01,000.00');
     });
 
     test('formatBudget handles fixed, range and hourly', () {
       expect(formatBudget(), isNull);
-      expect(formatBudget(minSen: 10000), 'RM 100.00');
+      expect(formatBudget(minSen: 10000), 'RM\u00A0100.00');
       expect(
         formatBudget(minSen: 10000, maxSen: 25000),
-        'RM 100.00 – RM 250.00',
+        'RM\u00A0100.00 – RM\u00A0250.00',
       );
-      expect(formatBudget(minSen: 5000, hourly: true), 'RM 50.00/hr');
+      expect(formatBudget(minSen: 5000, hourly: true), 'RM\u00A050.00/hr');
     });
 
     test('parseRmToSen parses money text', () {
@@ -4001,7 +4007,7 @@ void main() {
       await openRegisterAs(tester, 'Work');
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
-      expect(find.text('Job Details'), findsOneWidget);
+      expect(find.text('Job details'), findsOneWidget);
     }
 
     testWidgets('approved provider submits a bid (with form validation)', (
@@ -4022,31 +4028,32 @@ void main() {
       await openJobAsProvider(tester);
 
       // Open the sheet and submit empty → validation errors. "Submit a bid"
-      // now renders twice (the bids slot's own button and its duplicate on
-      // the pinned bottom bar); either opens the same sheet.
-      await tester.tap(find.widgetWithText(FilledButton, 'Submit a bid').first);
+      // is the pinned bottom bar's button; the bids slot doesn't repeat it.
+      expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit a bid'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Submit Bid'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit bid'));
       await tester.pumpAndSettle();
       expect(find.text('Enter your bid amount.'), findsOneWidget);
       expect(find.text('Pick a duration.'), findsOneWidget);
       expect(find.text('Message is required.'), findsOneWidget);
 
       // Fill the form and submit.
-      await fillField(tester, 'Your Bid (RM)', '150');
+      await fillField(tester, 'Your bid (RM)', '150');
       await tester.tap(find.byType(DropdownButtonFormField<String>));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Less than 1 week').last);
       await tester.pumpAndSettle();
-      await fillField(tester, 'Proposal Message', 'I can start tomorrow.');
+      await fillField(tester, 'Proposal message', 'I can start tomorrow.');
       await tester.tap(find.byType(CheckboxListTile));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Submit Bid'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit bid'));
       await tester.pumpAndSettle();
 
-      // Sheet closed; the detail now shows the live bid with Withdraw.
+      // Sheet closed; the detail now shows the live bid with Withdraw (the
+      // bid card's own secondary action - the bottom bar doesn't offer it).
       expect(find.text('Your bid'), findsOneWidget);
-      expect(find.text('RM 150.00'), findsOneWidget);
+      expect(find.text('RM\u00A0150.00'), findsOneWidget);
       expect(
         find.widgetWithText(OutlinedButton, 'Withdraw bid'),
         findsOneWidget,
@@ -4057,7 +4064,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsWidgets);
+      expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsOneWidget);
     });
 
     testWidgets('pending provider sees the locked state', (tester) async {
@@ -4122,26 +4129,26 @@ void main() {
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
       expect(find.text('Pro Fixer'), findsOneWidget);
-      expect(find.text('RM 150.00'), findsOneWidget);
+      expect(find.text('RM\u00A0150.00'), findsOneWidget);
 
       // Accept → confirm in the dialog.
       await tester.ensureVisible(
-        find.widgetWithText(FilledButton, 'Accept Bid'),
+        find.widgetWithText(FilledButton, 'Accept bid'),
       );
-      await tester.tap(find.widgetWithText(FilledButton, 'Accept Bid'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Accept bid'));
       await tester.pumpAndSettle();
       expect(find.text('Accept this bid?'), findsOneWidget);
       await tester.tap(
         find.descendant(
           of: find.byType(AlertDialog),
-          matching: find.widgetWithText(FilledButton, 'Accept Bid'),
+          matching: find.widgetWithText(FilledButton, 'Accept bid'),
         ),
       );
       await tester.pumpAndSettle();
 
       // The job is now in progress with the winner shown.
-      expect(find.text('In Progress'), findsOneWidget);
-      expect(find.text('Assigned Provider'), findsOneWidget);
+      expect(find.text('In progress'), findsOneWidget);
+      expect(find.text('Assigned provider'), findsOneWidget);
       expect(find.text('Pro Fixer'), findsOneWidget);
     });
   });
@@ -4159,7 +4166,7 @@ void main() {
           buildApp(auth, jobs: [sampleJob(title: 'A task', category: category)]));
       await tester.pumpAndSettle();
       await tester.tap(find.descendant(
-          of: find.byType(NavigationBar), matching: find.text('My Jobs')));
+          of: find.byType(NavigationBar), matching: find.text('My jobs')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('A task'));
       await tester.pumpAndSettle();
@@ -4251,28 +4258,28 @@ void main() {
         await tester.pumpAndSettle();
 
         await tester.ensureVisible(
-          find.widgetWithText(FilledButton, 'Accept Bid'),
+          find.widgetWithText(FilledButton, 'Accept bid'),
         );
-        await tester.tap(find.widgetWithText(FilledButton, 'Accept Bid'));
+        await tester.tap(find.widgetWithText(FilledButton, 'Accept bid'));
         await tester.pumpAndSettle();
         await tester.tap(
           find.descendant(
             of: find.byType(AlertDialog),
-            matching: find.widgetWithText(FilledButton, 'Accept Bid'),
+            matching: find.widgetWithText(FilledButton, 'Accept bid'),
           ),
         );
         await tester.pumpAndSettle();
 
         // The gate blocked the accept and surfaced the shortfall.
         expect(find.text('Not enough balance'), findsOneWidget);
-        expect(find.textContaining('RM 50.00 more available'), findsOneWidget);
+        expect(find.textContaining('RM\u00A050.00 more available'), findsOneWidget);
         expect(find.widgetWithText(FilledButton, 'Top up'), findsOneWidget);
-        expect(find.text('In Progress'), findsNothing);
+        expect(find.text('In progress'), findsNothing);
 
         // Top up routes to the wallet screen.
         await tester.tap(find.widgetWithText(FilledButton, 'Top up'));
         await tester.pumpAndSettle();
-        expect(find.text('My Wallet'), findsOneWidget);
+        expect(find.text('My wallet'), findsOneWidget);
       },
     );
 
@@ -4493,7 +4500,7 @@ void main() {
       expect(find.text('New provider, no score yet'), findsOneWidget);
       expect(find.textContaining('Trust Score'), findsNothing);
       // Still rankable / acceptable - the internal score just isn't surfaced.
-      expect(find.widgetWithText(FilledButton, 'Accept Bid'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Accept bid'), findsOneWidget);
     });
 
     testWidgets("tapping a bid card's identity row opens the provider's public "
@@ -4547,9 +4554,8 @@ void main() {
     }
 
     // A bundle task's extra "Part of a bundle" banner pushes the inline
-    // review card (slot 10) below the fold; `.first`-picking its "Review X"
-    // text would otherwise silently hit the always-visible, pinned bottom
-    // bar's duplicate (which only scrolls, it never opens the sheet).
+    // review status card (slot 10) below the fold; scroll to it to check the
+    // note it shows. The "Review X" button itself lives on the pinned bar.
     Future<void> scrollToReviewSection(WidgetTester tester) async {
       await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
       await tester.pumpAndSettle();
@@ -4592,13 +4598,17 @@ void main() {
 
         await tester.tap(find.text('Fix leaking sink').first);
         await tester.pumpAndSettle();
-        expect(find.text('Assigned Provider'), findsOneWidget);
+        expect(find.text('Assigned provider'), findsOneWidget);
         expect(find.text('1. Full repair'), findsOneWidget);
 
-        // Release the delivered milestone (with confirmation) - the last one,
-        // so the job completes.
-        final releaseBtn = find.widgetWithText(FilledButton, 'Release Payment');
-        await tester.ensureVisible(releaseBtn);
+        // Release the delivered milestone from the bottom bar (with
+        // confirmation) - the last one, so the job completes.
+        final releaseBtn = find.widgetWithText(
+          FilledButton,
+          'Release RM 150.00',
+        );
+        expect(find.widgetWithText(FilledButton, 'Release payment'),
+            findsNothing);
         await tester.tap(releaseBtn);
         await tester.pumpAndSettle();
         await tester.tap(
@@ -4609,13 +4619,9 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Completed → review the provider with 5★. "Review Pro Fixer" now
-        // renders twice (the inline prompt and its duplicate on the pinned
-        // bottom bar); either opens the same sheet.
-        final reviewBtn = find
-            .widgetWithText(FilledButton, 'Review Pro Fixer')
-            .first;
-        await tester.ensureVisible(reviewBtn);
+        // Completed → review the provider with 5★ from the bottom bar.
+        final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
+        expect(reviewBtn, findsOneWidget);
         await tester.tap(reviewBtn);
         await tester.pumpAndSettle();
         expect(find.text('Leave a Review'), findsOneWidget);
@@ -4624,6 +4630,7 @@ void main() {
         // The provider's aggregates and Bayesian review score were recomputed.
         expect(review.ratingCounts['prov-1'], 1);
         expect(review.reviewScores['prov-1'], 73); // (10·3.5+5)/11 /5 ·100
+        await scrollToReviewSection(tester);
         expect(find.text('Review submitted'), findsOneWidget);
       },
     );
@@ -4655,18 +4662,16 @@ void main() {
       await tester.tap(
         find.descendant(
           of: find.byType(NavigationBar),
-          matching: find.text('My Jobs'),
+          matching: find.text('My jobs'),
         ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
 
-      // "Review Rita Client" renders twice (inline prompt + bottom bar).
-      final reviewBtn = find
-          .widgetWithText(FilledButton, 'Review Rita Client')
-          .first;
-      await tester.ensureVisible(reviewBtn);
+      // "Review Rita Client" is the bottom bar's button only.
+      final reviewBtn = find.widgetWithText(FilledButton, 'Review Rita Client');
+      expect(reviewBtn, findsOneWidget);
       await tester.tap(reviewBtn);
       await tester.pumpAndSettle();
       await giveStarsAndSubmit(tester, 4);
@@ -4708,18 +4713,16 @@ void main() {
       await tester.tap(
         find.descendant(
           of: find.byType(NavigationBar),
-          matching: find.text('My Jobs'),
+          matching: find.text('My jobs'),
         ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
 
-      // "Review Pro Fixer" renders twice (inline prompt + bottom bar).
-      final reviewBtn = find
-          .widgetWithText(FilledButton, 'Review Pro Fixer')
-          .first;
-      await tester.ensureVisible(reviewBtn);
+      // "Review Pro Fixer" is the bottom bar's button only.
+      final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
+      expect(reviewBtn, findsOneWidget);
       await tester.tap(reviewBtn);
       await tester.pumpAndSettle();
       await giveStarsAndSubmit(tester, 5);
@@ -4752,7 +4755,7 @@ void main() {
         await tester.tap(
           find.descendant(
             of: find.byType(NavigationBar),
-            matching: find.text('My Jobs'),
+            matching: find.text('My jobs'),
           ),
         );
         await tester.pumpAndSettle();
@@ -4810,7 +4813,7 @@ void main() {
         await tester.tap(
           find.descendant(
             of: find.byType(NavigationBar),
-            matching: find.text('My Jobs'),
+            matching: find.text('My jobs'),
           ),
         );
         await tester.pumpAndSettle();
@@ -4878,7 +4881,7 @@ void main() {
         await tester.tap(
           find.descendant(
             of: find.byType(NavigationBar),
-            matching: find.text('My Jobs'),
+            matching: find.text('My jobs'),
           ),
         );
         await tester.pumpAndSettle();
@@ -4893,8 +4896,8 @@ void main() {
           ),
           findsOneWidget,
         );
-        // Only the pinned bottom bar's duplicate remains - the inline slot
-        // shows the wait banner instead of a review action.
+        // Only the pinned bottom bar's button exists - the inline slot shows
+        // the wait banner.
         expect(
           find.widgetWithText(FilledButton, 'Review Pro Fixer'),
           findsOneWidget,
@@ -4916,10 +4919,10 @@ void main() {
           ),
           findsNothing,
         );
-        // Both the inline action and its pinned bottom-bar duplicate show now.
+        // The wait banner is gone and the bar's button is what's left.
         expect(
           find.widgetWithText(FilledButton, 'Review Pro Fixer'),
-          findsNWidgets(2),
+          findsOneWidget,
         );
       },
     );
@@ -4967,7 +4970,7 @@ void main() {
         await tester.tap(
           find.descendant(
             of: find.byType(NavigationBar),
-            matching: find.text('My Jobs'),
+            matching: find.text('My jobs'),
           ),
         );
         await tester.pumpAndSettle();
@@ -4993,8 +4996,8 @@ void main() {
         await scrollToReviewSection(tester);
 
         expect(find.text('Review submitted'), findsOneWidget);
-        // Only the pinned bottom bar's duplicate remains - the inline slot
-        // shows the already-reviewed state instead of a review action.
+        // Only the pinned bottom bar's button exists - the inline slot shows
+        // the already-reviewed state.
         expect(
           find.widgetWithText(FilledButton, 'Review Pro Fixer'),
           findsOneWidget,
@@ -5093,7 +5096,7 @@ void main() {
       expect(find.text('Great, see you then!'), findsOneWidget);
     });
 
-    testWidgets('requestor opens the chat from the assigned-provider card', (
+    testWidgets('requestor opens the chat from the bottom bar', (
       tester,
     ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
@@ -5114,10 +5117,12 @@ void main() {
 
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
-      expect(find.text('Assigned Provider'), findsOneWidget);
+      expect(find.text('Assigned provider'), findsOneWidget);
 
-      // The message button lazily creates the conversation and opens it.
-      await tester.tap(find.byIcon(Icons.chat_bubble_outline));
+      // The bar's message button (the only one - the inline tile would
+      // repeat it) lazily creates the conversation and opens it.
+      expect(find.byIcon(Icons.chat_bubble_outline), findsNothing);
+      await tester.tap(find.widgetWithText(FilledButton, 'Message provider'));
       await tester.pumpAndSettle();
       expect(find.text('Start the conversation'), findsOneWidget);
       expect(find.text('Pro Fixer'), findsOneWidget); // thread app bar
@@ -5239,7 +5244,7 @@ void main() {
       expect(find.text('PENDING VERIFICATIONS'), findsOneWidget);
       // Marketplace-participant content is hidden for admins.
       expect(find.text('Trust Score'), findsNothing);
-      expect(find.text('Earnings & Payouts'), findsNothing);
+      expect(find.text('Earnings & payouts'), findsNothing);
       expect(find.textContaining('Reviews ('), findsNothing);
     });
 
@@ -5661,12 +5666,33 @@ void main() {
       await tester.tap(find.text('Stats'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Platform Statistics'), findsOneWidget);
-      expect(find.text('RM 12,345.00'), findsOneWidget); // released volume
+      expect(find.text('Platform statistics'), findsOneWidget);
+      expect(find.text('RM\u00A012,345.00'), findsOneWidget); // released volume
       expect(find.text('11'), findsOneWidget); // clients
       expect(find.text('12'), findsOneWidget); // providers
       expect(find.text('17'), findsOneWidget); // open disputes
       expect(find.text('23'), findsOneWidget); // total users
+    });
+
+    testWidgets('stats tab shows bundle award and handover dispute counts', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
+      await tester.pumpWidget(buildApp(auth));
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('Stats'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Stats'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Bundles'), findsOneWidget);
+      expect(find.text('20'), findsOneWidget); // bundles awarded
+      expect(find.text('5 (25%)'), findsOneWidget); // split awards
+      expect(find.text('2'), findsOneWidget); // handover disputes
     });
 
     testWidgets('stats tab can trigger the Trust Score recompute', (
@@ -5955,15 +5981,14 @@ void main() {
       },
     );
 
-    test('bidder: shows the placed bid with a Withdraw secondary action', () {
+    test('bidder: shows the placed bid', () {
       final job = sampleJob(requestorId: 'req-9');
       final bid = sampleBid(providerId: 'me', amountSen: 15000);
       final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), bid);
 
       expect(vm.role, JobViewerRole.bidder);
       expect(vm.primaryAction?.kind, JobActionKind.yourBid);
-      expect(vm.primaryAction?.label, 'Your bid RM 150.00');
-      expect(vm.primaryAction?.secondaryLabel, 'Withdraw');
+      expect(vm.primaryAction?.label, 'Your bid RM\u00A0150.00');
       expect(vm.showBids, isTrue);
     });
 
@@ -6037,7 +6062,7 @@ void main() {
       expect(vm.primaryAction, isNull);
     });
 
-    test('owner + open live bundle task: headline counts package bids, '
+    test('owner + open live bundle task: headline counts bundle bids, '
         'action opens the bundle', () {
       final job = sampleJob(
         requestorId: 'me',
@@ -6049,7 +6074,7 @@ void main() {
       final vm = buildJobDetailVm(job, testUser(), null);
 
       expect(vm.role, JobViewerRole.owner);
-      expect(vm.statusHeadline, '2 package bids cover this task.');
+      expect(vm.statusHeadline, '2 bundle bids cover this task.');
       expect(vm.primaryAction?.kind, JobActionKind.viewBundle);
       expect(vm.primaryAction?.label, 'View bundle');
       // The per-job bid list is always empty for a live bundle task - the
@@ -6113,10 +6138,10 @@ void main() {
         expect(vm.role, JobViewerRole.browser);
         expect(
           vm.statusHeadline,
-          'You bid RM 150.00 on this task as part of a package bid.',
+          'You bid RM\u00A0150.00 on this task as part of a bundle bid.',
         );
         expect(vm.primaryAction?.kind, JobActionKind.submitBid);
-        expect(vm.primaryAction?.label, 'Edit your bundle bid');
+        expect(vm.primaryAction?.label, 'Edit bundle bid');
       },
     );
 
@@ -6145,7 +6170,7 @@ void main() {
         );
 
         expect(vm.primaryAction?.kind, JobActionKind.submitBid);
-        expect(vm.primaryAction?.label, 'Submit a bid');
+        expect(vm.primaryAction?.label, 'Bid on this bundle');
       },
     );
   });
@@ -6306,15 +6331,15 @@ void postJobAndOnboardingTests() {
         ..seedSignedIn(UserRole.requestor);
       await tester.pumpWidget(buildApp(auth));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('+ Post a Job'));
+      await tester.tap(find.text('+ Post a job'));
       await tester.pumpAndSettle();
-      expect(find.text('Post a New Job'), findsOneWidget);
+      expect(find.text('Post a job'), findsOneWidget);
     }
 
     testWidgets('an empty form reports every required field', (tester) async {
       await openPostJob(tester);
 
-      final submit = find.widgetWithText(FilledButton, 'Post Job');
+      final submit = find.widgetWithText(FilledButton, 'Post job');
       await tester.ensureVisible(submit);
       await tester.tap(submit);
       await tester.pumpAndSettle();
@@ -6324,7 +6349,7 @@ void postJobAndOnboardingTests() {
       expect(find.text('Title is required.'), findsOneWidget);
       expect(find.text('Description is required.'), findsOneWidget);
       // Nothing was posted, so the form is still up.
-      expect(find.text('Post a New Job'), findsOneWidget);
+      expect(find.text('Post a job'), findsOneWidget);
     });
 
     testWidgets('a complete form posts the job', (tester) async {
@@ -6335,12 +6360,12 @@ void postJobAndOnboardingTests() {
       await tester.tap(find.text('Plumbing').last);
       await tester.pumpAndSettle();
 
-      await fillField(tester, 'Job Title', 'Fix the kitchen tap');
+      await fillField(tester, 'Job title', 'Fix the kitchen tap');
       await fillField(tester, 'Description', 'It drips constantly.');
 
       // "Where" is already satisfied by the seeded default location.
 
-      final submit = find.widgetWithText(FilledButton, 'Post Job');
+      final submit = find.widgetWithText(FilledButton, 'Post job');
       await tester.ensureVisible(submit);
       await tester.tap(submit);
       await tester.pumpAndSettle();
@@ -6572,7 +6597,7 @@ void postJobAndOnboardingTests() {
       await tapAt(tester, find.byType(DropdownButtonFormField<String>));
       await tester.tap(find.text('Less than 1 week').last);
       await tester.pumpAndSettle();
-      await fillField(tester, 'Proposal Message', 'I can do this.');
+      await fillField(tester, 'Proposal message', 'I can do this.');
       await tapAt(tester, find.byType(CheckboxListTile).last);
     }
 
@@ -6604,7 +6629,7 @@ void postJobAndOnboardingTests() {
       final bundleBids = await pumpSheet(tester);
 
       await tapAt(
-          tester, find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'));
+          tester, find.widgetWithText(PrimaryButton, 'Submit bundle bid'));
 
       expect(find.text('Pick at least one task to bid on.'), findsOneWidget);
       expect(bundleBids.lastSubmission, isNull);
@@ -6620,7 +6645,7 @@ void postJobAndOnboardingTests() {
       await fillField(tester, 'Price if you get only this task (RM)', '150.50');
       await fillRest(tester);
       await tapAt(
-          tester, find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'));
+          tester, find.widgetWithText(PrimaryButton, 'Submit bundle bid'));
 
       expect(bundleBids.lastSubmission?['taskPrices'], {'job-2': 15050});
       expect(bundleBids.lastSubmission?['bundlePriceSen'], isNull);
@@ -6633,16 +6658,25 @@ void postJobAndOnboardingTests() {
     ) async {
       final bundleBids = await pumpSheet(tester);
 
+      // Bundle price only makes sense once two or more tasks are picked.
+      await tapAt(tester,
+          find.widgetWithText(CheckboxListTile, 'Waterproof the floor'));
       await tapAt(
           tester, find.widgetWithText(CheckboxListTile, 'Tile the floor'));
-      await fillField(tester, 'Price if you get only this task (RM)', '100.00');
+      // Two task price fields now share a label; fill each by position.
+      final priceFields = find.byType(TextFormField);
+      await tester.ensureVisible(priceFields.at(0));
+      await tester.enterText(priceFields.at(0), '50.00');
+      await tester.ensureVisible(priceFields.at(1));
+      await tester.enterText(priceFields.at(1), '50.00');
+      await tester.pumpAndSettle();
       await fillField(tester, 'Bundle price (RM)', '100.00');
       await fillRest(tester);
       await tapAt(
-          tester, find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'));
+          tester, find.widgetWithText(PrimaryButton, 'Submit bundle bid'));
 
       expect(
-        find.textContaining('Must be lower than your task prices added up'),
+        find.textContaining('Must be under RM 100.00 (your task total)'),
         findsOneWidget,
       );
       expect(bundleBids.lastSubmission, isNull);
@@ -6663,7 +6697,7 @@ void postJobAndOnboardingTests() {
         );
 
         expect(
-          find.textContaining('at most 10% and RM 200.00 more than'),
+          find.textContaining('no more than 10% (max RM\u00A0200.00) above'),
           findsOneWidget,
         );
       },
@@ -6698,7 +6732,7 @@ void postJobAndOnboardingTests() {
         await tester.pumpAndSettle();
 
         await tester.tap(
-          find.widgetWithText(FilledButton, 'Submit a bid').first,
+          find.widgetWithText(FilledButton, 'Bid on this bundle').first,
         );
         await tester.pumpAndSettle();
 
@@ -6760,13 +6794,15 @@ void postJobAndOnboardingTests() {
         await tester.tap(
           find.descendant(
             of: find.byType(NavigationBar),
-            matching: find.text('My Jobs'),
+            matching: find.text('My jobs'),
           ),
         );
         await tester.pumpAndSettle();
 
-        expect(find.text('Bathroom refresh'), findsOneWidget);
-        expect(find.text('Kitchen refresh'), findsNothing);
+        // The tile's primary line is now the quoted amount, with the bundle
+        // title folded into a "<title> • N tasks" caption underneath.
+        expect(find.textContaining('Bathroom refresh'), findsOneWidget);
+        expect(find.textContaining('Kitchen refresh'), findsNothing);
       },
     );
   });
@@ -6802,7 +6838,7 @@ void postJobAndOnboardingTests() {
             .pumpWidget(buildApp(auth, jobs: tasks, bundle: bundles));
         await tester.pumpAndSettle();
         await tester.tap(find.descendant(
-            of: find.byType(NavigationBar), matching: find.text('My Jobs')));
+            of: find.byType(NavigationBar), matching: find.text('My jobs')));
         await tester.pumpAndSettle();
 
         expect(find.text('Bathroom refresh'), findsOneWidget);
@@ -6813,6 +6849,57 @@ void postJobAndOnboardingTests() {
         expect(find.text('Electrical fittings'), findsOneWidget);
         // A plain job (no bundleId) still renders as its own ordinary card.
         expect(find.text('Fix the fence'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a status filter narrows a bundle to its matching tasks, and hides '
+      "the card entirely if none match",
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(500, 1600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final tasks = [
+          sampleJob(id: 'job-1', title: 'Waterproofing', bundleId: 'b1',
+              bundleOrder: 0, bundleTaskCount: 3, status: JobStatus.completed),
+          sampleJob(id: 'job-2', title: 'Tiling', bundleId: 'b1',
+              bundleOrder: 1, bundleTaskCount: 3, status: JobStatus.inProgress),
+          sampleJob(id: 'job-3', title: 'Electrical fittings', bundleId: 'b1',
+              bundleOrder: 2, bundleTaskCount: 3, status: JobStatus.open),
+          sampleJob(id: 'job-4', title: 'Roof repair', bundleId: 'b2',
+              bundleOrder: 0, bundleTaskCount: 1, status: JobStatus.open),
+        ];
+        final auth = FakeAuthRepository()..seedSignedIn(UserRole.requestor);
+        final bundles = FakeBundleRepository([
+          sampleBundle(
+              id: 'b1',
+              title: 'Bathroom refresh',
+              taskIds: const ['job-1', 'job-2', 'job-3']),
+          sampleBundle(
+              id: 'b2', title: 'Roofing', taskIds: const ['job-4']),
+        ]);
+        await tester
+            .pumpWidget(buildApp(auth, jobs: tasks, bundle: bundles));
+        await tester.pumpAndSettle();
+        await tester.tap(find.descendant(
+            of: find.byType(NavigationBar), matching: find.text('My jobs')));
+        await tester.pumpAndSettle();
+
+        final chip = find.widgetWithText(ChoiceChip, 'Completed');
+        await tester.ensureVisible(chip);
+        await tester.tap(chip);
+        await tester.pumpAndSettle();
+
+        // Only the matching task shows, but the progress line still counts
+        // every task in the bundle.
+        expect(find.text('Bathroom refresh'), findsOneWidget);
+        expect(find.text('3 tasks · 1 in progress · 1 done · '
+            '1 open'), findsOneWidget);
+        expect(find.text('Waterproofing'), findsOneWidget);
+        expect(find.text('Tiling'), findsNothing);
+        expect(find.text('Electrical fittings'), findsNothing);
+        // No task in "Roofing" is completed, so the card is hidden entirely.
+        expect(find.text('Roofing'), findsNothing);
       },
     );
   });
@@ -6853,8 +6940,8 @@ void postJobAndOnboardingTests() {
         await tester.tap(find.widgetWithText(FilledButton, 'Submit a bid').first);
         await tester.pumpAndSettle();
 
-        expect(find.widgetWithText(FilledButton, 'Submit Bid'), findsOneWidget);
-        expect(find.widgetWithText(PrimaryButton, 'Submit Bundle Bid'),
+        expect(find.widgetWithText(FilledButton, 'Submit bid'), findsOneWidget);
+        expect(find.widgetWithText(PrimaryButton, 'Submit bundle bid'),
             findsNothing);
       },
     );
@@ -6889,7 +6976,7 @@ void postJobAndOnboardingTests() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Cancel job'));
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(FilledButton, 'Cancel Job'));
+        await tester.tap(find.widgetWithText(FilledButton, 'Cancel job'));
         await tester.pumpAndSettle();
 
         expect(bundles.cancelled, isEmpty);
@@ -6920,7 +7007,7 @@ void postJobAndOnboardingTests() {
       final bundles = FakeBundleRepository();
       await tester.pumpWidget(buildApp(auth, bundle: bundles));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('+ Post a Job'));
+      await tester.tap(find.text('+ Post a job'));
       await tester.pumpAndSettle();
       return bundles;
     }
@@ -6952,15 +7039,15 @@ void postJobAndOnboardingTests() {
       tester,
     ) async {
       await openPostJob(tester);
-      expect(find.widgetWithText(FilledButton, 'Post Job'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Post job'), findsOneWidget);
 
       await addTask(tester);
 
       expect(find.text('Task 1'), findsOneWidget);
       expect(find.text('Task 2'), findsOneWidget);
       expect(find.text('Posting title'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Post Bundle'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Post Job'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Post bundle'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Post job'), findsNothing);
     });
 
     /// Taps something that may be below the fold on this long form.
@@ -7019,7 +7106,7 @@ void postJobAndOnboardingTests() {
       final bundles = await openPostJob(tester);
 
       await pickCategory(tester, 0, 'Plumbing');
-      await fillField(tester, 'Job Title', 'Fix the kitchen tap');
+      await fillField(tester, 'Job title', 'Fix the kitchen tap');
       await fillField(tester, 'Description', 'It drips constantly.');
       await addTask(tester);
       await pickCategory(tester, 1, 'Electrical');
@@ -7027,7 +7114,7 @@ void postJobAndOnboardingTests() {
       await fillField(tester, 'Task 2 description', 'The fitting is cracked.');
       await fillField(tester, 'Posting title', 'Kitchen refresh');
 
-      final submit = find.widgetWithText(FilledButton, 'Post Bundle');
+      final submit = find.widgetWithText(FilledButton, 'Post bundle');
       await tester.ensureVisible(submit);
       await tester.tap(submit);
       await tester.pumpAndSettle();
@@ -7045,6 +7132,36 @@ void postJobAndOnboardingTests() {
       expect(posted['description'],
           '2 tasks: Fix the kitchen tap, Replace the ceiling light.');
       expect(find.text('Bundle posted with 2 tasks!'), findsOneWidget);
+    });
+
+    testWidgets("an extra task's hourly switch sends hourly: true", (
+      tester,
+    ) async {
+      final bundles = await openPostJob(tester);
+
+      await pickCategory(tester, 0, 'Plumbing');
+      await fillField(tester, 'Job title', 'Fix the kitchen tap');
+      await fillField(tester, 'Description', 'It drips constantly.');
+      await addTask(tester);
+      await pickCategory(tester, 1, 'Electrical');
+      await fillField(tester, 'Task 2 title', 'Replace the ceiling light');
+      await fillField(tester, 'Task 2 description', 'The fitting is cracked.');
+      await fillField(tester, 'Posting title', 'Kitchen refresh');
+
+      // Task 1's card (with its own budget/hourly switch) renders before
+      // task 2's card, so the last "Hourly rate" switch is task 2's.
+      final hourlySwitch =
+          find.widgetWithText(SwitchListTile, 'Hourly rate').last;
+      await tapAt(tester, hourlySwitch);
+
+      final submit = find.widgetWithText(FilledButton, 'Post bundle');
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      final tasks = bundles.lastCreate!['tasks'] as List<BundleTaskDraft>;
+      expect(tasks[0].budget?.hourly, isNot(true));
+      expect(tasks[1].budget?.hourly, true);
     });
 
     testWidgets('a template fills the task cards and links them', (
@@ -7066,8 +7183,8 @@ void postJobAndOnboardingTests() {
           findsNWidgets(2));
       expect(find.textContaining('Starts after Waterproofing, 2 days later'),
           findsOneWidget);
-      expect(find.textContaining('Same provider as: Tiling'), findsOneWidget);
-      expect(find.textContaining('Same provider as: Waterproofing'),
+      expect(find.textContaining('Linked with Tiling'), findsOneWidget);
+      expect(find.textContaining('Linked with Waterproofing'),
           findsOneWidget);
 
       // Template-linked tasks can't be removed on their own.
@@ -7075,13 +7192,14 @@ void postJobAndOnboardingTests() {
       expect(find.byTooltip('Remove task 3'), findsNothing);
       expect(find.byTooltip('Remove task 4'), findsNothing);
 
-      await fillField(tester, 'Description', 'Full strip-out and rebuild.');
+      await fillField(
+          tester, 'Task 1 description', 'Full strip-out and rebuild.');
       await fillField(tester, 'Task 2 description', 'Seal the shower floor.');
       await fillField(tester, 'Task 3 description', 'Tile the shower walls.');
       await fillField(
           tester, 'Task 4 description', 'New light and extractor fan.');
 
-      final submit = find.widgetWithText(FilledButton, 'Post Bundle');
+      final submit = find.widgetWithText(FilledButton, 'Post bundle');
       await tester.ensureVisible(submit);
       await tester.tap(submit);
       await tester.pumpAndSettle();
@@ -7203,6 +7321,13 @@ void postJobAndOnboardingTests() {
                         value: FakeJobRepository(tasks)),
                     Provider<BundleBidRepository>.value(
                         value: FakeBundleBidRepository([bid()])),
+                    // The bundle's requestorId defaults to 'uid-1', matching
+                    // the fake's default signed-in uid, so the screen sees
+                    // the caller as the owner - as it always is in practice.
+                    ChangeNotifierProvider<AuthController>(
+                      create: (_) => AuthController(
+                          FakeAuthRepository()..seedSignedIn(UserRole.requestor)),
+                    ),
                   ],
                   child: const BundleDetailScreen(bundleId: 'b1'),
                 ),
@@ -7224,8 +7349,10 @@ void postJobAndOnboardingTests() {
     ) async {
       await pumpBundle(tester);
 
-      expect(find.text('Waterproof the floor'), findsOneWidget);
-      expect(find.text('Tile the floor'), findsOneWidget);
+      // Each task's title shows up more than once now: the task card, the
+      // Bids section's price line and the manual-pick dropdown's label.
+      expect(find.text('Waterproof the floor'), findsWidgets);
+      expect(find.text('Tile the floor'), findsWidgets);
       expect(find.textContaining('Aida Renovation'), findsWidgets);
       // Options are only fetched when the requestor asks for them.
       expect(find.text('Recommended'), findsNothing);
@@ -7240,10 +7367,10 @@ void postJobAndOnboardingTests() {
           'Show award options'));
       await tester.pumpAndSettle();
       expect(find.text('Recommended'), findsOneWidget);
-      expect(find.textContaining('RM 35.00 (4.2%) more than the cheapest'),
+      expect(find.textContaining('RM\u00A035.00 (4.2%) more than the cheapest'),
           findsOneWidget);
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Award recommended'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Award this option'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Award'));
       await tester.pumpAndSettle();
@@ -7282,7 +7409,7 @@ void postJobAndOnboardingTests() {
           find.widgetWithText(FilledButton, 'Show award options'));
       await tester.pumpAndSettle();
       await tester.tap(
-          find.widgetWithText(FilledButton, 'Award recommended'));
+          find.widgetWithText(FilledButton, 'Award this option'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Award'));
       await tester.pumpAndSettle();
@@ -7307,7 +7434,7 @@ void postJobAndOnboardingTests() {
           find.widgetWithText(FilledButton, 'Show award options'));
       await tester.pumpAndSettle();
       await tester.tap(
-          find.widgetWithText(FilledButton, 'Award recommended'));
+          find.widgetWithText(FilledButton, 'Award this option'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Award'));
       await tester.pumpAndSettle();
@@ -7355,7 +7482,7 @@ void postJobAndOnboardingTests() {
 
       await pickManual(tester, 0, 'Aida Renovation');
       await pickManual(tester, 1, 'Aida Renovation');
-      await tester.tap(find.widgetWithText(FilledButton, 'Check price'));
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Check price'));
       await tester.pumpAndSettle();
 
       expect(find.text('Your pick'), findsOneWidget);
@@ -7369,7 +7496,7 @@ void postJobAndOnboardingTests() {
       bundles.manualProblems = const ['Prov-1 already covers job-2 elsewhere.'];
 
       await pickManual(tester, 0, 'Aida Renovation');
-      await tester.tap(find.widgetWithText(FilledButton, 'Check price'));
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Check price'));
       await tester.pumpAndSettle();
 
       expect(find.text('Prov-1 already covers job-2 elsewhere.'),
@@ -7382,7 +7509,7 @@ void postJobAndOnboardingTests() {
       bundles.manualOption = manualPick;
 
       await pickManual(tester, 0, 'Aida Renovation');
-      await tester.tap(find.widgetWithText(FilledButton, 'Check price'));
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Check price'));
       await tester.pumpAndSettle();
       expect(find.text('Your pick'), findsOneWidget);
 
@@ -7411,7 +7538,7 @@ void postJobAndOnboardingTests() {
       await tester.tap(
         find.descendant(
           of: find.byType(NavigationBar),
-          matching: find.text('My Jobs'),
+          matching: find.text('My jobs'),
         ),
       );
       await tester.pumpAndSettle();
@@ -7439,10 +7566,10 @@ void postJobAndOnboardingTests() {
 
         await tester.tap(find.widgetWithText(TextButton, 'Record handover'));
         await tester.pumpAndSettle();
-        expect(find.text('Record Handover'), findsOneWidget);
+        expect(find.text('Record site handover'), findsOneWidget);
 
         // Empty note is rejected.
-        await tester.tap(find.widgetWithText(FilledButton, 'Submit'));
+        await tester.tap(find.widgetWithText(FilledButton, 'Save handover'));
         await tester.pumpAndSettle();
         expect(find.text('Describe the handover.'), findsOneWidget);
 
@@ -7451,11 +7578,11 @@ void postJobAndOnboardingTests() {
           'Handover note',
           'Site is clear, previous task finished.',
         );
-        await tester.tap(find.widgetWithText(FilledButton, 'Submit'));
+        await tester.tap(find.widgetWithText(FilledButton, 'Save handover'));
         await tester.pumpAndSettle();
 
         // The sheet closed and the banner is gone.
-        expect(find.text('Record Handover'), findsNothing);
+        expect(find.text('Record site handover'), findsNothing);
         expect(find.text('Record the site handover before you start.'),
             findsNothing);
 
@@ -7533,7 +7660,7 @@ void postJobAndOnboardingTests() {
       await tester.pumpWidget(buildApp(auth,
           assist: FakeAssistRepository(description: description)));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('+ Post a Job'));
+      await tester.tap(find.text('+ Post a job'));
       await tester.pumpAndSettle();
     }
 
@@ -7595,7 +7722,7 @@ void postJobAndOnboardingTests() {
       await tester.pumpWidget(
           buildApp(auth, assist: FakeAssistRepository(draft: draft)));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('+ Post a Job'));
+      await tester.tap(find.text('+ Post a job'));
       await tester.pumpAndSettle();
     }
 
@@ -7624,7 +7751,7 @@ void postJobAndOnboardingTests() {
       tester,
     ) async {
       await openPostJob(tester);
-      await fillField(tester, 'Job Title', 'My own title');
+      await fillField(tester, 'Job title', 'My own title');
       await runDraft(tester);
 
       expect(find.widgetWithText(TextFormField, 'My own title'),

@@ -120,6 +120,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
   /// Set when submit is attempted with no task ticked.
   bool _showNoTaskError = false;
 
+  /// Ids of tasks whose "Show details" description is expanded.
+  final _expandedDescriptions = <String>{};
+
   bool get _isUpdate => widget.existing != null;
 
   /// Judged against the bundle's own snapshot caps, like `awardBundle` does,
@@ -203,6 +206,13 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
         }
       }
       if (tick) _showNoTaskError = false;
+      // The bundle price and all-or-nothing stop making sense below two
+      // tasks - clear them rather than leave a stale value the provider can
+      // no longer see or edit.
+      if (!_bundleFieldsEnabled) {
+        _bundlePrice.clear();
+        _allOrNothing = false;
+      }
     });
   }
 
@@ -213,6 +223,19 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     0,
     (sum, t) => sum + (parseRmToSen(_prices[t.id]!.text) ?? 0),
   );
+
+  /// A bundle price and all-or-nothing only make sense once at least two
+  /// tasks are picked - with one, they're the same thing as its own price.
+  bool get _bundleFieldsEnabled => _tickedTasks.length >= 2;
+
+  /// Title of the task with [jobId] among [widget.tasks], for "Starts after
+  /// ...".
+  String? _titleOf(String jobId) {
+    for (final t in widget.tasks) {
+      if (t.id == jobId) return t.title;
+    }
+    return null;
+  }
 
   Future<void> _submit() async {
     final tickedTasks = _tickedTasks;
@@ -255,7 +278,29 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     }
   }
 
+  /// Confirms, then withdraws the provider's bundle bid. Mirrors
+  /// `job_detail_screen`'s "Withdraw your bid?" dialog for a single job.
   Future<void> _withdraw() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Withdraw your bundle bid?'),
+        content: const Text(
+          'You\'ll no longer be considered for any of its tasks.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Withdraw'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     final controller = context.read<SubmitBundleBidController>();
     final ok = await controller.withdraw(widget.bundle.id);
     if (ok && mounted) {
@@ -302,12 +347,10 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               icon: Icons.info_outline,
               title: 'Bidding on more tasks helps you win',
               body:
-                  'The requestor is shown the option with the fewest '
-                  'providers whenever it costs at most '
-                  '$_consolidationCapPct% and '
-                  '${formatRm(_consolidationCapSen)} more than '
-                  'the cheapest total - so covering more of these tasks can '
-                  'win you the whole bundle.',
+                  'Clients see the fewest-provider option if it costs no '
+                  'more than $_consolidationCapPct% (max '
+                  '${formatRm(_consolidationCapSen)}) above the cheapest, '
+                  'so covering more tasks can win you the whole bundle.',
             ),
             const SizedBox(height: 20),
             if (controller.errorMessage != null)
@@ -325,10 +368,13 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               ),
             AppTextField(
               controller: _bundlePrice,
+              enabled: _bundleFieldsEnabled,
               label: 'Bundle price (RM)',
               hint: '0.00',
               prefixText: 'RM ',
-              helperText: 'Charged only if you win every task you picked',
+              helperText: _bundleFieldsEnabled
+                  ? 'Charged only if you win every task you picked'
+                  : 'Pick at least two tasks',
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -341,23 +387,26 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                 }
                 final total = _tickedTaskTotalSen;
                 if (sen >= total) {
-                  return 'Must be lower than your task prices added up '
-                      '(${formatRm(total)}).';
+                  return 'Must be under ${formatRm(total)} (your task total).';
                 }
                 return null;
               },
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              value: _allOrNothing,
-              onChanged: (v) => setState(() => _allOrNothing = v),
+              value: _bundleFieldsEnabled && _allOrNothing,
+              onChanged: _bundleFieldsEnabled
+                  ? (v) => setState(() => _allOrNothing = v)
+                  : null,
               title: const Text('All or nothing'),
-              subtitle: const Text(
-                'Award me all the tasks I picked, or none of them.',
+              subtitle: Text(
+                _bundleFieldsEnabled
+                    ? 'Award me all the tasks I picked, or none of them.'
+                    : 'Pick at least two tasks',
               ),
             ),
             const SizedBox(height: 8),
-            Text('Estimated Duration', style: theme.textTheme.labelLarge),
+            Text('Estimated duration', style: theme.textTheme.labelLarge),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(
               initialValue: _duration,
@@ -372,7 +421,7 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
             const SizedBox(height: 16),
             AppTextField(
               controller: _message,
-              label: 'Proposal Message',
+              label: 'Proposal message',
               hint: 'Explain your approach, experience and what\'s included...',
               maxLines: 4,
               validator: (v) => Validators.required(v, 'Message'),
@@ -387,9 +436,8 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               }),
               title: Text(
                 'I understand FairBid uses milestone escrow: the client '
-                'funds the job and payment is released as work is approved. '
-                'Your money is held by FairBid, not paid out, until the '
-                'client approves the work.',
+                'funds each milestone and it\'s released to me when they '
+                'approve the work.',
                 style: theme.textTheme.bodyMedium,
               ),
             ),
@@ -403,9 +451,16 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                   ),
                 ),
               ),
+            // Repeated here (not just at the top): this sheet runs several
+            // screens tall, so an error at the top is invisible after
+            // tapping Submit down here.
+            if (controller.errorMessage != null) ...[
+              const SizedBox(height: 8),
+              ErrorBanner(controller.errorMessage!),
+            ],
             const SizedBox(height: 8),
             PrimaryButton(
-              label: _isUpdate ? 'Update Bundle Bid' : 'Submit Bundle Bid',
+              label: _isUpdate ? 'Update bundle bid' : 'Submit bundle bid',
               busy: controller.isBusy,
               onPressed: _submit,
             ),
@@ -422,11 +477,16 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     );
   }
 
-  /// One task's row: a checkbox with its title/category, an optional lot
-  /// note, and - only while ticked - its price field.
+  /// One task's row: a checkbox with its title/category/budget, an optional
+  /// expandable description, a lot/dependency note, and - only while ticked -
+  /// its price field.
   Widget _taskRow(ThemeData theme, Job task) {
     final ticked = _ticked[task.id] ?? false;
     final lotPartners = _lotPartners(task);
+    final budgetLabel = task.budget?.label;
+    final startsAfterTitle =
+        task.startsAfterJobId == null ? null : _titleOf(task.startsAfterJobId!);
+    final expanded = _expandedDescriptions.contains(task.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -436,14 +496,55 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
           value: ticked,
           onChanged: (v) => _toggleTask(task, v),
           title: Text(task.title),
-          subtitle: Text(task.category),
+          subtitle: Text(
+            budgetLabel == null
+                ? task.category
+                : '${task.category} • $budgetLabel',
+          ),
         ),
+        if (task.description.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () => setState(() {
+                  if (expanded) {
+                    _expandedDescriptions.remove(task.id);
+                  } else {
+                    _expandedDescriptions.add(task.id);
+                  }
+                }),
+                child: Text(expanded ? 'Hide details' : 'Show details'),
+              ),
+            ),
+          ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 8, right: 4),
+            child: Text(task.description, style: theme.textTheme.bodySmall),
+          ),
+        if (startsAfterTitle != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 8),
+            child: Text(
+              'Starts after $startsAfterTitle',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
         if (lotPartners.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(left: 16, bottom: 8),
             child: Text(
-              'Bid together with ${lotPartners.map((t) => t.title).join(', ')}'
-              ' - splitting this group between providers isn\'t allowed.',
+              'Linked with ${lotPartners.map((t) => t.title).join(', ')} — '
+              'linked tasks go to the same provider.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

@@ -16,7 +16,7 @@ enum JobStatus {
 
   String get label => switch (this) {
         JobStatus.open => 'Open',
-        JobStatus.inProgress => 'In Progress',
+        JobStatus.inProgress => 'In progress',
         JobStatus.completed => 'Completed',
         JobStatus.cancelled => 'Cancelled',
       };
@@ -216,6 +216,14 @@ class Job {
   /// bidding. Awarding/cancelling for a live bundle task happen for the whole
   /// bundle, not the task itself.
   bool get isLiveBundleTask => bundleId != null && releasedAt == null;
+
+  /// Whether this task is still being *bid on* as part of its bundle's
+  /// sealed package - i.e. [isLiveBundleTask] and still open. Unlike
+  /// [isLiveBundleTask], this turns false once the bundle is awarded (the
+  /// task stays "live" - not released - but bidding is over), so it's the
+  /// right check for anything that only makes sense pre-award: the bidding
+  /// banner, the feed card's "Part of a N-task bundle" pill.
+  bool get isBiddingAsBundle => isLiveBundleTask && status == JobStatus.open;
 
   /// Fields written to Firestore. `createdAt`/`bidCount`/`status` for a new job
   /// are set by the repository, so they are omitted here.

@@ -11,7 +11,7 @@ import '../../jobs/domain/job.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
 import 'home_app_bar.dart';
 
-/// Requestor Home: greeting, a prominent "Post a Job" call to action, and the
+/// Requestor Home: greeting, a prominent "Post a job" call to action, and the
 /// requestor's active jobs.
 class RequestorHomeScreen extends StatelessWidget {
   const RequestorHomeScreen({super.key});
@@ -37,11 +37,11 @@ class RequestorHomeScreen extends StatelessWidget {
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             const SizedBox(height: 24),
             PrimaryButton(
-              label: '+ Post a Job',
+              label: '+ Post a job',
               onPressed: () => context.push('/post-job'),
             ),
             const SizedBox(height: 32),
-            Text('Active Jobs', style: theme.textTheme.titleLarge),
+            Text('Active jobs', style: theme.textTheme.titleLarge),
             const SizedBox(height: 12),
             if (user == null)
               const SizedBox.shrink()

@@ -8,23 +8,42 @@ import 'package:provider/provider.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
+import '../../../../core/util/plural.dart';
 import '../../../../core/widgets/app_widgets.dart';
+import '../../../auth/presentation/auth_controller.dart';
 import '../../data/bid_repository.dart';
 import '../../data/bundle_bid_repository.dart';
 import '../../data/bundle_repository.dart';
+import '../../data/job_repository.dart';
 import '../../domain/bundle.dart';
 import '../../domain/bundle_award.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
-import '../../data/job_repository.dart';
 import '../widgets/insufficient_balance_dialog.dart';
+import 'bundle_bid_list.dart';
+import 'bundle_buttons.dart';
+import 'bundle_header.dart';
+import 'bundle_manual_award_section.dart';
+import 'bundle_option_card.dart';
+import 'bundle_provider_view.dart';
+import 'bundle_task_section.dart';
+import 'bundle_warning_banner.dart';
 
-/// The requestor's view of one bundled posting: its tasks, who bid on what,
-/// and the three award options. Awarding happens here, in one action.
+/// One bundled posting. The client sees its tasks, who bid on what, and the
+/// award options (awarding happens here, in one action); anyone else sees the
+/// read-only [BundleProviderView].
 class BundleDetailScreen extends StatefulWidget {
-  const BundleDetailScreen({super.key, required this.bundleId});
+  const BundleDetailScreen({
+    super.key,
+    required this.bundleId,
+    this.fromTaskId,
+  });
 
   final String bundleId;
+
+  /// The task this screen was opened from, if any: tapping that task goes
+  /// back to it instead of stacking another copy on the back stack.
+  final String? fromTaskId;
 
   @override
   State<BundleDetailScreen> createState() => _BundleDetailScreenState();
@@ -37,39 +56,60 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
   late final Stream<List<Job>> _tasks = context
       .read<JobRepository>()
       .watchBundleTasks(widget.bundleId);
+  // Owner only (rules deny everyone else) - and lazy, so only the owner's
+  // view ever subscribes.
   late final Stream<List<BundleBid>> _bids = context
       .read<BundleBidRepository>()
       .watchBundleBids(widget.bundleId);
+
+  /// The viewer's own bid, for the provider view. Lazy, like [_bids].
+  late final Stream<BundleBid?> _myBid = context
+      .read<BundleBidRepository>()
+      .watchMyBundleBid(
+        widget.bundleId,
+        context.read<AuthController>().user!.uid,
+      );
 
   /// Priced options from the server, or null until they are asked for.
   List<BundleAwardOption>? _options;
   bool _loadingOptions = false;
   bool _awarding = false;
+  bool _cancelling = false;
   String? _error;
 
   /// The bids [_options] were priced from (see [_bidsSignature]), so a live
   /// bids list that has since moved on can be noticed and offered a refresh.
   String? _optionsSignature;
 
-  /// The requestor's own picks for the manual matrix: task id -> provider
-  /// id, or null for "don't award". Starts with every task unpicked.
+  /// The client's own picks for the manual matrix: task id -> provider id,
+  /// or null for "don't award". Starts with every task unpicked.
   final Map<String, String?> _picks = {};
 
   /// The manual pick's own priced option, or null until "Check price" is
-  /// pressed - priced on demand rather than eagerly with the three
-  /// automatic options.
+  /// pressed - priced on demand rather than eagerly with the automatic
+  /// options.
   BundleAwardOption? _manualOption;
   List<String> _manualProblems = const [];
   bool _pricingManual = false;
 
-  /// A cheap fingerprint of [bids]: who bid, their status and when, sorted so
-  /// it doesn't depend on the stream's delivery order. Two calls with the
-  /// same bids produce the same signature; any change to any bid changes it.
+  /// A cheap fingerprint of [bids]: who bid, their status, when they last
+  /// changed it and what they're charging - sorted so it doesn't depend on
+  /// the stream's delivery order. Two calls with the same bids produce the
+  /// same signature; any change to any bid (including an edit, which keeps
+  /// `createdAt` but bumps `updatedAt` and the prices) changes it.
   String _bidsSignature(List<BundleBid> bids) {
+    String pricesOf(BundleBid bid) {
+      final entries = bid.taskPrices.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      return entries.map((e) => '${e.key}=${e.value}').join(',');
+    }
+
     final parts = [
       for (final bid in bids)
         '${bid.providerId}:${bid.status.storage}:'
-            '${bid.createdAt?.millisecondsSinceEpoch}',
+            '${bid.createdAt?.millisecondsSinceEpoch}:'
+            '${bid.updatedAt?.millisecondsSinceEpoch}:'
+            '${bid.bundlePriceSen}:${pricesOf(bid)}',
     ]..sort();
     return parts.join('|');
   }
@@ -142,11 +182,65 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
+  /// Confirms and cancels the whole bundle (and its still-open tasks) through
+  /// `cancelBundle`. Available to the owner any time the bundle is still
+  /// open, whether or not bidding has closed - it's the only way to call the
+  /// posting off before it's awarded.
+  Future<void> _cancelBundle() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel this bundle?'),
+        content: const Text(
+          "This also cancels its still-open tasks. Providers who've "
+          "already bid will be notified. This can't be undone.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep it'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: context.fairbid.danger,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Cancel bundle'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _cancelling = true;
+      _error = null;
+    });
+    try {
+      await context.read<BundleRepository>().cancelBundle(widget.bundleId);
+    } on BundleRejectedException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not cancel the bundle. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _cancelling = false);
+    }
+  }
+
   /// Confirms and sends the award. When [option] leaves tasks uncovered, the
   /// confirmation also collects the deadline those tasks are released back
   /// to ordinary bidding with - defaulting to 7 days out, changeable via the
   /// same date picker `post_job_screen`'s deadline field uses.
-  Future<void> _award(BundleAwardOption option) async {
+  Future<void> _award(BundleAwardOption option, List<Job> tasks) async {
+    String titleFor(String taskId) {
+      for (final task in tasks) {
+        if (task.id == taskId) return task.title;
+      }
+      return 'a task';
+    }
+
     DateTime? releasedDeadline;
     if (option.uncoveredTaskIds.isNotEmpty) {
       final defaultDate = DateTime.now().add(const Duration(days: 7));
@@ -164,24 +258,39 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text('Award ${option.label.toLowerCase()}?'),
+          title: const Text('Award this option?'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${option.providerCount} provider(s) will be hired for '
-                '${formatRm(option.totalSen)}, and that amount is locked in '
-                'escrow now.',
+                option.label,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                '${plural(option.providerCount, 'provider')} will be hired '
+                'for ${formatRm(option.totalSen)}, and that amount is '
+                'locked in escrow now.',
+              ),
+              if (option.uncoveredTaskIds.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '${plural(option.uncoveredTaskIds.length, 'task')} will '
+                  'be released back to ordinary bidding: '
+                  '${option.uncoveredTaskIds.map(titleFor).join(', ')}.',
+                ),
+              ],
               if (releasedDeadline != null) ...[
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
                       child: Text(
-                        'Tasks nobody wins go back to ordinary bidding '
-                        'until ${DateFormat.yMMMd().format(releasedDeadline!)}.',
+                        'Released back until '
+                        '${DateFormat.yMMMd().format(releasedDeadline!)}.',
                       ),
                     ),
                     TextButton(
@@ -266,7 +375,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       await showInsufficientBalanceDialog(context, failure);
     } else if (failure is BundleRejectedException) {
       // Stale options are the likeliest cause - clearing them brings back
-      // "Show award options" instead of leaving the requestor stuck.
+      // "Show award options" instead of leaving the client stuck.
       final message = failure.message;
       setState(() {
         _error = message;
@@ -278,15 +387,36 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
+  /// Opens [task]'s job detail - or, when this screen was opened from that
+  /// task, goes back to it instead of stacking another copy.
+  void _openTask(Job task) {
+    if (task.id == widget.fromTaskId && context.canPop()) {
+      context.pop();
+    } else {
+      context.push('/jobs/${task.id}?from=bundle');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final me = context.watch<AuthController>().user;
     return StreamBuilder<Bundle?>(
       stream: _bundle,
       builder: (context, bundleSnap) {
         final bundle = bundleSnap.data;
+        if (bundle != null && me != null && me.uid != bundle.requestorId) {
+          return BundleProviderView(
+            bundle: bundle,
+            tasks: _tasks,
+            myBid: _myBid,
+            me: me,
+            onOpenTask: _openTask,
+          );
+        }
         return Scaffold(
           appBar: AppBar(title: Text(bundle?.title ?? 'Bundle')),
-          body: bundle == null
+          // Wait for the viewer too: owner or not decides what to subscribe to.
+          body: bundle == null || me == null
               ? const Center(child: CircularProgressIndicator())
               : SafeArea(child: _body(context, bundle)),
         );
@@ -296,6 +426,8 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
 
   Widget _body(BuildContext context, Bundle bundle) {
     final theme = Theme.of(context);
+    final deadline = bundleDeadlineText(bundle);
+
     return StreamBuilder<List<Job>>(
       stream: _tasks,
       builder: (context, taskSnap) {
@@ -308,339 +440,128 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
               padding: const EdgeInsets.all(24),
               children: [
                 Text(
-                  '${bundle.taskCount} tasks  •  ${bids.length} bid(s)',
+                  '${plural(bundle.taskCount, 'task')}  •  '
+                  '${plural(bids.length, 'bid')}',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(height: 4),
-                PillBadge(
-                  label: bundle.status.label,
-                  color: bundle.biddingOpen
-                      ? context.fairbid.verified
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(height: 20),
-                if (_error != null) ErrorBanner(_error!),
-                _TaskList(tasks: tasks, bids: bids),
-                const SizedBox(height: 24),
-                if (bundle.biddingOpen) ...[
-                  Text('Award', style: theme.textTheme.titleLarge),
+                if (bundle.description.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  if (bids.isEmpty)
-                    Text(
-                      'No bids yet.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    )
-                  else if (_options == null)
-                    PrimaryButton(
-                      label: 'Show award options',
-                      busy: _loadingOptions,
-                      onPressed: () => _loadOptions(bids),
-                    )
-                  else if (_options!.isEmpty)
-                    Text(
-                      'No bid covers any of these tasks yet.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    )
-                  else ...[
-                    if (_optionsSignature != _bidsSignature(bids))
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'The bids have changed since these options '
-                                'were worked out.',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: context.fairbid.warningText,
-                                ),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () => _loadOptions(bids),
-                              child: const Text('Refresh'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    for (final option in _options!)
-                      _OptionCard(
-                        option: option,
-                        tasks: tasks,
-                        busy: _awarding,
-                        onAward: () => _award(option),
-                      ),
-                  ],
-                  const SizedBox(height: 24),
-                  _ManualAwardSection(
-                    tasks: tasks,
-                    bids: bids,
-                    picks: _picks,
-                    onPick: _onPick,
-                    onCheckPrice: _checkManualPrice,
-                    busy: _pricingManual,
-                    option: _manualOption,
-                    problems: _manualProblems,
-                    awarding: _awarding,
-                    onAward: _award,
-                  ),
-                ] else if (bundle.status == BundleStatus.open)
+                  Text(bundle.description, style: theme.textTheme.bodyMedium),
+                ],
+                if (deadline != null) ...[
+                  const SizedBox(height: 8),
                   Text(
-                    'Bidding closed on '
-                    '${DateFormat.yMMMd().format(bundle.deadline!)}. This '
-                    'bundle can no longer be awarded; you can still cancel '
-                    'it.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
+                    deadline,
+                    style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
+                ],
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: BundleStatusPill(bundle: bundle),
+                ),
+                if (bundle.status == BundleStatus.open) ...[
+                  const SizedBox(height: 12),
+                  OutlinedBusyButton(
+                    label: 'Cancel bundle',
+                    busy: _cancelling,
+                    onPressed: _cancelBundle,
+                  ),
+                ],
+                const SizedBox(height: 20),
+                if (_error != null) ErrorBanner(_error!),
+                if (bundle.status == BundleStatus.open)
+                  BundleOpenTaskList(
+                    tasks: tasks,
+                    bids: bids,
+                    onOpenTask: _openTask,
+                  )
+                else
+                  BundleTaskStatusList(tasks: tasks, onOpenTask: _openTask),
+                if (bids.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  BundleBidList(bids: bids, tasks: tasks),
+                ],
+                if (bundle.status == BundleStatus.open) ...[
+                  const SizedBox(height: 24),
+                  if (bundle.biddingOpen) ...[
+                    Text('Award', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    if (bids.isEmpty)
+                      Text(
+                        'No bids yet.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      )
+                    else if (_options == null)
+                      PrimaryButton(
+                        label: 'Show award options',
+                        busy: _loadingOptions,
+                        onPressed: () => _loadOptions(bids),
+                      )
+                    else if (_options!.isEmpty)
+                      Text(
+                        'No bid covers any of these tasks yet.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      )
+                    else ...[
+                      if (_optionsSignature != _bidsSignature(bids))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: WarningBanner(
+                            'The bids have changed since these options were '
+                            'worked out. Refresh before awarding.',
+                            trailing: TextButton(
+                              onPressed: () => _loadOptions(bids),
+                              child: const Text('Refresh'),
+                            ),
+                          ),
+                        ),
+                      for (final merged in mergeBundleOptions(_options!))
+                        BundleOptionCard(
+                          merged: merged,
+                          tasks: tasks,
+                          primary: merged.isRecommended,
+                          busy: _awarding,
+                          enabled: _optionsSignature == _bidsSignature(bids),
+                          onAward: () => _award(merged.option, tasks),
+                        ),
+                    ],
+                    const SizedBox(height: 24),
+                    BundleManualAwardSection(
+                      tasks: tasks,
+                      bids: bids,
+                      picks: _picks,
+                      onPick: _onPick,
+                      onCheckPrice: _checkManualPrice,
+                      busy: _pricingManual,
+                      option: _manualOption,
+                      problems: _manualProblems,
+                      awarding: _awarding,
+                      onAward: (option) => _award(option, tasks),
+                    ),
+                  ] else
+                    Text(
+                      'Bidding closed on '
+                      '${DateFormat.yMMMd().format(bundle.deadline!)}. This '
+                      'bundle can no longer be awarded.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
               ],
             );
           },
         );
       },
-    );
-  }
-}
-
-/// The tasks, each with what the bids offered for it.
-class _TaskList extends StatelessWidget {
-  const _TaskList({required this.tasks, required this.bids});
-
-  final List<Job> tasks;
-  final List<BundleBid> bids;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final task in tasks)
-          AppCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(task.title, style: theme.textTheme.titleMedium),
-                Text(
-                  task.category,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                for (final bid in bids.where((b) => b.coversTask(task.id)))
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      '${bid.providerName}  ${formatRm(bid.priceFor(task.id)!)}'
-                      '${bid.allOrNothing ? '  (all or nothing)' : ''}',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ),
-                if (!bids.any((b) => b.coversTask(task.id)))
-                  Text(
-                    'No bids on this task',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// One of the three options, with what it costs and who it hires.
-class _OptionCard extends StatelessWidget {
-  const _OptionCard({
-    required this.option,
-    required this.tasks,
-    required this.busy,
-    required this.onAward,
-  });
-
-  final BundleAwardOption option;
-  final List<Job> tasks;
-  final bool busy;
-  final VoidCallback onAward;
-
-  String _titleFor(String taskId) {
-    for (final task in tasks) {
-      if (task.id == taskId) return task.title;
-    }
-    return 'a task';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // The cheapest option's own total (totalSen - premiumSen), so the
-    // premium can also be shown as a percentage of it.
-    final cheapestSen = option.totalSen - option.premiumSen;
-    final premiumPct = option.premiumSen > 0 && cheapestSen > 0
-        ? option.premiumSen * 100 / cheapestSen
-        : 0.0;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: AppCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(option.label, style: theme.textTheme.titleMedium),
-                ),
-                Text(
-                  formatRm(option.totalSen),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: context.fairbid.verified,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${option.providerCount} provider(s)'
-              '${option.premiumSen > 0 ? '  •  ${formatRm(option.premiumSen)} '
-                        '(${premiumPct.toStringAsFixed(1)}%) more than the '
-                        'cheapest' : ''}'
-              '  •  Trust ${option.weightedTrust}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            for (final award in option.awards)
-              Text(
-                '${award.providerName}: '
-                '${award.taskAmountsSen.keys.map(_titleFor).join(', ')}'
-                '  ${formatRm(award.totalSen)}',
-                style: theme.textTheme.bodyMedium,
-              ),
-            if (option.uncoveredTaskIds.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Nobody bid on '
-                  '${option.uncoveredTaskIds.map(_titleFor).join(', ')} - '
-                  'awarding releases it back to ordinary bidding.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            for (final warning in option.warnings)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  warning,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: context.fairbid.warningText,
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            PrimaryButton(
-              label: 'Award ${option.label.toLowerCase()}',
-              busy: busy,
-              onPressed: onAward,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// The requestor's own pick matrix: one dropdown per task, then a button to
-/// price the pick through the same shape the three automatic options use.
-class _ManualAwardSection extends StatelessWidget {
-  const _ManualAwardSection({
-    required this.tasks,
-    required this.bids,
-    required this.picks,
-    required this.onPick,
-    required this.onCheckPrice,
-    required this.busy,
-    required this.option,
-    required this.problems,
-    required this.awarding,
-    required this.onAward,
-  });
-
-  final List<Job> tasks;
-  final List<BundleBid> bids;
-  final Map<String, String?> picks;
-  final void Function(String taskId, String? providerId) onPick;
-  final VoidCallback onCheckPrice;
-  final bool busy;
-  final BundleAwardOption? option;
-  final List<String> problems;
-  final bool awarding;
-  final void Function(BundleAwardOption) onAward;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text('Pick providers yourself', style: theme.textTheme.titleLarge),
-        const SizedBox(height: 8),
-        for (final task in tasks)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: DropdownButtonFormField<String?>(
-              isExpanded: true,
-              initialValue: picks[task.id],
-              decoration: InputDecoration(
-                labelText: 'Pick for "${task.title}"',
-              ),
-              items: [
-                const DropdownMenuItem(value: null, child: Text("Don't award")),
-                for (final bid in bids.where((b) => b.coversTask(task.id)))
-                  DropdownMenuItem(
-                    value: bid.providerId,
-                    child: Text(
-                      '${bid.providerName} · '
-                      '${formatRm(bid.priceFor(task.id)!)}',
-                    ),
-                  ),
-              ],
-              onChanged: (value) => onPick(task.id, value),
-            ),
-          ),
-        PrimaryButton(
-          label: 'Check price',
-          busy: busy,
-          onPressed: onCheckPrice,
-        ),
-        if (problems.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: ErrorBanner(problems.join('\n')),
-          ),
-        if (option != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: _OptionCard(
-              option: option!,
-              tasks: tasks,
-              busy: awarding,
-              onAward: () => onAward(option!),
-            ),
-          ),
-      ],
     );
   }
 }
