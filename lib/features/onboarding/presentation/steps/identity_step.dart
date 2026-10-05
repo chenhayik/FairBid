@@ -3,11 +3,13 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/util/mykad_number.dart';
 import '../../../../core/util/ssm_number.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/image_source_sheet.dart';
 import '../../../auth/presentation/validators.dart';
+import '../../domain/id_extract.dart';
 import '../../domain/onboarding_data.dart';
 import '../../domain/ssm_extract.dart';
 import '../onboarding_controller.dart';
@@ -24,11 +26,14 @@ class IdentityStep extends StatefulWidget {
 class _IdentityStepState extends State<IdentityStep> {
   late final TextEditingController _businessName;
   late final TextEditingController _ssmNumber;
+  late final TextEditingController _icNumber;
 
   @override
   void initState() {
     super.initState();
     final data = context.read<OnboardingController>().data;
+    _icNumber = TextEditingController(text: data.icNumber)
+      ..addListener(_writeThrough);
     _businessName = TextEditingController(text: data.businessName)
       ..addListener(_writeThrough);
     _ssmNumber = TextEditingController(text: data.ssmNumber)
@@ -39,7 +44,24 @@ class _IdentityStepState extends State<IdentityStep> {
   void dispose() {
     _businessName.dispose();
     _ssmNumber.dispose();
+    _icNumber.dispose();
     super.dispose();
+  }
+
+  /// Friendly text for the first issue, shown once 12+ digits are typed.
+  static String? _icError(String? value) {
+    final text = value ?? '';
+    final issues = MyKadNumber.issues(text);
+    if (issues.isEmpty || text.replaceAll(RegExp(r'\D'), '').length < 12) {
+      return null;
+    }
+    return switch (issues.first) {
+      'wrong-length' => 'A MyKad number has exactly 12 digits.',
+      'invalid-date' => 'The birth date in this number is not a real date.',
+      'invalid-pb-code' => 'The place-of-birth code in this number is invalid.',
+      'underage' => 'You must be 18 or older to offer services.',
+      _ => 'Enter a valid MyKad number.',
+    };
   }
 
   /// Mirrors both fields into the controller on every keystroke, so the
@@ -49,6 +71,7 @@ class _IdentityStepState extends State<IdentityStep> {
     final onboarding = context.read<OnboardingController>();
     onboarding.data.businessName = _businessName.text.trim();
     onboarding.setSsmNumber(_ssmNumber.text);
+    onboarding.setIcNumber(_icNumber.text);
     setState(() {});
   }
 
@@ -85,7 +108,17 @@ class _IdentityStepState extends State<IdentityStep> {
     // The server's verdict is deliberately not in here: being held up by a
     // failed automated check on a genuine document is worse than letting an
     // admin look at it, which is what the review queue is for.
+    final isMyKad = data.idDocumentType == IdDocumentType.mykad;
+    final icValid = MyKadNumber.parse(data.icNumber) != null;
+    final consented = data.idConsentAt != null;
+    final idLocked = (isMyKad && !icValid) || !consented;
+    final idBusy = onboarding.isUploading('id_document');
+    final selfieBusy = onboarding.isUploading('selfie');
+    final busyLabel =
+        onboarding.checkingFace ? 'Checking photo…' : 'Uploading…';
     final missing = <String>[
+      if (!consented) 'your consent to identity checks',
+      if (isMyKad && !icValid) 'a valid MyKad number',
       if (data.idDocumentUrl == null) 'a photo of your ID',
       if (data.selfieUrl == null) 'a selfie holding your ID',
       if (isBusiness) ...[
@@ -121,25 +154,89 @@ class _IdentityStepState extends State<IdentityStep> {
           ErrorBanner(onboarding.errorMessage!),
         Text('Upload Documents', style: theme.textTheme.labelLarge),
         const SizedBox(height: 12),
-        Text('Front of ID (MyKad or Passport)',
+        // PDPA: face images are sensitive data, so nothing uploads before this.
+        CheckboxListTile(
+          value: consented,
+          onChanged: (v) => onboarding.setIdConsent(v ?? false),
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text(
+              'I agree to FairBid processing my ID and face photos to verify '
+              'my identity. Photos are deleted once our team has reviewed '
+              'them; only a masked IC number and the check result are '
+              'kept.'),
+        ),
+        const SizedBox(height: 8),
+        SegmentedButton<IdDocumentType>(
+          segments: const [
+            ButtonSegment(value: IdDocumentType.mykad, label: Text('MyKad')),
+            ButtonSegment(
+                value: IdDocumentType.passport, label: Text('Passport')),
+          ],
+          selected: {data.idDocumentType},
+          onSelectionChanged: (s) => onboarding.setIdDocumentType(s.first),
+        ),
+        const SizedBox(height: 16),
+        if (isMyKad)
+          AppTextField(
+            controller: _icNumber,
+            label: 'MyKad Number',
+            hint: 'e.g. 900101-07-1234',
+            prefixIcon: Icons.badge_outlined,
+            keyboardType: TextInputType.number,
+            helperText: 'Type it before uploading the photo.',
+            validator: _icError,
+          ),
+        Text(isMyKad ? 'Front of MyKad' : 'Passport photo page',
             style: theme.textTheme.bodyMedium),
         const SizedBox(height: 8),
-        UploadBox(
-          onTap: () => _chooseAndUpload(
-              context, 'Add your ID', onboarding.pickIdDocument),
-          icon: Icons.badge_outlined,
-          hint: 'Take a photo or choose one\nJPEG, PNG up to 10MB',
-          pickedName: data.idDocumentUrl == null ? null : 'Document uploaded',
+        // Locked until consent is given and the number is valid: the photo is
+        // checked against it.
+        IgnorePointer(
+          ignoring: idLocked,
+          child: Opacity(
+            // Not greyed while uploading, so the spinner reads as progress.
+            opacity: idLocked && !idBusy ? 0.5 : 1,
+            child: UploadBox(
+              onTap: () => _chooseAndUpload(
+                  context, 'Add your ID', onboarding.pickIdDocument),
+              busy: idBusy,
+              busyLabel: busyLabel,
+              icon: Icons.badge_outlined,
+              hint: 'Take a photo or choose one\nJPEG, PNG up to 10MB',
+              pickedName:
+                  data.idDocumentUrl == null ? null : 'Document uploaded',
+            ),
+          ),
         ),
+        // Advisory only: never part of `missing`, so it cannot block Continue.
+        if (isMyKad && data.idDocumentUrl != null && !idBusy) ...[
+          const SizedBox(height: 12),
+          if (onboarding.idExtract == null)
+            _CheckingCard(
+                timedOut: onboarding.idCheckTimedOut,
+                message: 'Checking your card - you can carry on filling in '
+                    'the form.')
+          else
+            _IdResultCard(extract: onboarding.idExtract!),
+        ],
         const SizedBox(height: 16),
         Text('Selfie holding your ID', style: theme.textTheme.bodyMedium),
         const SizedBox(height: 8),
-        UploadBox(
-          onTap: () =>
-              _chooseAndUpload(context, 'Add your selfie', onboarding.pickSelfie),
-          icon: Icons.portrait_outlined,
-          hint: 'Take a photo or choose one\nMake sure face and ID are clear',
-          pickedName: data.selfieUrl == null ? null : 'Photo uploaded',
+        IgnorePointer(
+          ignoring: !consented,
+          child: Opacity(
+            opacity: consented || selfieBusy ? 1 : 0.5,
+            child: UploadBox(
+              onTap: () => _chooseAndUpload(
+                  context, 'Add your selfie', onboarding.pickSelfie),
+              busy: selfieBusy,
+              busyLabel: busyLabel,
+              icon: Icons.portrait_outlined,
+              hint: 'Take a photo or choose one\nMake sure face and ID are clear',
+              pickedName: data.selfieUrl == null ? null : 'Photo uploaded',
+            ),
+          ),
         ),
         if (isBusiness) ...[
           const SizedBox(height: 24),
@@ -284,7 +381,13 @@ class _IdentityStepState extends State<IdentityStep> {
 /// Says explicitly that the wait is not blocking, because it is not: the
 /// Continue gate never waits on the verdict.
 class _CheckingCard extends StatelessWidget {
-  const _CheckingCard({required this.timedOut});
+  const _CheckingCard({
+    required this.timedOut,
+    this.message = 'Checking your document - you can carry on filling in the '
+        'form.',
+  });
+
+  final String message;
 
   /// Set once the wait has run long enough that a spinner would be a lie -
   /// a cold-started or crashed function must not leave one turning forever.
@@ -312,8 +415,7 @@ class _CheckingCard extends StatelessWidget {
               timedOut
                   ? 'We will finish checking this in the background. Our team '
                       'reviews it before your account is approved.'
-                  : 'Checking your document - you can carry on filling in the '
-                      'form.',
+                  : message,
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -401,6 +503,60 @@ class _ExtractCard extends StatelessWidget {
           if (extract.hasProposals) ...[
             const SizedBox(height: 12),
             SecondaryButton(label: 'Use these details', onPressed: onUse),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Advisory result of the automated MyKad check. Never blocks Continue: an
+/// admin makes the final call.
+class _IdResultCard extends StatelessWidget {
+  const _IdResultCard({required this.extract});
+
+  final IdExtract extract;
+
+  static const _retake = {'ic-mismatch', 'no-ic-found'};
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final passed = extract.verdict == IdVerdict.passed;
+    final muted = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(passed ? Icons.check_circle_outline : Icons.info_outline,
+                  size: 18,
+                  color: passed
+                      ? context.fairbid.successText
+                      : context.fairbid.warningText),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  passed ? 'Card details look good' : 'We need a closer look',
+                  style: theme.textTheme.labelLarge,
+                ),
+              ),
+            ],
+          ),
+          if (!passed) ...[
+            for (final f in extract.failures) ...[
+              const SizedBox(height: 6),
+              Text(idFailureLabel(f), style: muted),
+            ],
+            if (extract.failures.any(_retake.contains)) ...[
+              const SizedBox(height: 6),
+              Text('Try retaking a clear, well-lit photo of the front.',
+                  style: muted),
+            ],
+            const SizedBox(height: 6),
+            Text('An admin will review your documents.', style: muted),
           ],
         ],
       ),

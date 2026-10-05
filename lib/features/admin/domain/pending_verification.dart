@@ -1,11 +1,19 @@
 import '../../auth/domain/user_role.dart';
+import '../../onboarding/domain/face_box.dart';
 
 /// One uploaded document, ready to render in the verification gallery.
 class VerificationDocument {
-  const VerificationDocument({required this.label, required this.url});
+  const VerificationDocument(
+      {required this.label, required this.url, this.faceBox});
+
+  static const idLabel = 'Identity Document';
+  static const selfieLabel = 'Selfie';
 
   final String label;
   final String url;
+
+  /// Where the face is in this photo, when the on-device check found it.
+  final FaceBox? faceBox;
 }
 
 /// A read-only view of a `users/{uid}` document that is awaiting admin

@@ -1,5 +1,5 @@
-/// One award option from `previewBundleAward`: who wins what, and what it
-/// costs. Built by the server from the stored bids, never by the app.
+/// One award option from `previewBundleAward`: who wins which tasks and
+/// what it costs. The server builds it from the stored bids.
 class BundleAwardOption {
   const BundleAwardOption({
     required this.key,
@@ -8,8 +8,8 @@ class BundleAwardOption {
     required this.providerCount,
     required this.premiumSen,
     required this.weightedTrust,
+    this.trustVisible = false,
     this.uncoveredTaskIds = const [],
-    this.warnings = const [],
     this.awards = const [],
   });
 
@@ -19,17 +19,17 @@ class BundleAwardOption {
   final int totalSen;
   final int providerCount;
 
-  /// How much more than the cheapest option this one costs.
+  /// How much more this option costs than the cheapest.
   final int premiumSen;
 
   /// Trust Score weighted by how much each provider is paid.
   final int weightedTrust;
 
-  /// Tasks no bid covers; awarding releases them back to ordinary bidding.
-  final List<String> uncoveredTaskIds;
+  /// False when any hired provider is still new, so [weightedTrust] is hidden.
+  final bool trustVisible;
 
-  /// Handovers this option splits between providers.
-  final List<String> warnings;
+  /// Tasks no bid covers. Awarding sends them back to normal bidding.
+  final List<String> uncoveredTaskIds;
 
   final List<BundleAwardItem> awards;
 
@@ -47,11 +47,10 @@ class BundleAwardOption {
         providerCount: (m['providerCount'] as num?)?.toInt() ?? 0,
         premiumSen: (m['premiumSen'] as num?)?.toInt() ?? 0,
         weightedTrust: (m['weightedTrust'] as num?)?.toInt() ?? 0,
+        trustVisible: m['trustVisible'] as bool? ?? false,
         uncoveredTaskIds:
             (m['uncoveredTaskIds'] as List?)?.whereType<String>().toList() ??
             const [],
-        warnings:
-            (m['warnings'] as List?)?.whereType<String>().toList() ?? const [],
         awards:
             (m['awards'] as List?)
                 ?.whereType<Map>()
@@ -61,7 +60,7 @@ class BundleAwardOption {
       );
 }
 
-/// What one provider wins in an option, and what each task pays them.
+/// What one provider wins in an option and what each task pays.
 class BundleAwardItem {
   const BundleAwardItem({
     required this.providerId,
@@ -72,8 +71,8 @@ class BundleAwardItem {
   final String providerId;
   final String providerName;
 
-  /// Job id to amount in sen. Each amount lands on that task as its accepted
-  /// bid amount, so a milestone plan has to total it exactly.
+  /// Job id to amount in sen. It becomes the task's accepted bid amount,
+  /// so a milestone plan must add up to it exactly.
   final Map<String, int> taskAmountsSen;
 
   int get totalSen =>

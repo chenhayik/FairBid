@@ -1,39 +1,23 @@
-// Choosing who wins which task of a bundle - phase 3 of docs/BUNDLE_BIDDING.md.
-// Pure engine so bundle_award.test.js can pin it without an emulator; runs
-// server-side because awarding moves escrow money.
+// Picks who wins which task of a bundle. Pure engine (tests need no emulator),
+// run on the server because awarding moves escrow money.
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const {FieldValue, Timestamp} = require("firebase-admin/firestore");
 const {callerUid, bad, docId, bundleBiddingOpen, splitBundlePrice} =
     require("./bundles");
-const {notifyUser} = require("./common");
-
-/** True when these tasks take part of a lot but not all of it. */
-function splitsALot(taskIds, tasks) {
-  const taken = new Set(taskIds);
-  const lotIds = new Set(tasks.map((t) => t.lotId).filter(Boolean));
-  return [...lotIds].some((lotId) => {
-    const lot = tasks.filter((t) => t.lotId === lotId);
-    const takenCount = lot.filter((t) => taken.has(t.id)).length;
-    return takenCount > 0 && takenCount < lot.length;
-  });
-}
+const {notifyUser, writeFundedMilestone} = require("./common");
 
 /** Every set of tasks a bid would accept, with what each set costs. */
-// A bid on 3 tasks without all-or-nothing accepts any of its 7 non-empty
-// subsets; the whole bid is priced at the bundle price when there is one.
-function offersFor(bid, tasks, taskIndex) {
+// Any non-empty subset of the bid's tasks is an offer.
+function offersFor(bid, taskIndex) {
   const priced = Object.keys(bid.taskPrices);
   const offers = [];
   for (let subset = 1; subset < (1 << priced.length); subset++) {
     const chosen = priced.filter((_, i) => (subset >> i) & 1);
-    // A priced task id the bundle no longer has has no entry in taskIndex;
-    // skip it rather than let `1 << undefined` silently count as task 0.
+    // Skip task ids the bundle no longer has (they would count as task 0).
     if (chosen.some((id) => !Object.hasOwn(taskIndex, id))) continue;
     const isWholeBid = chosen.length === priced.length;
-    if (bid.allOrNothing && !isWholeBid) continue;
-    if (splitsALot(chosen, tasks)) continue;
 
     const amounts = isWholeBid && bid.bundlePriceSen != null ?
         splitBundlePrice(bid.taskPrices, bid.bundlePriceSen) :
@@ -79,17 +63,13 @@ function countBits(value) {
 }
 
 /** The most a fewer-provider option may cost above the cheapest one. */
-// Both limits apply and the smaller wins, which is what the bundle's own
-// snapshot of the consolidation cap means.
+// Both limits apply; the smaller one wins.
 function allowanceSen(cheapestSen, capPct, capSen) {
   return Math.min(Math.floor(cheapestSen * capPct / 100), capSen);
 }
 
-/**
- * Searches for the single best award using exactly `k` providers, covering
- * `coverage` tasks within `ceiling` cost (highest Trust Score, ties by
- * price). Needed since the DP below keeps only the cheapest award per state.
- */
+/** Best award with exactly `k` providers within `ceiling` (top Trust Score). */
+// Needed because the DP below keeps only the cheapest award per state.
 function bestWithinCap({bidOffers, trustByProvider, coverage, k, ceiling}) {
   let best = null;
   const awards = [];
@@ -138,24 +118,21 @@ function trustByProviderFrom(bids) {
 }
 
 /** Builds the three options the requestor chooses between. */
-// Coverage first, money second: an option is never cheap merely because it
-// leaves work undone. Returns [] when nothing can be awarded at all.
+// Coverage first, then cost. Returns [] when nothing can be awarded.
 function buildAwardOptions({tasks, bids, capPct, capSen}) {
   const trustByProvider = trustByProviderFrom(bids);
   const taskIndex = Object.fromEntries(tasks.map((t, i) => [t.id, i]));
   const maskCount = 1 << tasks.length;
 
-  // Computed once and reused both by the DP below and by Recommended's
-  // exhaustive re-search, so a bid's offers are never built twice.
-  const bidOffers = bids.map((bid) => offersFor(bid, tasks, taskIndex));
+  // Built once and reused by the DP and the Recommended search.
+  const bidOffers = bids.map((bid) => offersFor(bid, taskIndex));
 
   // best[covered tasks][providers used] = cheapest way to get there.
   let best = Array.from({length: maskCount},
       () => new Array(tasks.length + 1).fill(null));
   best[0][0] = {costSen: 0, awards: []};
 
-  // One bid at a time, reading the old table into a new one, so no provider
-  // can appear twice in the same award.
+  // One bid at a time, so no provider appears twice in an award.
   bidOffers.forEach((offers) => {
     const next = best.map((row) => [...row]);
     for (let mask = 0; mask < maskCount; mask++) {
@@ -189,8 +166,7 @@ function buildAwardOptions({tasks, bids, capPct, capSen}) {
     }
   }
 
-  // Of the awards reaching that coverage, the cheapest for each number of
-  // providers - which makes "fewest providers" a scan from the left.
+  // Of the awards with that coverage, the cheapest for each number of providers.
   const cheapestByCount = new Array(tasks.length + 1).fill(null);
   for (let mask = 0; mask < maskCount; mask++) {
     if (countBits(mask) !== bestCoverage) continue;
@@ -207,14 +183,12 @@ function buildAwardOptions({tasks, bids, capPct, capSen}) {
       cheapest = partial;
     }
   });
-  // Nothing awardable: the empty award always sits in the table, so this is
-  // the only place that tells "no bids yet" from "one option costs nothing".
+  // The empty award is always in the table, so this catches "nothing to award".
   if (!cheapest || cheapest.awards.length === 0) return [];
 
   const fewest = cheapestByCount.find(Boolean);
 
-  // Recommended: fewest providers within the cap of Cheapest, ties broken
-  // by Trust Score then price; Cheapest itself always qualifies.
+  // Recommended: fewest providers within the cap, then Trust Score, then price.
   const ceiling =
       cheapest.costSen + allowanceSen(cheapest.costSen, capPct, capSen);
   const k = cheapestByCount.findIndex((p) => p && p.costSen <= ceiling);
@@ -244,20 +218,6 @@ function option(
         .forEach((taskId) => (providerByTask[taskId] = award.providerId));
   });
 
-  // A task that has to follow another, but lands with a different provider,
-  // is the handover the spec wants flagged before the award is made.
-  const warnings = [];
-  tasks.forEach((task) => {
-    const earlier = task.startsAfterJobId;
-    if (!earlier) return;
-    const mine = providerByTask[task.id];
-    const theirs = providerByTask[earlier];
-    if (!mine || !theirs || mine === theirs) return;
-    const earlierTitle = (tasks.find((t) => t.id === earlier) || {}).title;
-    warnings.push(`${task.title} starts after ${earlierTitle}, but they go ` +
-        "to different providers.");
-  });
-
   return {
     key,
     label,
@@ -265,9 +225,11 @@ function option(
     providerCount: partial.awards.length,
     premiumSen: partial.costSen - cheapestCostSen,
     weightedTrust: weightedTrust(partial.awards, trustByProvider),
+    // Only shown when every hired provider has earned a visible score.
+    trustVisible: partial.awards.length > 0 && partial.awards.every((a) =>
+      bids.some((b) => b.providerId === a.providerId && b.scoreVisible)),
     uncoveredTaskIds: tasks.filter((t) => !providerByTask[t.id])
         .map((t) => t.id),
-    warnings,
     awards: partial.awards.map((award) => ({
       providerId: award.providerId,
       providerName: nameByProvider[award.providerId] || "Provider",
@@ -276,13 +238,8 @@ function option(
   };
 }
 
-/**
- * Prices and checks a hand-assembled award. Uses Map lookups throughout,
- * never bracket access on a plain object, so a client id like "__proto__"
- * can't resolve through Object.prototype instead of missing outright.
- */
-// The server repeats this before it moves any money: a client may send any
-// task-to-provider map at all.
+/** Prices and checks a hand-made award, before the server moves any money. */
+// Uses Map lookups so ids like "__proto__" cannot hit Object.prototype.
 function checkManualAward({tasks, bids, providerByTaskId}) {
   const problems = [];
   const bidByProvider = new Map(bids.map((b) => [b.providerId, b]));
@@ -317,16 +274,6 @@ function checkManualAward({tasks, bids, providerByTaskId}) {
     }
     const isWholeBid =
         wonTaskIds.length === Object.keys(bid.taskPrices).length;
-    if (bid.allOrNothing && !isWholeBid) {
-      problems.push(`${bid.providerName} bid all or nothing, so they take ` +
-          "every task they priced or none of them.");
-      return;
-    }
-    if (splitsALot(wonTaskIds, tasks)) {
-      problems.push(`${bid.providerName} would take only some of a set of ` +
-          "linked tasks, which must go to one provider.");
-      return;
-    }
     const amounts = isWholeBid && bid.bundlePriceSen != null ?
         splitBundlePrice(bid.taskPrices, bid.bundlePriceSen) :
         Object.fromEntries(wonTaskIds.map((id) => [id, bid.taskPrices[id]]));
@@ -343,10 +290,7 @@ function totalSenOf(awards) {
         .reduce((inner, sen) => inner + sen, 0), 0);
 }
 
-/**
- * Prices the requestor's hand-picked award for `previewBundleAward` - the
- * option card, or the problems stopping it. Pure so tests can pin it.
- */
+/** Prices the requestor's hand-picked award, or returns the problems with it. */
 function manualOption({tasks, bids, providerByTaskId, cheapestCostSen}) {
   const {awards, problems} = checkManualAward({tasks, bids, providerByTaskId});
   if (problems.length > 0) return {manual: null, problems};
@@ -367,23 +311,18 @@ function taskFromSnap(snap) {
   return {
     id: snap.id,
     title: snap.data().title || "Task",
-    lotId: snap.data().lotId || null,
-    startsAfterJobId: snap.data().startsAfterJobId || null,
     status: snap.data().status,
   };
 }
 
-/**
- * The shape the award engine needs from one bundle bid document. Includes
- * the Trust Score snapshot so preview and award always build the same shape.
- */
+/** The shape the award engine needs from a bundle bid, incl. Trust Score. */
 function bidFromSnap(doc) {
   return {
     providerId: doc.id,
     providerName: doc.data().providerName || "Provider",
     trustScore: doc.data().providerTrustScore || 0,
+    scoreVisible: doc.data().providerScoreVisible === true,
     taskPrices: doc.data().taskPrices || {},
-    allOrNothing: doc.data().allOrNothing === true,
     bundlePriceSen: doc.data().bundlePriceSen == null ?
         null :
         doc.data().bundlePriceSen,
@@ -418,10 +357,7 @@ async function readBundleForAward(db, bundleId, uid) {
   return {bundle, tasks, bids};
 }
 
-/**
- * The three award options for a bundle, requestor-only. With an optional
- * `providerByTaskId` pick, also prices it as a fourth "Your pick" option.
- */
+/** The 3 award options for the requestor, plus "Your pick" if one is sent. */
 exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
@@ -430,8 +366,7 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   const db = admin.firestore();
   const {bundle, tasks, bids} = await readBundleForAward(db, bundleId, uid);
 
-  // awardBundle would refuse this bundle anyway; checking it here too stops
-  // the app showing options it can no longer act on.
+  // Checked here so the app does not show options awardBundle would refuse.
   if (!bundleBiddingOpen(bundle)) {
     throw new functions.https.HttpsError(
         "failed-precondition",
@@ -439,8 +374,7 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
         "awarded.");
   }
 
-  // The cap is the one snapshotted on the bundle when it was posted, not
-  // whatever PlatformConfig says today.
+  // Uses the cap saved on the bundle when posted, not today's PlatformConfig.
   const openTasks = tasks.filter((t) => t.status === "open");
   const options = buildAwardOptions({
     tasks: openTasks,
@@ -459,8 +393,7 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   return {options, bidCount: bids.length, manual, problems};
 });
 
-/** Days a task released unawarded gets to find a provider on its own. */
-// The spec leaves the default open; the requestor can send their own.
+/** Days a released task gets to find a provider; the requestor can override. */
 const RELEASED_DEADLINE_DAYS = 7;
 
 /** The new deadline for tasks nobody wins, as a Timestamp. */
@@ -473,6 +406,21 @@ function releasedDeadline(millis) {
     throw bad("The new deadline for released tasks must be in the future.");
   }
   return Timestamp.fromMillis(millis);
+}
+
+/** The write for an unawarded task: released to bidding, or cancelled. */
+// Dropping uses the same fields as cancelBundle.
+function leftoverTaskUpdate({drop, uid, deadline}) {
+  if (drop) {
+    return {
+      status: "cancelled",
+      cancelledBy: uid,
+      cancelledAt: FieldValue.serverTimestamp(),
+      cancellationReason:
+          "The client awarded the rest of the bundle and dropped this task.",
+    };
+  }
+  return {deadline, bidCount: 0, releasedAt: FieldValue.serverTimestamp()};
 }
 
 /** The requestor's task-to-provider picks, checked for shape only. */
@@ -489,14 +437,16 @@ function checkPicks(raw) {
   return Object.fromEntries(entries);
 }
 
-/** Awards a whole bundle in one transaction, the acceptBid pattern writ large. */
-// Everything is re-read and re-priced from the stored bids here: the client
-// only says who should win what, never what it costs.
+/** Awards a whole bundle in one transaction. */
+// Prices are re-read from stored bids; the client only says who wins what.
 exports.awardBundle = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
   const picks = checkPicks(data?.providerByTaskId);
-  const deadline = releasedDeadline(data?.releasedDeadlineMillis);
+  const dropUnawarded = data?.dropUnawarded === true;
+  // A dropped task needs no new deadline.
+  const deadline = dropUnawarded ?
+      null : releasedDeadline(data?.releasedDeadlineMillis);
   const expectedTotalSen = data?.expectedTotalSen;
 
   const db = admin.firestore();
@@ -505,8 +455,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
     const bundleRef = db.doc(`bundles/${bundleId}`);
     const walletRef = db.doc(`users/${uid}`);
 
-    // The bundle first: its taskIds are what become task refs, and a
-    // transaction may not read after it has written.
+    // Read the bundle first: a transaction cannot read after it writes.
     const bundleSnap = await tx.get(bundleRef);
     const bundle = bundleSnap.data();
     if (bundle && bundle.requestorId !== uid) {
@@ -525,8 +474,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
     const [walletSnap, ...taskSnaps] =
         await tx.getAll(walletRef, ...taskRefs);
 
-    // Read before any writes, same as acceptBid's assertNotSuspended: a
-    // suspended requestor is refused before any other check can write.
+    // Read before any writes: a suspended requestor is refused first.
     const wallet = walletSnap.data() || {};
     if (wallet.suspended === true) {
       throw new functions.https.HttpsError(
@@ -535,8 +483,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           "is a mistake.");
     }
 
-    // A query inside a transaction lets a bid that committed after
-    // previewBundleAward still get decided here, rather than missed.
+    // Queried inside the transaction so bids added after the preview count.
     const bidsSnap = await tx.get(db.collection(
         `bundles/${bundleId}/bundleBids`).where("status", "==", "pending"));
 
@@ -556,8 +503,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
         {tasks: openTasks, bids, providerByTaskId: picks});
     if (problems.length > 0) throw bad(problems[0]);
 
-    // Defense in depth: validateBundleBid checks a bundle price, but not a
-    // partial award - and RM 0 would strand a task with no milestone plan.
+    // Safety net: a partial award could still price a task at RM 0.
     const zeroed = awards.some((award) =>
       Object.values(award.taskAmountsSen).some((sen) => sen < 1));
     if (zeroed) {
@@ -595,26 +541,35 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
       const bid = bids.find((b) => b.providerId === award.providerId);
       Object.entries(award.taskAmountsSen).forEach(([taskId, amountSen]) => {
         wonTaskIds.add(taskId);
-        tx.update(db.doc(`jobs/${taskId}`), {
+        const taskRef = db.doc(`jobs/${taskId}`);
+        tx.update(taskRef, {
           status: "in_progress",
           acceptedProviderId: award.providerId,
           acceptedProviderName: bid.providerName,
           acceptedBidAmountSen: amountSen,
+          fundedAtAward: true,
+        });
+        writeFundedMilestone(tx, {
+          jobRef: taskRef,
+          title: liveTasks.find((t) => t.id === taskId).title,
+          requestorId: uid,
+          providerId: award.providerId,
+          amountSen,
         });
       });
       notifyUser(tx, award.providerId, {
         type: "bid_accepted",
         title: "You won a bundle bid!",
         body: `You won ${Object.keys(award.taskAmountsSen).length} task(s) ` +
-            `of "${bundle.title || "a bundle"}". Propose your milestone ` +
-            "plan to get started.",
+            `of "${bundle.title || "a bundle"}". The payment is secured in ` +
+            "escrow - you can get started.",
         route: `/jobs/${Object.keys(award.taskAmountsSen)[0]}`,
       });
     });
 
-    // The escrow lock moves once, for the whole award.
+    // The money moves into escrow once, for the whole award.
     tx.update(walletRef, {
-      escrowLockedSen: (wallet.escrowLockedSen || 0) + totalSen,
+      walletBalanceSen: (wallet.walletBalanceSen || 0) - totalSen,
     });
 
     // Every bid lands on accepted, partly accepted or rejected.
@@ -629,20 +584,16 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
       });
     });
 
-    // Tasks nobody won go back to ordinary bidding with a fresh deadline and
-    // bidCount reset to 0; `releasedAt` marks them as ordinary jobs now.
-    const releasedTaskIds = openTasks.map((t) => t.id)
+    // Unawarded tasks go back to bidding with a new deadline and `releasedAt`,
+    // or are cancelled if the requestor only wanted part of the bundle.
+    const leftoverTaskIds = openTasks.map((t) => t.id)
         .filter((id) => !wonTaskIds.has(id));
-    releasedTaskIds.forEach((taskId) => {
-      tx.update(db.doc(`jobs/${taskId}`), {
-        deadline,
-        bidCount: 0,
-        releasedAt: FieldValue.serverTimestamp(),
-      });
+    leftoverTaskIds.forEach((taskId) => {
+      tx.update(db.doc(`jobs/${taskId}`),
+          leftoverTaskUpdate({drop: dropUnawarded, uid, deadline}));
     });
 
-    // Plain queryable fields, not a counter doc, so an admin can count()
-    // split awards straight from the bundle collection.
+    // Plain fields (no counter doc) so admins can count split awards.
     const awardedProviderCount =
         new Set(awards.map((a) => a.providerId)).size;
     tx.update(bundleRef, {
@@ -651,21 +602,23 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
       awardedTotalSen: totalSen,
       awardedProviderCount,
       splitAward: awardedProviderCount > 1,
+      releasedTaskCount: dropUnawarded ? 0 : leftoverTaskIds.length,
+      droppedTaskCount: dropUnawarded ? leftoverTaskIds.length : 0,
     });
 
     return {
       taskCount: wonTaskIds.size,
       providerCount: awards.length,
       totalSen,
-      releasedTaskIds,
+      releasedTaskIds: dropUnawarded ? [] : leftoverTaskIds,
+      droppedTaskIds: dropUnawarded ? leftoverTaskIds : [],
     };
   });
 
   return result;
 });
 
-// Exported for bundle_award.test.js only; index.js re-exports just the
-// callables.
+// Exported for tests only; index.js re-exports just the callables.
 exports.splitBundlePrice = splitBundlePrice;
 exports.offersFor = offersFor;
 exports.buildAwardOptions = buildAwardOptions;
@@ -673,3 +626,4 @@ exports.checkManualAward = checkManualAward;
 exports.allowanceSen = allowanceSen;
 exports.readBundleForAward = readBundleForAward;
 exports.manualOption = manualOption;
+exports.leftoverTaskUpdate = leftoverTaskUpdate;

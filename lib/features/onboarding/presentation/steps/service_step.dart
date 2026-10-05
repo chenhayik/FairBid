@@ -162,6 +162,7 @@ class _ServiceStepState extends State<ServiceStep> {
               const SizedBox(height: 12),
               UploadBox(
                 onTap: onboarding.pickPortfolioImage,
+                busy: onboarding.isUploading('portfolio'),
                 icon: Icons.add_photo_alternate_outlined,
                 hint: 'PNG, JPG up to 5MB',
               ),

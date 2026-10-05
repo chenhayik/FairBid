@@ -12,6 +12,7 @@ const {
   checkManualAward,
   allowanceSen,
   manualOption,
+  leftoverTaskUpdate,
 } = require("./bundle_award");
 
 let failed = 0;
@@ -25,42 +26,39 @@ function test(name, fn) {
   }
 }
 
-// Waterproofing and tiling are one lot, so they always go together;
-// waterproofing follows the plumbing, and tiling follows waterproofing.
+// A four-task bathroom bundle.
 const TASKS = [
-  {id: "plumbing", title: "Plumbing rough-in", lotId: null,
-    startsAfterJobId: null},
-  {id: "electrical", title: "Electrical points", lotId: null,
-    startsAfterJobId: null},
-  {id: "waterproof", title: "Waterproofing", lotId: "wetWorks",
-    startsAfterJobId: "plumbing"},
-  {id: "tiling", title: "Tiling", lotId: "wetWorks",
-    startsAfterJobId: "waterproof"},
+  {id: "plumbing", title: "Plumbing rough-in"},
+  {id: "electrical", title: "Electrical points"},
+  {id: "waterproof", title: "Waterproofing"},
+  {id: "tiling", title: "Tiling"},
 ];
 
 const TASK_INDEX = {plumbing: 0, electrical: 1, waterproof: 2, tiling: 3};
 
 // A generalist who prices everything with a discount, two single-trade
-// specialists, and a tiler who only wants the wet works as a package.
+// specialists, and a tiler with a wet-works package deal. Dev's bid is no
+// longer all-or-nothing, but the totals hold: the RM 500 package still beats
+// his two single prices (RM 520).
 const BIDS = [
   {
     providerId: "aida", providerName: "Aida Renovation", trustScore: 820,
     taskPrices: {plumbing: 18500, electrical: 19000, waterproof: 25000,
       tiling: 33000},
-    allOrNothing: false, bundlePriceSen: 90000,
+    bundlePriceSen: 90000,
   },
   {
     providerId: "budi", providerName: "Budi Plumbing", trustScore: 760,
-    taskPrices: {plumbing: 18000}, allOrNothing: false, bundlePriceSen: null,
+    taskPrices: {plumbing: 18000}, bundlePriceSen: null,
   },
   {
     providerId: "chandran", providerName: "Chandran Electrical",
-    trustScore: 900, taskPrices: {electrical: 16000}, allOrNothing: false,
+    trustScore: 900, taskPrices: {electrical: 16000},
     bundlePriceSen: null,
   },
   {
     providerId: "dev", providerName: "Dev Tiling Works", trustScore: 700,
-    taskPrices: {waterproof: 22000, tiling: 30000}, allOrNothing: true,
+    taskPrices: {waterproof: 22000, tiling: 30000},
     bundlePriceSen: 50000,
   },
 ];
@@ -85,15 +83,15 @@ test("a bundle price splits across tasks and adds up exactly", () => {
 });
 
 test("a bid offers every subset it would accept", () => {
-  // Two tasks, no all-or-nothing: each on its own, plus both together.
-  const offers = offersFor(BIDS[3], TASKS, TASK_INDEX);
-  assert.strictEqual(offers.length, 1); // all-or-nothing: the pair only
-  assert.strictEqual(offers[0].priceSen, 50000); // priced at the bundle price
+  // Two tasks: each on its own, plus both together.
+  const offers = offersFor(BIDS[3], TASK_INDEX);
+  assert.strictEqual(offers.length, 3);
+  const pair = offers.find((o) => o.taskMask === 0b1100);
+  assert.strictEqual(pair.priceSen, 50000); // priced at the bundle price
 
-  const generalist = offersFor(BIDS[0], TASKS, TASK_INDEX);
-  // 15 non-empty subsets, minus the 8 holding exactly one of the two
-  // wet-works tasks, which would split the lot.
-  assert.strictEqual(generalist.length, 7);
+  const generalist = offersFor(BIDS[0], TASK_INDEX);
+  // Every non-empty subset of four tasks.
+  assert.strictEqual(generalist.length, 15);
   const whole = generalist.find((o) => o.taskMask === 0b1111);
   assert.strictEqual(whole.priceSen, 90000);
 });
@@ -110,13 +108,12 @@ test("the three options on the bathroom bundle", () => {
   assert.strictEqual(cheapest.weightedTrust, 750);
   assert.deepStrictEqual(cheapest.uncoveredTaskIds, []);
 
-  // Fewest providers: the generalist takes the lot at their bundle price.
+  // Fewest providers: the generalist takes all four at their bundle price.
   const fewest = pick(options, "fewest");
   assert.strictEqual(fewest.totalSen, 90000);
   assert.strictEqual(fewest.providerCount, 1);
   assert.strictEqual(fewest.premiumSen, 6000);
   assert.strictEqual(fewest.weightedTrust, 820);
-  assert.deepStrictEqual(fewest.warnings, []); // one provider, no handovers
 
   // Recommended: two providers at RM 35 over the cheapest, inside the
   // RM 42 allowance (5% of RM 840).
@@ -126,11 +123,17 @@ test("the three options on the bathroom bundle", () => {
   assert.strictEqual(recommended.premiumSen, 3500);
 });
 
-test("an award that splits a dependency is flagged", () => {
-  const options = buildAwardOptions({tasks: TASKS, bids: BIDS, ...CAP});
-  const warnings = pick(options, "cheapest").warnings;
-  assert.strictEqual(warnings.length, 1);
-  assert.ok(warnings[0].includes("Waterproofing starts after Plumbing"));
+test("trust is shown only when every hired provider has a visible score", () => {
+  const visible = BIDS.map((b) => ({...b, scoreVisible: true}));
+  const shown = buildAwardOptions({tasks: TASKS, bids: visible, ...CAP});
+  assert.ok(shown.every((o) => o.trustVisible));
+
+  // Dev is new: options hiring him hide trust, the rest still show it.
+  const devNew = visible.map((b) =>
+    b.providerId === "dev" ? {...b, scoreVisible: false} : b);
+  const options = buildAwardOptions({tasks: TASKS, bids: devNew, ...CAP});
+  assert.strictEqual(pick(options, "cheapest").trustVisible, false);
+  assert.strictEqual(pick(options, "fewest").trustVisible, true);
 });
 
 test("coverage comes before price", () => {
@@ -174,13 +177,14 @@ test("a hand-picked award may not break a bid's terms", () => {
   const refuse = (providerByTaskId) => checkManualAward(
       {tasks: TASKS, bids: BIDS, providerByTaskId}).problems;
 
-  // All-or-nothing: the tiler takes both wet-works tasks or neither.
-  assert.ok(refuse({tiling: "dev"})[0].includes("all or nothing"));
+  // Part of a bid is fine now: dev's tiling alone is priced at 30000.
+  const partial = checkManualAward({
+    tasks: TASKS, bids: BIDS, providerByTaskId: {tiling: "dev"},
+  });
+  assert.deepStrictEqual(partial.problems, []);
+  assert.deepStrictEqual(partial.awards[0].taskAmountsSen, {tiling: 30000});
   // A task that provider never priced.
   assert.ok(refuse({plumbing: "chandran"})[0].includes("never priced"));
-  // A lot cannot be split, even between willing providers.
-  assert.ok(refuse({waterproof: "aida", tiling: "dev"})
-      .some((p) => p.includes("linked tasks") || p.includes("all or nothing")));
   // A provider who never bid at all.
   assert.ok(refuse({plumbing: "nobody"})[0].includes("No bid from provider"));
 });
@@ -190,8 +194,7 @@ test("checkManualAward returns a problem, not a TypeError, for a " +
   // A plain-object lookup table would resolve "constructor" through
   // Object.prototype instead of missing outright, turning the clean "No bid
   // from provider" problem into a crash deeper inside (`id in undefined`).
-  const tasks = [{id: "A", title: "Task A", lotId: null,
-    startsAfterJobId: null}];
+  const tasks = [{id: "A", title: "Task A"}];
   const {awards, problems} = checkManualAward({
     tasks, bids: [], providerByTaskId: {A: "constructor"},
   });
@@ -202,20 +205,20 @@ test("checkManualAward returns a problem, not a TypeError, for a " +
 test("offersFor / buildAwardOptions drop a bid pricing a task the bundle " +
     "no longer has", () => {
   const tasks = [
-    {id: "A", title: "Task A", lotId: null, startsAfterJobId: null},
-    {id: "C", title: "Task C", lotId: null, startsAfterJobId: null},
+    {id: "A", title: "Task A"},
+    {id: "C", title: "Task C"},
   ];
   const taskIndex = {A: 0, C: 1};
   const bids = [
     {providerId: "x", providerName: "X", trustScore: 50,
-      taskPrices: {B: 50}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {B: 50}, bundlePriceSen: null},
     {providerId: "y", providerName: "Y", trustScore: 50,
-      taskPrices: {A: 100}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {A: 100}, bundlePriceSen: null},
   ];
   // x priced task "B", which this bundle doesn't have (say, it stopped
   // being open) - it must offer nothing at all, not silently cover task A
   // the way `1 << taskIndex["B"]` (== `1 << undefined` == 1) used to.
-  assert.deepStrictEqual(offersFor(bids[0], tasks, taskIndex), []);
+  assert.deepStrictEqual(offersFor(bids[0], taskIndex), []);
 
   const options = buildAwardOptions({tasks, bids, capPct: 5, capSen: 50000});
   const cheapest = pick(options, "cheapest");
@@ -228,14 +231,14 @@ test("offersFor / buildAwardOptions drop a bid pricing a task the bundle " +
 test("Recommended breaks a tie within the cap by Trust Score, not price",
     () => {
   const tasks = [
-    {id: "A", title: "Task A", lotId: null, startsAfterJobId: null},
-    {id: "B", title: "Task B", lotId: null, startsAfterJobId: null},
+    {id: "A", title: "Task A"},
+    {id: "B", title: "Task B"},
   ];
   const bids = [
     {providerId: "x", providerName: "X", trustScore: 50,
-      taskPrices: {A: 500, B: 500}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {A: 500, B: 500}, bundlePriceSen: null},
     {providerId: "y", providerName: "Y", trustScore: 90,
-      taskPrices: {A: 510, B: 510}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {A: 510, B: 510}, bundlePriceSen: null},
   ];
   const options = buildAwardOptions({tasks, bids, capPct: 5, capSen: 50000});
   // Cheapest: x, at RM 10 total. Recommended: RM 10.20, inside the RM 10.50
@@ -248,21 +251,21 @@ test("Recommended breaks a tie within the cap by Trust Score, not price",
 test("when Trust Score ties within the cap, Recommended takes the cheaper",
     () => {
   const tasks = [
-    {id: "A", title: "Task A", lotId: null, startsAfterJobId: null},
-    {id: "B", title: "Task B", lotId: null, startsAfterJobId: null},
+    {id: "A", title: "Task A"},
+    {id: "B", title: "Task B"},
   ];
   const bids = [
     // Two specialists: the overall cheapest, at RM 8 total.
     {providerId: "s1", providerName: "S1", trustScore: 99,
-      taskPrices: {A: 400}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {A: 400}, bundlePriceSen: null},
     {providerId: "s2", providerName: "S2", trustScore: 99,
-      taskPrices: {B: 400}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {B: 400}, bundlePriceSen: null},
     // Two generalists, same Trust Score, one cheaper than the other - both
     // inside a cap wide enough to admit either.
     {providerId: "g1", providerName: "G1", trustScore: 60,
-      taskPrices: {A: 500, B: 500}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {A: 500, B: 500}, bundlePriceSen: null},
     {providerId: "g2", providerName: "G2", trustScore: 60,
-      taskPrices: {A: 520, B: 520}, allOrNothing: false, bundlePriceSen: null},
+      taskPrices: {A: 520, B: 520}, bundlePriceSen: null},
   ];
   // Cheapest is the two specialists (RM 8); a 30% cap admits either
   // generalist (RM 10 and RM 10.40), so Recommended prefers 1 provider over
@@ -281,14 +284,13 @@ test("when Trust Score ties within the cap, Recommended takes the cheaper",
 // ---------------------------------------------------------------------------
 
 test("manualOption returns problems, not an option, for a bad pick", () => {
-  // Dev bid all-or-nothing on waterproof+tiling; picking only tiling breaks
-  // that term, same as checkManualAward on its own.
+  // Chandran never priced plumbing, same as checkManualAward on its own.
   const {manual, problems} = manualOption({
-    tasks: TASKS, bids: BIDS, providerByTaskId: {tiling: "dev"},
+    tasks: TASKS, bids: BIDS, providerByTaskId: {plumbing: "chandran"},
     cheapestCostSen: 84000,
   });
   assert.strictEqual(manual, null);
-  assert.ok(problems[0].includes("all or nothing"));
+  assert.ok(problems[0].includes("never priced"));
 });
 
 test("manualOption prices a valid pick as an option card", () => {
@@ -308,6 +310,24 @@ test("manualOption prices a valid pick as an option card", () => {
   assert.strictEqual(manual.providerCount, 3);
   assert.strictEqual(manual.premiumSen, 0); // matches the cheapest option
   assert.deepStrictEqual(manual.uncoveredTaskIds, []);
+});
+
+test("leftoverTaskUpdate releases a task with a fresh deadline", () => {
+  const deadline = {marker: "deadline"};
+  const update = leftoverTaskUpdate({drop: false, uid: "req", deadline});
+  assert.strictEqual(update.deadline, deadline);
+  assert.strictEqual(update.bidCount, 0);
+  assert.ok(update.releasedAt);
+  assert.strictEqual(update.status, undefined);
+});
+
+test("leftoverTaskUpdate drops a task by cancelling it", () => {
+  const update = leftoverTaskUpdate({drop: true, uid: "req", deadline: null});
+  assert.strictEqual(update.status, "cancelled");
+  assert.strictEqual(update.cancelledBy, "req");
+  assert.ok(update.cancelledAt);
+  assert.ok(update.cancellationReason.includes("dropped"));
+  assert.strictEqual(update.releasedAt, undefined);
 });
 
 if (failed > 0) {

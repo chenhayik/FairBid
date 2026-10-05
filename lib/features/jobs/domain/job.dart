@@ -1,4 +1,5 @@
 import '../../../core/util/money.dart';
+import 'price_change_request.dart';
 
 /// Lifecycle of a job.
 enum JobStatus {
@@ -29,11 +30,8 @@ enum JobStatus {
       };
 }
 
-/// A map-picked location: coordinates plus a human-readable label. [address]
-/// is the composed `Region.label` for locations picked with the structured
-/// picker, or a raw legacy string for older jobs that predate it - either way
-/// it's always safe to display as-is. [districtCode]/[districtName]/[town]
-/// are null on that legacy data.
+/// A map-picked location: coordinates plus a readable label. [address] is safe
+/// to show as is; [districtCode]/[districtName]/[town] are null on old jobs.
 class JobLocation {
   const JobLocation({
     required this.lat,
@@ -70,7 +68,7 @@ class JobLocation {
       );
 }
 
-/// Optional budget: a fixed amount, a range, or an hourly rate. All in sen.
+/// Optional budget: a fixed amount, a range or an hourly rate, in sen.
 class JobBudget {
   const JobBudget({this.minSen, this.maxSen, this.hourly = false});
 
@@ -94,8 +92,7 @@ class JobBudget {
       );
 }
 
-/// A job posted by a requestor. Framework-agnostic - the repository handles the
-/// Firestore ↔ [Job] mapping (incl. Timestamp conversion).
+/// A job posted by a requestor. The repository maps it to and from Firestore.
 class Job {
   const Job({
     required this.id,
@@ -116,17 +113,18 @@ class Job {
     this.acceptedProviderId,
     this.acceptedProviderName,
     this.acceptedBidAmountSen,
+    this.originalBidAmountSen,
+    this.priceChangeCount = 0,
+    this.priceChangeRequest,
     this.cancellationRequestedBy,
     this.cancellationReason,
     this.cancellationRequestedAt,
     this.cancelledAt,
     this.cancelledBy,
     this.planRejectionNote,
+    this.fundedAtAward = false,
     this.bundleId,
     this.bundleOrder,
-    this.lotId,
-    this.startsAfterJobId,
-    this.gapDays,
     this.bundleTaskCount,
     this.releasedAt,
   });
@@ -135,11 +133,8 @@ class Job {
   final String requestorId;
   final String requestorName;
 
-  /// Snapshot of the requestor's `profilePhotoUrl` at posting time,
-  /// denormalised so providers see a face without loading the requestor's
-  /// profile - mirrors how [requestorName] is already denormalised. Null if
-  /// the requestor had no photo when they posted. A future Cloud Function
-  /// could refresh this snapshot if the requestor later changes their photo.
+  /// The requestor's `profilePhotoUrl` at posting time, so providers see a face
+  /// without loading the profile. Null if they had no photo.
   final String? requestorPhotoUrl;
   final String title;
   final String description;
@@ -148,8 +143,7 @@ class Job {
   final JobBudget? budget;
   final List<String> photoUrls;
 
-  /// One optional attached video (see `document_storage_repository.dart`'s
-  /// `uploadJobVideo`); null when the requestor didn't add one.
+  /// One optional attached video (see `uploadJobVideo`). Null if none.
   final String? videoUrl;
   final JobStatus status;
   final int bidCount;
@@ -161,17 +155,25 @@ class Job {
   final String? acceptedProviderName;
   final int? acceptedBidAmountSen;
 
-  /// Pending mid-flight cancellation request. Either party may request; the
-  /// counterparty accepts to finalise (the `requestJobCancellation` /
-  /// `respondToJobCancellation` Cloud Functions). `'requestor'` or
-  /// `'provider'`; null when no request is outstanding.
+  /// The price first agreed at accept time. Null on old jobs until it changes.
+  final int? originalBidAmountSen;
+
+  /// Number of accepted price changes (capped server-side).
+  final int priceChangeCount;
+
+  /// Pending mutual price-change proposal, or null.
+  final PriceChangeRequest? priceChangeRequest;
+
+  /// Whether a price change is awaiting the counterparty's decision.
+  bool get hasPendingPriceChange => priceChangeRequest != null;
+
+  /// Pending cancellation request: `'requestor'` or `'provider'`, else null.
+  /// The other party accepts to finish it.
   final String? cancellationRequestedBy;
   final String? cancellationReason;
   final DateTime? cancellationRequestedAt;
 
-  /// Set when the job is actually cancelled - the audit trail a bare status
-  /// flip never had. `cancelledBy` is a uid, or `'admin'` for an admin
-  /// override.
+  /// Set when the job is cancelled: a uid, `'admin'`, or `'dispute'`.
   final DateTime? cancelledAt;
   final String? cancelledBy;
 
@@ -182,51 +184,35 @@ class Job {
   /// changes; null once the provider re-proposes.
   final String? planRejectionNote;
 
+  /// True if the whole price went into escrow at accept time as one funded
+  /// "Full job" stage. Server-owned, never written back in [toMap].
+  final bool fundedAtAward;
+
   final String? bundleId;
 
   /// The order of tasks within a bundle
   final int? bundleOrder;
 
-  /// To identify and properly award the group of tasks to the correct
-  /// provider
-  final String? lotId;
-
-  /// The id of the task (job) that must be completed before this one starts
-  final String? startsAfterJobId;
-
-  /// The given time in between tasks
-  final int? gapDays;
-
-  /// How many tasks the whole bundle has, denormalised onto every task by
-  /// `createBundle` so the feed card can say "Part of a 4-task bundle"
-  /// without a second read of the bundle document. Server-owned, so it is
-  /// never written back in [toMap].
+  /// How many tasks the bundle has, copied onto each task for the feed card.
+  /// Server-owned, never written back in [toMap].
   final int? bundleTaskCount;
 
-  /// Set by `awardBundle` when this task was left unawarded (the bundle went
-  /// to a different provider, or no bid covered it). From then on it is an
-  /// ordinary job: it takes ordinary per-job bids rather than the bundle's
-  /// package bids. Server-owned, so it is never written back in [toMap].
+  /// Set by `awardBundle` when this task was left unawarded. It then takes
+  /// ordinary per-job bids. Server-owned, never written back in [toMap].
   final DateTime? releasedAt;
 
   bool get isBundleTask => bundleId != null;
 
-  /// Whether this task still bids as part of its bundle's sealed package -
-  /// i.e. it belongs to a bundle and hasn't been released back to ordinary
-  /// bidding. Awarding/cancelling for a live bundle task happen for the whole
-  /// bundle, not the task itself.
+  /// Whether this task still bids as part of its bundle's package (not yet
+  /// released). Award and cancel happen for the whole bundle.
   bool get isLiveBundleTask => bundleId != null && releasedAt == null;
 
-  /// Whether this task is still being *bid on* as part of its bundle's
-  /// sealed package - i.e. [isLiveBundleTask] and still open. Unlike
-  /// [isLiveBundleTask], this turns false once the bundle is awarded (the
-  /// task stays "live" - not released - but bidding is over), so it's the
-  /// right check for anything that only makes sense pre-award: the bidding
-  /// banner, the feed card's "Part of a N-task bundle" pill.
+  /// Whether this task is still being bid on as part of its bundle:
+  /// [isLiveBundleTask] and still open. Turns false once the bundle is awarded.
   bool get isBiddingAsBundle => isLiveBundleTask && status == JobStatus.open;
 
-  /// Fields written to Firestore. `createdAt`/`bidCount`/`status` for a new job
-  /// are set by the repository, so they are omitted here.
+  /// Fields written to Firestore. The repository sets `createdAt`, `bidCount`
+  /// and `status` for a new job.
   Map<String, dynamic> toMap() => {
         'requestorId': requestorId,
         'requestorName': requestorName,
@@ -241,8 +227,7 @@ class Job {
         if (deadline != null) 'deadline': deadline,
       };
 
-  /// Builds a [Job] from a document id and its (already Timestamp-normalised)
-  /// data map.
+  /// Builds a [Job] from a document id and its data map.
   factory Job.fromMap(String id, Map<String, dynamic> m) => Job(
         id: id,
         requestorId: m['requestorId'] as String? ?? '',
@@ -265,17 +250,19 @@ class Job {
         acceptedProviderId: m['acceptedProviderId'] as String?,
         acceptedProviderName: m['acceptedProviderName'] as String?,
         acceptedBidAmountSen: (m['acceptedBidAmountSen'] as num?)?.toInt(),
+        originalBidAmountSen: (m['originalBidAmountSen'] as num?)?.toInt(),
+        priceChangeCount: (m['priceChangeCount'] as num?)?.toInt() ?? 0,
+        priceChangeRequest: PriceChangeRequest.fromMap(
+            m['priceChangeRequest'] as Map<String, dynamic>?),
         cancellationRequestedBy: m['cancellationRequestedBy'] as String?,
         cancellationReason: m['cancellationReason'] as String?,
         cancellationRequestedAt: m['cancellationRequestedAt'] as DateTime?,
         cancelledAt: m['cancelledAt'] as DateTime?,
         cancelledBy: m['cancelledBy'] as String?,
         planRejectionNote: m['planRejectionNote'] as String?,
+        fundedAtAward: m['fundedAtAward'] as bool? ?? false,
         bundleId: m['bundleId'] as String?,
         bundleOrder: (m['bundleOrder'] as num?)?.toInt(),
-        lotId: m['lotId'] as String?,
-        startsAfterJobId: m['startsAfterJobId'] as String?,
-        gapDays: (m['gapDays'] as num?)?.toInt(),
         bundleTaskCount: (m['bundleTaskCount'] as num?)?.toInt(),
         releasedAt: m['releasedAt'] as DateTime?,
       );

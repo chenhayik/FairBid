@@ -5,7 +5,8 @@ enum LedgerType {
   topup,
   withdraw,
   disputeRelease,
-  disputeRefund;
+  disputeRefund,
+  refund;
 
   String get label => switch (this) {
         LedgerType.fund => 'Milestone funded',
@@ -14,6 +15,7 @@ enum LedgerType {
         LedgerType.withdraw => 'Withdrawal',
         LedgerType.disputeRelease => 'Dispute payout',
         LedgerType.disputeRefund => 'Dispute refund',
+        LedgerType.refund => 'Escrow refund',
       };
 
   static LedgerType fromStorage(String? value) => switch (value) {
@@ -22,6 +24,7 @@ enum LedgerType {
         'withdraw' => LedgerType.withdraw,
         'dispute_release' => LedgerType.disputeRelease,
         'dispute_refund' => LedgerType.disputeRefund,
+        'refund' => LedgerType.refund,
         _ => LedgerType.topup,
       };
 }

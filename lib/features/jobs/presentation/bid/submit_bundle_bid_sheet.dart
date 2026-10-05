@@ -18,10 +18,8 @@ import '../../domain/job.dart';
 import 'submit_bid_sheet.dart' show kBidDurations;
 import 'submit_bundle_bid_controller.dart';
 
-/// Bottom sheet where a verified provider places (or edits) a package bid on
-/// [bundle]'s [tasks]. Mirrors `SubmitBidSheet`'s shape, but a provider picks
-/// a subset of tasks first, prices each one, and may add a discounted bundle
-/// price for winning all of them.
+/// Bottom sheet for a provider to place or edit a package bid on [bundle].
+/// They pick tasks, price each, and may add a discounted bundle price.
 class SubmitBundleBidSheet extends StatelessWidget {
   const SubmitBundleBidSheet({
     super.key,
@@ -35,12 +33,11 @@ class SubmitBundleBidSheet extends StatelessWidget {
   final List<Job> tasks;
   final AppUser bidder;
 
-  /// The provider's current bid on this bundle, when they're editing one -
-  /// prefills every field. Null when placing a first bid.
+  /// The provider's current bid when editing. Fills in every field.
+  /// Null when placing a first bid.
   final BundleBid? existing;
 
-  /// Opens the sheet. Resolves once it closes (bid placed, updated,
-  /// withdrawn or dismissed).
+  /// Opens the sheet. Finishes when it closes.
   static Future<void> show(
     BuildContext context, {
     required Bundle bundle,
@@ -109,12 +106,13 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
   late final Map<String, TextEditingController> _prices;
   final _bundlePrice = TextEditingController();
   final _message = TextEditingController();
-  bool _allOrNothing = false;
+  /// True once the optional package-deal field is revealed.
+  bool _showBundlePrice = false;
   String? _duration;
   bool _escrowAcknowledged = false;
 
-  /// Set when submit is blocked by the unticked escrow box - a snackbar here
-  /// would render behind the sheet, so the provider would see nothing happen.
+  /// Set when submit is blocked by the unticked escrow box. Shown in the
+  /// sheet because a snackbar would appear behind it.
   bool _showEscrowError = false;
 
   /// Set when submit is attempted with no task ticked.
@@ -124,20 +122,6 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
   final _expandedDescriptions = <String>{};
 
   bool get _isUpdate => widget.existing != null;
-
-  /// Judged against the bundle's own snapshot caps, like `awardBundle` does,
-  /// not the live config - falls back to it only when both caps are unset.
-  int get _consolidationCapPct =>
-      widget.bundle.consolidationCapPct == 0 &&
-          widget.bundle.consolidationCapSen == 0
-      ? PlatformConfig.consolidationCapPct
-      : widget.bundle.consolidationCapPct;
-
-  int get _consolidationCapSen =>
-      widget.bundle.consolidationCapPct == 0 &&
-          widget.bundle.consolidationCapSen == 0
-      ? PlatformConfig.consolidationCapSen
-      : widget.bundle.consolidationCapSen;
 
   @override
   void initState() {
@@ -160,10 +144,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
       final bundlePriceSen = existing.bundlePriceSen;
       if (bundlePriceSen != null) {
         _bundlePrice.text = (bundlePriceSen / 100).toStringAsFixed(2);
+        _showBundlePrice = true;
       }
-      _allOrNothing = existing.allOrNothing;
-      // Defends against a duration that no longer matches kBidDurations
-      // (e.g. the list changes later) rather than crashing the dropdown.
+      // Handles a duration missing from kBidDurations instead of crashing.
       _duration = kBidDurations.contains(existing.estimatedDuration)
           ? existing.estimatedDuration
           : null;
@@ -181,37 +164,16 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     super.dispose();
   }
 
-  /// The other tasks sharing [task]'s lot, or empty when it isn't in one.
-  List<Job> _lotPartners(Job task) {
-    final lotId = task.lotId;
-    if (lotId == null) return const [];
-    return widget.tasks
-        .where((t) => t.lotId == lotId && t.id != task.id)
-        .toList();
-  }
-
-  /// Ticks or unticks [task] - and, when it shares a lot with other tasks,
-  /// every task in that lot with it, since a lot can't be split between
-  /// bids. The server re-checks this; this is just so the provider doesn't
-  /// submit a doomed bid.
+  /// Ticks or unticks [task].
   void _toggleTask(Job task, bool? value) {
     final tick = value ?? false;
     setState(() {
-      final lotId = task.lotId;
-      if (lotId == null) {
-        _ticked[task.id] = tick;
-      } else {
-        for (final t in widget.tasks) {
-          if (t.lotId == lotId) _ticked[t.id] = tick;
-        }
-      }
+      _ticked[task.id] = tick;
       if (tick) _showNoTaskError = false;
-      // The bundle price and all-or-nothing stop making sense below two
-      // tasks - clear them rather than leave a stale value the provider can
-      // no longer see or edit.
+      // Below two tasks, clear and hide the bundle price.
       if (!_bundleFieldsEnabled) {
         _bundlePrice.clear();
-        _allOrNothing = false;
+        _showBundlePrice = false;
       }
     });
   }
@@ -224,24 +186,22 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     (sum, t) => sum + (parseRmToSen(_prices[t.id]!.text) ?? 0),
   );
 
-  /// A bundle price and all-or-nothing only make sense once at least two
-  /// tasks are picked - with one, they're the same thing as its own price.
+  /// A bundle price needs at least two tasks picked.
   bool get _bundleFieldsEnabled => _tickedTasks.length >= 2;
 
-  /// Title of the task with [jobId] among [widget.tasks], for "Starts after
-  /// ...".
-  String? _titleOf(String jobId) {
-    for (final t in widget.tasks) {
-      if (t.id == jobId) return t.title;
+  /// "RM X off your task total" while the bundle price is valid.
+  String _bundleSavingText() {
+    final sen = parseRmToSen(_bundlePrice.text);
+    final total = _tickedTaskTotalSen;
+    if (sen == null || sen <= 0 || sen >= total) {
+      return 'Charged only if you win every task you picked';
     }
-    return null;
+    return '${formatRm(total - sen)} off your task total';
   }
 
   Future<void> _submit() async {
     final tickedTasks = _tickedTasks;
-    // Evaluate every gate before returning so the field errors, the no-task
-    // error and the escrow error all appear together, rather than the
-    // provider fixing one and discovering the next.
+    // Check every gate first so all the errors show together.
     final formValid = _formKey.currentState!.validate();
     setState(() {
       _showNoTaskError = tickedTasks.isEmpty;
@@ -249,8 +209,16 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     });
     if (tickedTasks.isEmpty || !formValid || !_escrowAcknowledged) return;
 
-    final controller = context.read<SubmitBundleBidController>();
     final bundlePriceText = _bundlePrice.text.trim();
+    final totalSen = parseRmToSen(bundlePriceText) ?? _tickedTaskTotalSen;
+    if (totalSen > PlatformConfig.maxBidSen) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Your bid total can't be more than RM 50,000."),
+      ));
+      return;
+    }
+
+    final controller = context.read<SubmitBundleBidController>();
     final ok = await controller.submit(
       bundleId: widget.bundle.id,
       taskPrices: {
@@ -259,13 +227,11 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
       bundlePriceSen: bundlePriceText.isEmpty
           ? null
           : parseRmToSen(bundlePriceText),
-      allOrNothing: _allOrNothing,
       estimatedDuration: _duration!,
       message: _message.text.trim(),
     );
     if (ok && mounted) {
-      // Fire-and-forget: awaiting a haptic would put an async gap in front of
-      // the pop below, leaving the sheet up for an extra frame.
+      // Not awaited, so the sheet doesn't stay up an extra frame.
       unawaited(HapticFeedback.mediumImpact());
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -278,8 +244,7 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     }
   }
 
-  /// Confirms, then withdraws the provider's bundle bid. Mirrors
-  /// `job_detail_screen`'s "Withdraw your bid?" dialog for a single job.
+  /// Asks to confirm, then withdraws the provider's bundle bid.
   Future<void> _withdraw() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -343,14 +308,11 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
               ),
             ),
             const SizedBox(height: 16),
-            InfoBanner(
-              icon: Icons.info_outline,
-              title: 'Bidding on more tasks helps you win',
-              body:
-                  'Clients see the fewest-provider option if it costs no '
-                  'more than $_consolidationCapPct% (max '
-                  '${formatRm(_consolidationCapSen)}) above the cheapest, '
-                  'so covering more tasks can win you the whole bundle.',
+            Text(
+              'Tip: covering more tasks can win you the whole bundle.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 20),
             if (controller.errorMessage != null)
@@ -366,45 +328,55 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                   ),
                 ),
               ),
-            AppTextField(
-              controller: _bundlePrice,
-              enabled: _bundleFieldsEnabled,
-              label: 'Bundle price (RM)',
-              hint: '0.00',
-              prefixText: 'RM ',
-              helperText: _bundleFieldsEnabled
-                  ? 'Charged only if you win every task you picked'
-                  : 'Pick at least two tasks',
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
+            if (_bundleFieldsEnabled && !_showBundlePrice)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => setState(() => _showBundlePrice = true),
+                  child: const Text('+ Add a package deal (optional)'),
+                ),
               ),
-              validator: (v) {
-                final text = v?.trim() ?? '';
-                if (text.isEmpty) return null;
-                final sen = parseRmToSen(text);
-                if (sen == null || sen <= 0) {
-                  return 'Amount must be more than RM 0.';
-                }
-                final total = _tickedTaskTotalSen;
-                if (sen >= total) {
-                  return 'Must be under ${formatRm(total)} (your task total).';
-                }
-                return null;
-              },
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _bundleFieldsEnabled && _allOrNothing,
-              onChanged: _bundleFieldsEnabled
-                  ? (v) => setState(() => _allOrNothing = v)
-                  : null,
-              title: const Text('All or nothing'),
-              subtitle: Text(
-                _bundleFieldsEnabled
-                    ? 'Award me all the tasks I picked, or none of them.'
-                    : 'Pick at least two tasks',
+            if (_bundleFieldsEnabled && _showBundlePrice)
+              ListenableBuilder(
+                // Rebuilds the saving line as the prices change.
+                listenable: Listenable.merge([
+                  _bundlePrice,
+                  ..._prices.values,
+                ]),
+                builder: (context, _) => AppTextField(
+                  controller: _bundlePrice,
+                  label: 'Price if you win all ${_tickedTasks.length} tasks (RM)',
+                  hint: '0.00',
+                  prefixText: 'RM ',
+                  helperText: _bundleSavingText(),
+                  labelTrailing: TextButton(
+                    onPressed: () => setState(() {
+                      _bundlePrice.clear();
+                      _showBundlePrice = false;
+                    }),
+                    child: const Text('Remove'),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  validator: (v) {
+                    final text = v?.trim() ?? '';
+                    if (text.isEmpty) return null;
+                    final sen = parseRmToSen(text);
+                    if (sen == null || sen <= 0) {
+                      return 'Amount must be more than RM 0.';
+                    }
+                    if (sen > PlatformConfig.maxBidSen) {
+                      return "A bundle price can't be more than RM 50,000.";
+                    }
+                    final total = _tickedTaskTotalSen;
+                    if (sen >= total) {
+                      return 'Must be under ${formatRm(total)} (your task total).';
+                    }
+                    return null;
+                  },
+                ),
               ),
-            ),
             const SizedBox(height: 8),
             Text('Estimated duration', style: theme.textTheme.labelLarge),
             const SizedBox(height: 6),
@@ -451,9 +423,7 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                   ),
                 ),
               ),
-            // Repeated here (not just at the top): this sheet runs several
-            // screens tall, so an error at the top is invisible after
-            // tapping Submit down here.
+            // Repeated here: the sheet is tall, so the top error may be hidden.
             if (controller.errorMessage != null) ...[
               const SizedBox(height: 8),
               ErrorBanner(controller.errorMessage!),
@@ -477,15 +447,11 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     );
   }
 
-  /// One task's row: a checkbox with its title/category/budget, an optional
-  /// expandable description, a lot/dependency note, and - only while ticked -
-  /// its price field.
+  /// One task row: checkbox with title, category and budget, optional
+  /// description, and the price field while ticked.
   Widget _taskRow(ThemeData theme, Job task) {
     final ticked = _ticked[task.id] ?? false;
-    final lotPartners = _lotPartners(task);
     final budgetLabel = task.budget?.label;
-    final startsAfterTitle =
-        task.startsAfterJobId == null ? null : _titleOf(task.startsAfterJobId!);
     final expanded = _expandedDescriptions.contains(task.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -529,27 +495,6 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
             padding: const EdgeInsets.only(left: 16, bottom: 8, right: 4),
             child: Text(task.description, style: theme.textTheme.bodySmall),
           ),
-        if (startsAfterTitle != null)
-          Padding(
-            padding: const EdgeInsets.only(left: 16, bottom: 8),
-            child: Text(
-              'Starts after $startsAfterTitle',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        if (lotPartners.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(left: 16, bottom: 8),
-            child: Text(
-              'Linked with ${lotPartners.map((t) => t.title).join(', ')} — '
-              'linked tasks go to the same provider.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
         if (licenceNoticeFor(task.category) != null)
           Padding(
             padding: const EdgeInsets.only(left: 16, bottom: 8),
@@ -575,6 +520,9 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                 final sen = parseRmToSen(v);
                 if (sen == null) return 'Enter a price for this task.';
                 if (sen <= 0) return 'Amount must be more than RM 0.';
+                if (sen > PlatformConfig.maxBidSen) {
+                  return "A task price can't be more than RM 50,000.";
+                }
                 return null;
               },
             ),

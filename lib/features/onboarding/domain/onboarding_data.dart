@@ -1,3 +1,5 @@
+import 'face_box.dart';
+
 /// How the provider operates on FairBid (onboarding stage 2).
 enum ProviderType {
   individual,
@@ -13,6 +15,15 @@ enum ProviderType {
         'business' => ProviderType.business,
         _ => null,
       };
+}
+
+/// Which government ID the provider is verifying with.
+enum IdDocumentType {
+  mykad,
+  passport;
+
+  static IdDocumentType fromStorage(String? value) =>
+      value == 'passport' ? IdDocumentType.passport : IdDocumentType.mykad;
 }
 
 /// Everything a provider fills in during the 6-stage onboarding flow.
@@ -37,6 +48,16 @@ class OnboardingData {
   // Stage 3 - identity verification. Firebase Storage download URLs.
   String? idDocumentUrl;
   String? selfieUrl;
+  IdDocumentType idDocumentType = IdDocumentType.mykad;
+
+  // MyKad number: sensitive, so it lives in [privateMap] only.
+  String icNumber = '';
+
+  // Face locations from the on-device check, and when the applicant agreed to
+  // the ID/face processing (PDPA). All private, like the photos themselves.
+  FaceBox? idFaceBox;
+  FaceBox? selfieFaceBox;
+  DateTime? idConsentAt;
 
   // Stage 3 (business providers only) - SSM registration. The number is
   // deliberately NOT in [toMap]: `users/{uid}` is readable by any signed-in
@@ -90,6 +111,10 @@ class OnboardingData {
         'idDocumentUrl': idDocumentUrl,
         'selfieUrl': selfieUrl,
         'ssmDocumentUrl': ssmDocumentUrl,
+        'icNumber': icNumber,
+        'idFaceBox': idFaceBox?.toMap(),
+        'selfieFaceBox': selfieFaceBox?.toMap(),
+        'idConsentAt': idConsentAt,
         'ssmNumber': ssmNumber,
         'ssmNumberNormalized': ssmNumberNormalized,
       };
@@ -108,6 +133,7 @@ class OnboardingData {
   Map<String, dynamic> toMap() => {
         'step': step,
         'providerType': providerType?.name,
+        'idDocumentType': idDocumentType.name,
         'businessName': businessName,
         'displayName': displayName,
         'bio': bio,
@@ -135,6 +161,8 @@ class OnboardingData {
       ..step = (map['step'] as num?)?.toInt().clamp(firstStep, lastStep) ??
           firstStep
       ..providerType = ProviderType.fromStorage(map['providerType'] as String?)
+      ..idDocumentType =
+          IdDocumentType.fromStorage(map['idDocumentType'] as String?)
       ..idDocumentUrl = map['idDocumentUrl'] as String?
       ..selfieUrl = map['selfieUrl'] as String?
       ..businessName = map['businessName'] as String? ?? ''

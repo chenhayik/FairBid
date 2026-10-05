@@ -1,17 +1,22 @@
-/// Lifecycle of a dispute: open until an admin rules on it.
+/// Lifecycle of a dispute: open until an admin rules or the raiser withdraws.
 enum DisputeStatus {
   open,
-  resolved;
+  resolved,
+  withdrawn;
 
   String get storage => name;
 
   String get label => switch (this) {
         DisputeStatus.open => 'Open',
-        DisputeStatus.resolved => 'Resolved',
+        DisputeStatus.resolved => 'Decided',
+        DisputeStatus.withdrawn => 'Withdrawn',
       };
 
-  static DisputeStatus fromStorage(String? value) =>
-      value == 'resolved' ? DisputeStatus.resolved : DisputeStatus.open;
+  static DisputeStatus fromStorage(String? value) => switch (value) {
+        'resolved' => DisputeStatus.resolved,
+        'withdrawn' => DisputeStatus.withdrawn,
+        _ => DisputeStatus.open,
+      };
 }
 
 /// The admin's ruling: release the escrowed amount to the provider, or refund
@@ -23,8 +28,8 @@ enum DisputeResolution {
   String get storage => name;
 
   String get label => switch (this) {
-        DisputeResolution.release => 'Released to provider',
-        DisputeResolution.refund => 'Refunded to client',
+        DisputeResolution.release => 'Provider paid',
+        DisputeResolution.refund => 'Client refunded, job ended',
       };
 
   static DisputeResolution? fromStorage(String? value) => switch (value) {

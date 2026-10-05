@@ -97,9 +97,7 @@ class BundleTaskDraft {
     required this.description,
     required this.category,
     this.budget,
-    this.lotId,
-    this.startsAfterIndex,
-    this.gapDays,
+    this.photoIndexes = const [],
   });
 
   final String title;
@@ -107,14 +105,8 @@ class BundleTaskDraft {
   final String category;
   final JobBudget? budget;
 
-  // Tasks sharing a lotId are bid on and awarded together.
-  final String? lotId;
-
-  // Which earlier task this one follows; null if it can start anytime.
-  final int? startsAfterIndex;
-
-  // Days to wait after that earlier task completes before this one starts.
-  final int? gapDays;
+  /// Positions in the bundle's photo list that belong to this task.
+  final List<int> photoIndexes;
 
   Map<String, dynamic> toMap() => {
     'title': title,
@@ -123,8 +115,6 @@ class BundleTaskDraft {
     if (budget?.minSen != null) 'budgetMinSen': budget?.minSen,
     if (budget?.maxSen != null) 'budgetMaxSen': budget?.maxSen,
     if (budget?.hourly == true) 'hourly': true,
-    if (lotId != null) 'lotId': lotId,
-    if (startsAfterIndex != null) 'startsAfterIndex': startsAfterIndex,
-    if (gapDays != null) 'gapDays': gapDays,
+    if (photoIndexes.isNotEmpty) 'photoIndexes': photoIndexes,
   };
 }

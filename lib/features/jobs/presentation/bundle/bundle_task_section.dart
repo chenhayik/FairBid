@@ -6,7 +6,7 @@ import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 import '../widgets/status_colors.dart';
 
-/// A task's title and category, shared by both list variants below.
+/// A task's title and category, used by the task status list below.
 Widget _taskHeader(BuildContext context, Job task) {
   final theme = Theme.of(context);
   return Column(
@@ -25,7 +25,7 @@ Widget _taskHeader(BuildContext context, Job task) {
 
 /// A name-and-amount row: the name on the left, ellipsised, and the RM
 /// figure fixed on the right so it never wraps - used for every price line
-/// on the bundle screen (task bids, award rows, dropdown items).
+/// on the bundle screen (pick rows, award rows).
 class PriceRow extends StatelessWidget {
   const PriceRow({
     super.key,
@@ -63,53 +63,27 @@ class PriceRow extends StatelessWidget {
   }
 }
 
-/// The bundle's tasks while bidding is still open: each with a compact list
-/// of who bid on it. The full detail (message, duration, all-or-nothing…)
-/// lives in the Bids section instead, so this stays a quick scan.
-class BundleOpenTaskList extends StatelessWidget {
-  const BundleOpenTaskList({
+/// Just the bundle's tasks (title and category), for an open bundle with
+/// nothing to pick from yet - no bids, or bidding has closed.
+class BundleTaskList extends StatelessWidget {
+  const BundleTaskList({
     super.key,
     required this.tasks,
-    required this.bids,
     required this.onOpenTask,
   });
 
   final List<Job> tasks;
-  final List<BundleBid> bids;
   final ValueChanged<Job> onOpenTask;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final task in tasks) ...[
           AppCard(
             onTap: () => onOpenTask(task),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _taskHeader(context, task),
-                const SizedBox(height: 8),
-                for (final bid in bids.where((b) => b.coversTask(task.id)))
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: PriceRow(
-                      name: bid.providerName,
-                      amountSen: bid.priceFor(task.id)!,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ),
-                if (!bids.any((b) => b.coversTask(task.id)))
-                  Text(
-                    'No bids on this task',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-              ],
-            ),
+            child: _taskHeader(context, task),
           ),
           const SizedBox(height: 12),
         ],
@@ -118,22 +92,44 @@ class BundleOpenTaskList extends StatelessWidget {
   }
 }
 
-/// The bundle's tasks once bidding no longer decides them (awarded,
-/// cancelled or expired): each task's own status pill plus who won it, or
-/// why it didn't get awarded.
+/// The bundle's tasks once bidding is over: one compact card per task with
+/// its price, category, status and winner.
 class BundleTaskStatusList extends StatelessWidget {
   const BundleTaskStatusList({
     super.key,
     required this.tasks,
     required this.onOpenTask,
+    this.bids = const [],
   });
 
   final List<Job> tasks;
   final ValueChanged<Job> onOpenTask;
 
+  /// The bundle's bids, to show a task's own price beside a package price.
+  final List<BundleBid> bids;
+
+  /// The winner's price for [task] if hired for it alone, when that differs
+  /// from what the package deal split it to.
+  int? _alonePriceSen(Job task) {
+    // Released tasks are won by ordinary bids, and a later price change
+    // replaces the package price, so neither gets the note.
+    if (task.releasedAt != null || task.originalBidAmountSen != null) {
+      return null;
+    }
+    for (final bid in bids) {
+      if (bid.providerId != task.acceptedProviderId) continue;
+      final alone = bid.priceFor(task.id);
+      return alone != null && alone != task.acceptedBidAmountSen ? alone : null;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -146,31 +142,49 @@ class BundleTaskStatusList extends StatelessWidget {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: _taskHeader(context, task)),
-                    const SizedBox(width: 8),
-                    PillBadge(
-                      label: task.status.label,
-                      color: jobStatusColor(context, task.status),
+                    Expanded(
+                      child: Text(task.title,
+                          style: theme.textTheme.titleMedium),
                     ),
+                    if (task.acceptedBidAmountSen != null) ...[
+                      const SizedBox(width: 8),
+                      Text(formatRm(task.acceptedBidAmountSen!),
+                          style: theme.textTheme.titleMedium),
+                    ],
                   ],
                 ),
-                const SizedBox(height: 8),
-                if (task.acceptedProviderName != null &&
-                    task.acceptedBidAmountSen != null)
-                  PriceRow(
-                    name: task.acceptedProviderName!,
-                    amountSen: task.acceptedBidAmountSen!,
-                    style: theme.textTheme.bodyMedium,
-                  )
-                else
-                  Text(
-                    task.releasedAt != null
-                        ? 'Released to ordinary bidding'
-                        : 'Not awarded',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                const SizedBox(height: 4),
+                // Category, status and winner share one line.
+                Text.rich(
+                  TextSpan(
+                    style: muted,
+                    children: [
+                      TextSpan(text: '${task.category}  •  '),
+                      TextSpan(
+                        text: task.status.label,
+                        style: TextStyle(
+                          color: jobStatusColor(context, task.status),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      TextSpan(
+                        text: task.acceptedProviderName != null
+                            ? '  •  ${task.acceptedProviderName}'
+                            : task.releasedAt != null
+                            ? '  •  Released to ordinary bidding'
+                            : '  •  Not awarded',
+                      ),
+                    ],
                   ),
+                ),
+                if (_alonePriceSen(task) case final alone?) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Package deal price. ${formatRm(alone)} if hired '
+                    'for this task alone.',
+                    style: muted,
+                  ),
+                ],
               ],
             ),
           ),

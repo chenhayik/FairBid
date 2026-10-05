@@ -18,9 +18,15 @@ abstract interface class DisputeRepository {
     List<String> evidenceUrls = const [],
   });
 
-  /// Admin ruling: pays the escrowed amount to the provider (`release`) or
-  /// back to the requestor (`refund`), closing the dispute (the
-  /// `resolveDispute` function).
+  /// The raiser withdraws their open dispute; the milestone goes back to
+  /// where it was (the `withdrawDispute` function).
+  Future<void> withdrawDispute({
+    required String jobId,
+    required String milestoneId,
+  });
+
+  /// Admin ruling: pay the provider (`release`), or refund the client and
+  /// end the job (`refund`) - the `resolveDispute` function.
   Future<void> resolveDispute({
     required String disputeId,
     required DisputeResolution resolution,
@@ -54,6 +60,17 @@ class FirestoreDisputeRepository implements DisputeRepository {
       'milestoneId': milestoneId,
       'statement': statement,
       'evidenceUrls': evidenceUrls,
+    });
+  }
+
+  @override
+  Future<void> withdrawDispute({
+    required String jobId,
+    required String milestoneId,
+  }) async {
+    await _functions.httpsCallable('withdrawDispute').call<void>({
+      'jobId': jobId,
+      'milestoneId': milestoneId,
     });
   }
 

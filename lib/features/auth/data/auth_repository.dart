@@ -666,8 +666,10 @@ class FirebaseAuthRepository implements AuthRepository {
       trustScore: (data?['trustScore'] as num?)?.toInt() ?? 0,
       phone: (payoutData?['phone'] ?? data?['phone']) as String?,
       location: data?['location'] as String?,
-      baseLat: (data?['baseLat'] as num?)?.toDouble(),
-      baseLng: (data?['baseLng'] as num?)?.toDouble(),
+      // A provider who never picked a base in the feed still has the service
+      // location from onboarding, so "Jobs near you" works from day one.
+      baseLat: ((data?['baseLat'] ?? onboarding?['lat']) as num?)?.toDouble(),
+      baseLng: ((data?['baseLng'] ?? onboarding?['lng']) as num?)?.toDouble(),
       baseAddress: data?['baseAddress'] as String?,
       baseDistrictCode: data?['baseDistrictCode'] as String?,
       baseTown: data?['baseTown'] as String?,

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../onboarding/domain/face_box.dart';
+import '../../onboarding/domain/id_extract.dart';
 import '../domain/pending_verification.dart';
 
 /// Reads the admin verification queue and records approve/reject decisions.
@@ -11,8 +13,13 @@ abstract interface class VerificationRepository {
 
   /// Loads the applicant's sensitive identity photos (ID, selfie, or the
   /// requestor's ID/SSM document) from their owner+admin-only private doc, for
-  /// the review gallery. Returns an empty list when none are present.
+  /// the review gallery (the ID and selfie carry their detected face box).
+  /// Returns an empty list when none are present.
   Future<List<VerificationDocument>> loadIdentityDocuments(String uid);
+
+  /// The automated MyKad check for [uid] (private `idExtract` doc), or null
+  /// when none has run yet.
+  Future<IdExtract?> loadIdExtract(String uid);
 
   /// Records the admin's decision: flips `verificationStatus` to
   /// `approved`/`rejected`, stamps `reviewedAt`, and (on reject) stores the
@@ -104,18 +111,31 @@ class FirestoreVerificationRepository implements VerificationRepository {
         .data();
     if (data == null) return const [];
     final docs = <VerificationDocument>[];
-    void add(String label, String? url) {
+    void add(String label, String? url, [String? boxField]) {
       if (url != null && url.isNotEmpty) {
-        docs.add(VerificationDocument(label: label, url: url));
+        final box = data[boxField];
+        docs.add(VerificationDocument(
+          label: label,
+          url: url,
+          faceBox: FaceBox.fromMap(
+              box is Map ? Map<String, dynamic>.from(box) : null),
+        ));
       }
     }
 
-    add('Identity Document', data['idDocumentUrl'] as String?);
-    add('Selfie', data['selfieUrl'] as String?);
+    add(VerificationDocument.idLabel, data['idDocumentUrl'] as String?,
+        'idFaceBox');
+    add(VerificationDocument.selfieLabel, data['selfieUrl'] as String?,
+        'selfieFaceBox');
     add('Identity / SSM Document', data['clientDocumentUrl'] as String?);
     add('SSM Document', data['ssmDocumentUrl'] as String?);
     return docs;
   }
+
+  @override
+  Future<IdExtract?> loadIdExtract(String uid) async => IdExtract.fromMap(
+      (await _users.doc(uid).collection('private').doc('idExtract').get())
+          .data());
 
   @override
   Future<void> decide({

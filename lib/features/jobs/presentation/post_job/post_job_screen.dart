@@ -8,7 +8,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/config/platform_config.dart';
-import '../../../../core/util/bundle_templates.dart';
 import '../../../../core/util/service_categories.dart';
 import '../../../../core/location/address_hint.dart';
 import '../../../../core/location/region.dart';
@@ -64,7 +63,6 @@ class _PostJobViewState extends State<_PostJobView> {
   final _address = TextEditingController();
   final _budgetMin = TextEditingController();
   final _budgetMax = TextEditingController();
-  bool _hourly = false;
   DateTime? _deadline;
 
   /// Task 1's own field keys, so a failed submit can find and scroll to the
@@ -85,15 +83,12 @@ class _PostJobViewState extends State<_PostJobView> {
 
   bool get _isBundle => _extraTasks.isNotEmpty;
 
-  /// Task 1's template-derived lot/dependency, set only by "Start from a
-  /// template" and dropped together by "Clear template" - never by hand.
-  String? _task1LotId;
-  int? _task1StartsAfterIndex;
-  int? _task1GapDays;
+  /// Bundle photo url -> the tasks it shows (task 1's tag or a [_TaskFields]).
+  /// A photo with no tasks shows on every task.
+  final Map<String, Set<Object>> _photoTasks = {};
+  static const _task1Tag = 'task1';
 
-  /// True once a template has filled the tasks below, until "Clear
-  /// template" - drives that action and each task card's dependency note.
-  bool _templateApplied = false;
+  List<Object> get _taskTags => [_task1Tag, ..._extraTasks];
 
   /// True while the location shown is still the requestor's saved default
   /// (from onboarding) and hasn't been overridden by picking a new one.
@@ -228,145 +223,75 @@ class _PostJobViewState extends State<_PostJobView> {
     });
   }
 
-  void _removeTask(int index) =>
-      setState(() => _extraTasks.removeAt(index).dispose());
+  void _removeTask(int index) {
+    setState(() {
+      final removed = _extraTasks.removeAt(index);
+      for (final tags in _photoTasks.values) {
+        tags.remove(removed);
+      }
+      removed.dispose();
+    });
+    _syncAssistPhotos();
+  }
 
-  /// Whether the requestor has typed anything into task 1 or the extra tasks
-  /// already - the "Replace your tasks with this template?" confirmation
-  /// only fires when there's something to lose.
-  bool get _hasTaskContent =>
-      _title.text.trim().isNotEmpty ||
-      _description.text.trim().isNotEmpty ||
-      context.read<PostJobController>().category != null ||
-      _extraTasks.isNotEmpty;
+  /// "All tasks", or the task numbers a bundle photo is tagged with.
+  String _photoLabel(String url) {
+    final tags = _photoTasks[url] ?? const {};
+    final numbers = [
+      for (final (i, tag) in _taskTags.indexed)
+        if (tags.contains(tag)) i + 1,
+    ];
+    return numbers.isEmpty ? 'All tasks' : 'Task ${numbers.join(', ')}';
+  }
 
-  /// Opens the template picker, then - only once a template is actually
-  /// picked, and only if it would overwrite typed content - confirms before
-  /// applying it. Confirming after picking (not before opening the sheet)
-  /// means browsing templates never interrupts the requestor with a dialog
-  /// they may not even need.
-  Future<void> _pickTemplate() async {
-    final template = await showModalBottomSheet<BundleTemplate>(
+  /// Positions in [urls] of the photos tagged with [tag].
+  List<int> _photoIndexesFor(Object tag, List<String> urls) => [
+    for (final (i, url) in urls.indexed)
+      if (_photoTasks[url]?.contains(tag) ?? false) i,
+  ];
+
+  /// Tells the AI assists which photos don't show task 1.
+  void _syncAssistPhotos() {
+    context.read<PostJobController>().skipForAssist = {
+      for (final MapEntry(key: url, value: tags) in _photoTasks.entries)
+        if (tags.isNotEmpty && !tags.contains(_task1Tag)) url,
+    };
+  }
+
+  void _removePhoto(String url) {
+    context.read<PostJobController>().removePhoto(url);
+    _photoTasks.remove(url);
+    _syncAssistPhotos();
+  }
+
+  Future<void> _pickPhotoTasks(String url) async {
+    // Otherwise closing the sheet re-focuses the last text field.
+    FocusScope.of(context).unfocus();
+    final tags = _taskTags;
+    final current = _photoTasks[url] ?? const {};
+    final picked = await showModalBottomSheet<Set<int>>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => const _TemplateSheet(),
+      builder: (_) => _PhotoTasksSheet(
+        taskTitles: [for (var i = 0; i < tags.length; i++) _taskTitle(i)],
+        selected: {
+          for (final (i, tag) in tags.indexed)
+            if (current.contains(tag)) i,
+        },
+      ),
     );
-    if (template == null || !mounted) return;
-    if (_hasTaskContent) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Replace your tasks with this template?'),
-          content: const Text(
-              'The tasks you\'ve typed so far will be replaced.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Replace'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-    }
-    _applyTemplate(template);
+    if (picked == null || !mounted) return;
+    setState(() => _photoTasks[url] = {for (final i in picked) tags[i]});
+    _syncAssistPhotos();
   }
 
-  /// Replaces task 1 and every extra task with [template]'s tasks (blank
-  /// descriptions, for the requestor to fill in); lot/dependency carries over.
-  void _applyTemplate(BundleTemplate template) {
-    for (final task in _extraTasks) {
-      task.dispose();
-    }
-    final first = template.tasks.first;
-    context.read<PostJobController>().setCategory(first.category);
-    setState(() {
-      _extraTasks.clear();
-      _title.text = first.title;
-      _task1LotId = first.lotId;
-      _task1StartsAfterIndex = first.startsAfter;
-      _task1GapDays = first.gapDays;
-      for (final t in template.tasks.skip(1)) {
-        _extraTasks.add(_TaskFields()
-          ..title.text = t.title
-          ..category = t.category
-          ..lotId = t.lotId
-          ..startsAfterIndex = t.startsAfter
-          ..gapDays = t.gapDays
-          ..fromTemplate = true);
-      }
-      if (_postingTitle.text.trim().isEmpty) {
-        _postingTitle.text = template.name;
-      }
-      _templateApplied = true;
-    });
-  }
-
-  /// Drops every task's lot/dependency link, so the requestor can freely
-  /// remove tasks again. The tasks themselves - titles, categories - stay.
-  void _clearTemplate() {
-    setState(() {
-      _task1LotId = null;
-      _task1StartsAfterIndex = null;
-      _task1GapDays = null;
-      for (final task in _extraTasks) {
-        task.lotId = null;
-        task.startsAfterIndex = null;
-        task.gapDays = null;
-        task.fromTemplate = false;
-      }
-      _templateApplied = false;
-    });
-  }
-
-  /// The title of the task at [index] in the whole task list (0 = task 1),
-  /// for the "Starts after ..." / "Same provider as ..." notes.
-  String _titleAt(int index) {
-    final title =
-        index == 0 ? _title.text.trim() : _extraTasks[index - 1].title.text.trim();
-    return title.isEmpty ? 'Task ${index + 1}' : title;
-  }
-
-  /// The other tasks sharing [lotId], by title, excluding the task at
-  /// [myIndex] itself.
-  List<String> _lotPartnerTitles(String lotId, int myIndex) {
-    final titles = <String>[];
-    if (myIndex != 0 && _task1LotId == lotId) titles.add(_titleAt(0));
-    for (var i = 0; i < _extraTasks.length; i++) {
-      if (myIndex != i + 1 && _extraTasks[i].lotId == lotId) {
-        titles.add(_titleAt(i + 1));
-      }
-    }
-    return titles;
-  }
-
-  /// The read-only dependency note shown under the task at [myIndex], or
-  /// null when it carries no template link.
-  String? _dependencyNote({
-    required int myIndex,
-    String? lotId,
-    int? startsAfterIndex,
-    int? gapDays,
-  }) {
-    final lines = <String>[];
-    if (startsAfterIndex != null) {
-      final after = _titleAt(startsAfterIndex);
-      lines.add(gapDays != null && gapDays > 0
-          ? 'Starts after $after, $gapDays day${gapDays == 1 ? '' : 's'} later'
-          : 'Starts after $after');
-    }
-    if (lotId != null) {
-      final partners = _lotPartnerTitles(lotId, myIndex);
-      if (partners.isNotEmpty) {
-        lines.add('Linked with ${partners.join(', ')} (same provider)');
-      }
-    }
-    return lines.isEmpty ? null : lines.join('\n');
+  /// "Task 2: Re-tile the wall", or just "Task 2" before it has a title.
+  String _taskTitle(int index) {
+    final title = (index == 0 ? _title : _extraTasks[index - 1].title)
+        .text
+        .trim();
+    return title.isEmpty ? 'Task ${index + 1}' : 'Task ${index + 1}: $title';
   }
 
   /// The posting summary to send when the requestor leaves it blank: the
@@ -409,6 +334,37 @@ class _PostJobViewState extends State<_PostJobView> {
     _snack('Some fields need attention');
   }
 
+  /// Soft check before posting with no photo or video: true to post anyway.
+  /// "Add a photo" opens the picker instead and cancels this submit.
+  Future<bool> _confirmNoMedia() async {
+    final postAnyway = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Post without photos?'),
+        content: const Text(
+          'Photos or a video help providers understand the job and quote '
+          'accurately. They are also useful evidence if anything goes wrong '
+          'later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Post anyway'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Add a photo'),
+          ),
+        ],
+      ),
+    );
+    if (postAnyway == false && mounted) {
+      final uid = context.read<AuthController>().user?.uid ?? '';
+      unawaited(context.read<PostJobController>().addPhoto(uid));
+    }
+    return postAnyway == true;
+  }
+
   Future<void> _submit() async {
     final controller = context.read<PostJobController>();
     final auth = context.read<AuthController>();
@@ -420,6 +376,11 @@ class _PostJobViewState extends State<_PostJobView> {
       _snack('Please pick a location on the map.');
       return;
     }
+    // A bundle never posts its video, so only photos count there.
+    final hasMedia = controller.photoUrls.isNotEmpty ||
+        (!_isBundle && controller.videoUrl != null);
+    if (!hasMedia && !await _confirmNoMedia()) return;
+    if (!mounted) return;
     final user = auth.user!;
     final location = JobLocation(
       lat: controller.location!.lat,
@@ -447,7 +408,6 @@ class _PostJobViewState extends State<_PostJobView> {
       budget: JobBudget(
         minSen: parseRmToSen(_budgetMin.text),
         maxSen: parseRmToSen(_budgetMax.text),
-        hourly: _hourly,
       ),
       photoUrls: List.of(controller.photoUrls),
       videoUrl: controller.videoUrl,
@@ -466,6 +426,7 @@ class _PostJobViewState extends State<_PostJobView> {
   Future<void> _submitBundle(
       PostJobController controller, JobLocation location) async {
     final summary = _postingSummary.text.trim();
+    final photos = controller.photoUrls;
     final id = await controller.submitBundle(
       title: _postingTitle.text.trim(),
       description: summary.isEmpty ? _composedSummary() : summary,
@@ -479,11 +440,8 @@ class _PostJobViewState extends State<_PostJobView> {
           budget: JobBudget(
             minSen: parseRmToSen(_budgetMin.text),
             maxSen: parseRmToSen(_budgetMax.text),
-            hourly: _hourly,
           ),
-          lotId: _task1LotId,
-          startsAfterIndex: _task1StartsAfterIndex,
-          gapDays: _task1GapDays,
+          photoIndexes: _photoIndexesFor(_task1Tag, photos),
         ),
         for (final task in _extraTasks)
           BundleTaskDraft(
@@ -493,11 +451,8 @@ class _PostJobViewState extends State<_PostJobView> {
             budget: JobBudget(
               minSen: parseRmToSen(task.budgetMin.text),
               maxSen: parseRmToSen(task.budgetMax.text),
-              hourly: task.hourly,
             ),
-            lotId: task.lotId,
-            startsAfterIndex: task.startsAfterIndex,
-            gapDays: task.gapDays,
+            photoIndexes: _photoIndexesFor(task, photos),
           ),
       ],
     );
@@ -642,14 +597,6 @@ class _PostJobViewState extends State<_PostJobView> {
         onChanged: controller.setCategory,
         validator: (v) => v == null ? 'Pick a category.' : null,
       ),
-      if (_dependencyNote(
-            myIndex: 0,
-            lotId: _task1LotId,
-            startsAfterIndex: _task1StartsAfterIndex,
-            gapDays: _task1GapDays,
-          )
-          case final note?)
-        _DependencyNote(text: note),
       const SizedBox(height: 16),
       AppTextField(
         fieldKey: _task1TitleKey,
@@ -745,8 +692,6 @@ class _PostJobViewState extends State<_PostJobView> {
                           controller: controller,
                           budgetMin: _budgetMin,
                           budgetMax: _budgetMax,
-                          hourly: _hourly,
-                          onHourly: (v) => setState(() => _hourly = v),
                           onSuggestPrice:
                               controller.isBusy ? null : _suggestPrice,
                         ),
@@ -765,38 +710,11 @@ class _PostJobViewState extends State<_PostJobView> {
                     key: _extraTasks[i].key,
                     number: i + 2,
                     fields: _extraTasks[i],
-                    onRemove:
-                        _extraTasks[i].fromTemplate ? null : () => _removeTask(i),
-                    lockedByTemplate: _extraTasks[i].fromTemplate,
+                    onRemove: () => _removeTask(i),
                     onCategory: (v) =>
                         setState(() => _extraTasks[i].category = v),
-                    onHourly: (v) =>
-                        setState(() => _extraTasks[i].hourly = v),
-                    note: _dependencyNote(
-                      myIndex: i + 1,
-                      lotId: _extraTasks[i].lotId,
-                      startsAfterIndex: _extraTasks[i].startsAfterIndex,
-                      gapDays: _extraTasks[i].gapDays,
-                    ),
                   ),
                 const SizedBox(height: 8),
-                // Wrap, not Row: at larger text scales the two buttons no
-                // longer fit on one line.
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    TextButton.icon(
-                      onPressed: controller.isBusy ? null : _pickTemplate,
-                      icon: const Icon(Icons.checklist_rtl),
-                      label: const Text('Start from a template'),
-                    ),
-                    if (_templateApplied)
-                      TextButton(
-                        onPressed: controller.isBusy ? null : _clearTemplate,
-                        child: const Text('Clear template'),
-                      ),
-                  ],
-                ),
                 if (_extraTasks.length + 1 < PlatformConfig.maxBundleTasks)
                   Row(
                     children: [
@@ -832,8 +750,8 @@ class _PostJobViewState extends State<_PostJobView> {
                     padding: const EdgeInsets.only(top: 4, left: 4),
                     child: Text(
                       'Providers bid on the tasks they can do, as one package. '
-                      'The location, photos and deadline below are shared by '
-                      'every task.',
+                      'The location and deadline below are shared by every '
+                      'task.',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
@@ -859,7 +777,9 @@ class _PostJobViewState extends State<_PostJobView> {
                       for (final url in controller.photoUrls)
                         _PhotoThumb(
                           url: url,
-                          onRemove: () => controller.removePhoto(url),
+                          onRemove: () => _removePhoto(url),
+                          tagLabel: _isBundle ? _photoLabel(url) : null,
+                          onTag: () => _pickPhotoTasks(url),
                         ),
                     ],
                   ),
@@ -893,8 +813,9 @@ class _PostJobViewState extends State<_PostJobView> {
                 ] else ...[
                   const SizedBox(height: 12),
                   Text(
-                    'These photos are shared by every task. A bundled posting '
-                    'carries no video.',
+                    "Tap a photo's label to choose which tasks it shows. "
+                    'Untagged photos show on every task. A bundle has no '
+                    'video.',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
@@ -960,7 +881,7 @@ class _PostJobViewState extends State<_PostJobView> {
                 // heading names just that rather than "budget" too.
                 const SizedBox(height: 24),
                 _SectionHeader(
-                  _isBundle ? 'Deadline (shared)' : 'When & budget (optional)',
+                  _isBundle ? 'Deadline (shared)' : 'When & price (optional)',
                 ),
                 const SizedBox(height: 12),
                 _DeadlineField(
@@ -974,8 +895,6 @@ class _PostJobViewState extends State<_PostJobView> {
                     controller: controller,
                     budgetMin: _budgetMin,
                     budgetMax: _budgetMax,
-                    hourly: _hourly,
-                    onHourly: (v) => setState(() => _hourly = v),
                     onSuggestPrice: controller.isBusy ? null : _suggestPrice,
                   ),
                 ],
@@ -1156,67 +1075,6 @@ class _DraftSheetState extends State<_DraftSheet> {
   }
 }
 
-/// Lists [kBundleTemplates] for the requestor to start from; picking one
-/// pops it back to `_pickTemplate`.
-class _TemplateSheet extends StatelessWidget {
-  const _TemplateSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // isScrollControlled + a scrollable body (not a fixed Padding/Column) so
-    // the list of templates never overflows at larger text scales.
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Start from a template', style: theme.textTheme.headlineMedium),
-          const SizedBox(height: 8),
-          for (final template in kBundleTemplates)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(template.name),
-              subtitle: Text(
-                template.tasks.map((t) => t.title).join(' · '),
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).pop(template),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A read-only note under a task card, for the template-derived dependency/
-/// lot links `_PostJobViewState._dependencyNote` computes.
-class _DependencyNote extends StatelessWidget {
-  const _DependencyNote({required this.text});
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.link, size: 14, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(text,
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// The controllers behind one added task, kept in a class so adding/removing
 /// a task is a single list operation and every field is disposed with it.
 class _TaskFields {
@@ -1228,23 +1086,12 @@ class _TaskFields {
   final budgetMin = TextEditingController();
   final budgetMax = TextEditingController();
   String? category;
-  bool hourly = false;
 
   /// Field keys, so a failed submit can find and scroll to the first one
   /// with an error.
   final categoryKey = GlobalKey<FormFieldState<String>>();
   final titleKey = GlobalKey<FormFieldState<String>>();
   final descriptionKey = GlobalKey<FormFieldState<String>>();
-
-  /// Template-derived, read-only lot/dependency links - see
-  /// `_PostJobViewState._applyTemplate`/`_clearTemplate`.
-  String? lotId;
-  int? startsAfterIndex;
-  int? gapDays;
-
-  /// True while this task still carries its template's links - hides the
-  /// remove button, since deleting it would break a link or split a lot.
-  bool fromTemplate = false;
 
   void dispose() {
     title.dispose();
@@ -1255,8 +1102,7 @@ class _TaskFields {
 }
 
 /// One added task of a bundled posting ("Task 2" on, since Task 1 uses the
-/// form's own fields). Lots/dependencies are read-only in v1 - only ever
-/// from a template ([note]) - so [onRemove] is null on a linked task.
+/// form's own fields).
 class _TaskCard extends StatelessWidget {
   const _TaskCard({
     super.key,
@@ -1264,22 +1110,12 @@ class _TaskCard extends StatelessWidget {
     required this.fields,
     required this.onRemove,
     required this.onCategory,
-    required this.onHourly,
-    this.note,
-    this.lockedByTemplate = false,
   });
 
   final int number;
   final _TaskFields fields;
-  final VoidCallback? onRemove;
+  final VoidCallback onRemove;
   final ValueChanged<String?> onCategory;
-  final ValueChanged<bool> onHourly;
-  final String? note;
-
-  /// True while this task still carries a template's lot/dependency link -
-  /// its remove button is shown disabled, rather than hidden, so it's clear
-  /// why it can't be tapped.
-  final bool lockedByTemplate;
 
   @override
   Widget build(BuildContext context) {
@@ -1296,15 +1132,7 @@ class _TaskCard extends StatelessWidget {
                   child: Text('Task $number',
                       style: theme.textTheme.titleMedium),
                 ),
-                if (lockedByTemplate)
-                  IconButton(
-                    tooltip: 'Linked by the template. Tap Clear template to '
-                        'remove it.',
-                    icon: const Icon(Icons.close),
-                    onPressed: null,
-                  )
-                else if (onRemove != null)
-                  IconButton(
+                IconButton(
                     tooltip: 'Remove task $number',
                     icon: const Icon(Icons.close),
                     onPressed: onRemove,
@@ -1326,7 +1154,6 @@ class _TaskCard extends StatelessWidget {
               onChanged: onCategory,
               validator: (v) => v == null ? 'Pick a category.' : null,
             ),
-            if (note != null) _DependencyNote(text: note!),
             const SizedBox(height: 16),
             AppTextField(
               fieldKey: fields.titleKey,
@@ -1344,12 +1171,15 @@ class _TaskCard extends StatelessWidget {
               maxLines: 4,
               validator: (v) => Validators.required(v, 'Description'),
             ),
+            Text('Likely price range (optional)',
+                style: theme.textTheme.labelLarge),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
                   child: AppTextField(
                     controller: fields.budgetMin,
-                    label: 'Min (RM)',
+                    label: 'From (RM)',
                     hint: '0.00',
                     prefixText: 'RM ',
                     keyboardType:
@@ -1360,7 +1190,7 @@ class _TaskCard extends StatelessWidget {
                 Expanded(
                   child: AppTextField(
                     controller: fields.budgetMax,
-                    label: 'Max (RM)',
+                    label: 'To (RM)',
                     hint: '0.00',
                     prefixText: 'RM ',
                     keyboardType:
@@ -1368,12 +1198,6 @@ class _TaskCard extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Hourly rate'),
-              value: fields.hourly,
-              onChanged: onHourly,
             ),
           ],
         ),
@@ -1536,26 +1360,19 @@ class _AddressField extends StatelessWidget {
   }
 }
 
-/// Budget fields for the "When & budget" group: the min/max RM inputs, the
-/// hourly-rate switch and the "Suggest a fair range" assist with its
-/// "Use this" shortcut. Split out of the old always-collapsed
-/// `_OptionalDetails` now that photos live in their own group and budget is
-/// always visible.
+/// The likely price range: from/to RM inputs plus the "Suggest a fair range"
+/// assist with its "Use this" shortcut.
 class _BudgetFields extends StatelessWidget {
   const _BudgetFields({
     required this.controller,
     required this.budgetMin,
     required this.budgetMax,
-    required this.hourly,
-    required this.onHourly,
     required this.onSuggestPrice,
   });
 
   final PostJobController controller;
   final TextEditingController budgetMin;
   final TextEditingController budgetMax;
-  final bool hourly;
-  final ValueChanged<bool> onHourly;
   final VoidCallback? onSuggestPrice;
 
   /// Sen → an editable field value, e.g. 12050 → "120.50".
@@ -1576,7 +1393,7 @@ class _BudgetFields extends StatelessWidget {
           alignment: WrapAlignment.spaceBetween,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Text('Budget', style: theme.textTheme.labelLarge),
+            Text('Likely price range', style: theme.textTheme.labelLarge),
             _AssistButton(
               label: 'Suggest a fair range',
               busy: controller.assistingPrice,
@@ -1610,7 +1427,7 @@ class _BudgetFields extends StatelessWidget {
             Expanded(
               child: AppTextField(
                 controller: budgetMin,
-                label: 'Min (RM)',
+                label: 'From (RM)',
                 hint: '0.00',
                 prefixText: 'RM ',
                 keyboardType:
@@ -1621,7 +1438,7 @@ class _BudgetFields extends StatelessWidget {
             Expanded(
               child: AppTextField(
                 controller: budgetMax,
-                label: 'Max (RM)',
+                label: 'To (RM)',
                 hint: '0.00',
                 prefixText: 'RM ',
                 keyboardType:
@@ -1629,12 +1446,6 @@ class _BudgetFields extends StatelessWidget {
               ),
             ),
           ],
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Hourly rate'),
-          value: hourly,
-          onChanged: onHourly,
         ),
       ],
     );
@@ -1712,15 +1523,75 @@ class _AssistButton extends StatelessWidget {
   }
 }
 
-class _PhotoThumb extends StatelessWidget {
-  const _PhotoThumb({required this.url, required this.onRemove});
-  final String url;
-  final VoidCallback onRemove;
+/// Lets the requestor tick which bundle tasks a photo shows; none = all.
+class _PhotoTasksSheet extends StatefulWidget {
+  const _PhotoTasksSheet({required this.taskTitles, required this.selected});
+  final List<String> taskTitles;
+  final Set<int> selected;
+
+  @override
+  State<_PhotoTasksSheet> createState() => _PhotoTasksSheetState();
+}
+
+class _PhotoTasksSheetState extends State<_PhotoTasksSheet> {
+  late final Set<int> _picked = {...widget.selected};
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Stack(
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Which tasks does this photo show?',
+              style: theme.textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(
+            'Leave all unticked to show it on every task.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          for (final (i, title) in widget.taskTitles.indexed)
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              value: _picked.contains(i),
+              title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
+              onChanged: (on) => setState(
+                  () => on == true ? _picked.add(i) : _picked.remove(i)),
+            ),
+          const SizedBox(height: 8),
+          PrimaryButton(
+            label: 'Done',
+            onPressed: () => Navigator.of(context).pop(_picked),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoThumb extends StatelessWidget {
+  const _PhotoThumb({
+    required this.url,
+    required this.onRemove,
+    this.tagLabel,
+    this.onTag,
+  });
+  final String url;
+  final VoidCallback onRemove;
+
+  /// Bundle mode only: which tasks the photo shows, tappable to change.
+  final String? tagLabel;
+  final VoidCallback? onTag;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final thumb = Stack(
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
@@ -1781,6 +1652,30 @@ class _PhotoThumb extends StatelessWidget {
           ),
         ),
       ],
+    );
+    if (tagLabel == null) return thumb;
+    return SizedBox(
+      width: 80,
+      child: Column(
+        children: [
+          thumb,
+          TextButton.icon(
+            onPressed: onTag,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              minimumSize: const Size(80, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              textStyle: theme.textTheme.labelSmall,
+            ),
+            icon: const Icon(Icons.sell_outlined, size: 14),
+            label: Text(
+              tagLabel!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

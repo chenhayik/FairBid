@@ -41,6 +41,10 @@ class ProposeMilestonesSheet extends StatefulWidget {
 
 /// One editable milestone row's text controllers.
 class _RowControllers {
+  _RowControllers({this.locked = false});
+
+  /// A funded (or later) milestone: shown read-only, resent unchanged.
+  final bool locked;
   final description = TextEditingController();
   final amount = TextEditingController();
 
@@ -56,6 +60,15 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
   bool _busy = false;
   String? _error;
 
+  static const _lockedStatuses = {
+    MilestoneStatus.funded,
+    MilestoneStatus.submitted,
+    MilestoneStatus.disputed,
+    MilestoneStatus.released,
+    MilestoneStatus.resolved,
+    MilestoneStatus.refunded,
+  };
+
   bool get _isAmend => (widget.existing?.isNotEmpty ?? false);
 
   @override
@@ -66,12 +79,19 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
     if (existing.isEmpty) {
       _rows = [_RowControllers()];
     } else {
-      _rows = [
-        for (final m in existing)
-          _RowControllers()
+      // Rows sit at index == order (the server matches locked milestones by
+      // `m${order}`), so blank rows fill any gap left by deleted ones.
+      _rows = [];
+      for (final m in existing) {
+        while (_rows.length < m.order) {
+          _rows.add(_RowControllers());
+        }
+        _rows.add(
+          _RowControllers(locked: _lockedStatuses.contains(m.status))
             ..description.text = m.description
             ..amount.text = (m.amountSen / 100).toStringAsFixed(2),
-      ];
+        );
+      }
     }
   }
 
@@ -94,6 +114,17 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
           'Milestone amounts must add up to the accepted bid of '
           '${formatRm(targetSen)} (currently ${formatRm(_totalSen)}).');
       return;
+    }
+    final lockedOrders = {
+      for (final m in widget.existing ?? <Milestone>[])
+        if (_lockedStatuses.contains(m.status)) m.order,
+    };
+    for (final (i, row) in _rows.indexed) {
+      if (row.locked && !lockedOrders.contains(i)) {
+        setState(() => _error =
+            'Funded milestones must stay in their original position.');
+        return;
+      }
     }
     final repo = context.read<MilestoneRepository>();
     setState(() {
@@ -190,6 +221,7 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
         Expanded(
           flex: 3,
           child: AppTextField(
+            enabled: !row.locked,
             controller: row.description,
             label: 'Milestone ${index + 1}',
             hint: 'What will be delivered?',
@@ -200,6 +232,7 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
         Expanded(
           flex: 2,
           child: AppTextField(
+            enabled: !row.locked,
             controller: row.amount,
             label: 'Amount',
             hint: '0.00',
@@ -214,7 +247,9 @@ class _ProposeMilestonesSheetState extends State<ProposeMilestonesSheet> {
           ),
         ),
         // Keep at least one row; align the remove button with the fields.
-        if (_rows.length > 1)
+        if (_rows.length > 1 &&
+            !row.locked &&
+            index > _rows.lastIndexWhere((r) => r.locked))
           Padding(
             padding: const EdgeInsets.only(top: 28),
             child: IconButton(

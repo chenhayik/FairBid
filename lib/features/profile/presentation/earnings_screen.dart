@@ -495,6 +495,7 @@ class _TransactionRow extends StatelessWidget {
       LedgerType.release => Icons.handshake_outlined,
       LedgerType.topup => Icons.add_card_outlined,
       LedgerType.withdraw => Icons.account_balance_outlined,
+      LedgerType.refund => Icons.undo_rounded,
       LedgerType.disputeRelease ||
       LedgerType.disputeRefund =>
         Icons.gavel_rounded,

@@ -21,7 +21,6 @@ class SubmitBundleBidController extends ChangeNotifier {
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
-    bool allOrNothing = false,
     required String estimatedDuration,
     String message = '',
   }) async {
@@ -33,7 +32,6 @@ class SubmitBundleBidController extends ChangeNotifier {
         bundleId: bundleId,
         taskPrices: taskPrices,
         bundlePriceSen: bundlePriceSen,
-        allOrNothing: allOrNothing,
         estimatedDuration: estimatedDuration,
         message: message,
       );

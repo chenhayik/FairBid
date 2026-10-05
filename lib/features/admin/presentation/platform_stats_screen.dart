@@ -6,8 +6,7 @@ import '../../../core/widgets/app_widgets.dart';
 import '../data/stats_repository.dart';
 import '../domain/platform_stats.dart';
 
-/// Admin Home › Stats tab: the marketplace's headline numbers, loaded once
-/// via aggregation queries with pull-to-refresh.
+/// Admin Stats tab: the main numbers, loaded once. Pull down to refresh.
 class PlatformStatsScreen extends StatefulWidget {
   const PlatformStatsScreen({super.key});
 
@@ -31,8 +30,7 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
     await fresh;
   }
 
-  /// Runs the idempotent server-side Trust Score backfill/repair (recounts
-  /// completed jobs and lost disputes for every user).
+  /// Recounts every user's Trust Score on the server. Safe to run again.
   Future<void> _recomputeTrust() async {
     setState(() => _recomputing = true);
     try {
@@ -60,7 +58,7 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
         builder: (context, snapshot) {
           final stats = snapshot.data;
           return ListView(
-            // Always scrollable so pull-to-refresh works even when short.
+            // Always scrollable so pull-to-refresh works on short pages.
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(24),
             children: [
@@ -112,9 +110,7 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
   }
 }
 
-/// Lays out stat cells two to a row, each row's cards stretched to match the
-/// row's tallest card - unlike a plain `Wrap`, which let cards on the same
-/// row sit at their own, uneven heights whenever one label/value wrapped.
+/// Puts two stat cells in each row. Both cards in a row get the same height.
 class _CardGrid extends StatelessWidget {
   const _CardGrid({required this.cells});
 
@@ -140,8 +136,7 @@ class _CardGrid extends StatelessWidget {
                   child: StatCard(label: label, value: value, icon: icon),
                 ),
               ],
-              // An odd cell out on the last row keeps its column width
-              // rather than stretching to fill the row on its own.
+              // A single card on the last row keeps its normal width.
               if (rowCells.length < _columns) const Spacer(),
             ],
           ),
@@ -152,7 +147,7 @@ class _CardGrid extends StatelessWidget {
   }
 }
 
-/// Two-column grid of the count metrics.
+/// Two-column grid of the count numbers.
 class _StatGrid extends StatelessWidget {
   const _StatGrid({required this.stats});
 
@@ -182,9 +177,7 @@ class _StatGrid extends StatelessWidget {
   }
 }
 
-/// Bundle award metrics: two side by side, plus how many handover disputes
-/// followed. Kept off a plain 2-up grid - three cells in two columns leaves
-/// a visual hole - so the third card spans the full width instead.
+/// Bundle award numbers, side by side.
 class _BundleStatGrid extends StatelessWidget {
   const _BundleStatGrid({required this.stats});
 
@@ -193,27 +186,14 @@ class _BundleStatGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final splitPct = (stats.splitAwardRate * 100).toStringAsFixed(0);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _CardGrid(cells: [
-          (
-            'Bundles awarded',
-            formatCount(stats.bundlesAwarded),
-            Icons.inventory_2_outlined
-          ),
-          ('Split awards', '${formatCount(stats.splitAwards)} ($splitPct%)',
-              Icons.call_split),
-        ]),
-        const SizedBox(height: 12),
-        StatCard(
-          label: 'Handover disputes',
-          value: formatCount(stats.handoverDisputes),
-          // A distinct icon from "Open Disputes" above (the gavel) - this
-          // one is specifically about a handover, not any dispute.
-          icon: Icons.compare_arrows,
-        ),
-      ],
-    );
+    return _CardGrid(cells: [
+      (
+        'Bundles awarded',
+        formatCount(stats.bundlesAwarded),
+        Icons.inventory_2_outlined
+      ),
+      ('Split awards', '${formatCount(stats.splitAwards)} ($splitPct%)',
+          Icons.call_split),
+    ]);
   }
 }

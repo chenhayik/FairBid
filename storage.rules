@@ -4,28 +4,15 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // An admin is identified by their `role` on the Firestore user doc.
-    // Storage rules can cross-read Firestore, so we reuse the same source of
-    // truth as `firestore.rules` - no custom auth claim / backend needed.
+    // Admins are found by `role` on the Firestore user doc, like firestore.rules.
     function isAdmin() {
       return request.auth != null
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid))
              .data.role == 'admin';
     }
 
-    // Verification documents: ID photo, selfie, certificates, portfolio
-    // images. The owner may read and write their own files; an admin may read
-    // any of them so the in-app verification queue can display them for review.
-    // Images (ID, selfie, certificates, portfolio) plus PDF, for SSM
-    // documents downloaded straight from EzBiz/e-Info. The 10 MB cap matches
-    // the client-side check in `document_picker.dart`, so an oversized file is
-    // refused there with a message rather than here with an opaque 403.
-    //
-    // `contentType` is client-supplied metadata that Cloud Storage never
-    // sniffs, so this is an accident guard, NOT an authorisation boundary -
-    // the real file-type check is the magic-byte test in `extractSsmDocument`.
-    // The explicit null guard matters: `null.matches(...)` raises an
-    // evaluation error and denies the write with nothing to explain why.
+    // Verification files: owner reads/writes, admins read. Images or PDF, under 10 MB.
+    // `contentType` is client-set, so this is only an accident guard, not security.
     match /verification/{userId}/{allPaths=**} {
       allow read: if request.auth != null
                   && (request.auth.uid == userId || isAdmin());
@@ -38,11 +25,7 @@ service firebase.storage {
                        || request.resource.contentType.matches('image/.*'));
     }
 
-    // Job photos and the optional job video: readable by any signed-in user
-    // (providers browse jobs), writable only by the owner who posted them.
-    // Capped at 50 MB and restricted to image/video content types - the
-    // video path additionally enforces its own duration/size cap client-side
-    // (post_job_controller.dart) before it ever reaches here.
+    // Job photos/video: any signed-in user reads, only the owner writes (max 50 MB).
     match /jobs/{userId}/{allPaths=**} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
@@ -52,38 +35,14 @@ service firebase.storage {
                        || request.resource.contentType.matches('video/.*'));
     }
 
-    // Dispute photo evidence: the uploader writes their own files; the
-    // uploader and admins may read (the other party sees the images via the
-    // tokened download URLs on the dispute doc, like verification documents).
+    // Dispute photos: the uploader writes; the uploader and admins read.
     match /disputes/{userId}/{allPaths=**} {
       allow read: if request.auth != null
                   && (request.auth.uid == userId || isAdmin());
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Site handover evidence (docs/BUNDLE_BIDDING.md phase 4). A top-level
-    // collection, not nested under `jobs/`: the wide-open `jobs/{userId}/
-    // {allPaths=**}` rule above would otherwise make these world-readable.
-    match /handovers/{jobId}/{fileName} {
-      function job() {
-        return firestore.get(/databases/(default)/documents/jobs/$(jobId)).data;
-      }
-      allow read: if request.auth != null
-                  && (request.auth.uid == job().requestorId
-                      || request.auth.uid == job().acceptedProviderId
-                      || isAdmin());
-      allow write: if request.auth != null
-                   && request.auth.uid == job().acceptedProviderId
-                   && request.resource.size > 0
-                   && request.resource.size < 5 * 1024 * 1024
-                   && request.resource.contentType.matches('image/.*');
-    }
-
-    // Profile avatars: readable by any signed-in user (unlike `verification/`,
-    // these are deliberately world-readable, since the photo is denormalised
-    // onto bids/jobs/chats/reviews so counterparties see a face). The owner
-    // may write only their own file, capped at 5 MB and restricted to image
-    // content types.
+    // Avatars: any signed-in user reads; the owner writes (images only, max 5 MB).
     match /avatars/{userId}/{allPaths=**} {
       allow read: if request.auth != null;
       allow write: if request.auth != null

@@ -1,5 +1,4 @@
-/// One snapshot of the marketplace's headline numbers, read via Firestore
-/// server-side aggregation queries (no documents are downloaded).
+/// A snapshot of the marketplace's main numbers.
 class PlatformStats {
   const PlatformStats({
     required this.requestors,
@@ -12,7 +11,6 @@ class PlatformStats {
     required this.releasedVolumeSen,
     required this.bundlesAwarded,
     required this.splitAwards,
-    required this.handoverDisputes,
   });
 
   final int requestors;
@@ -23,23 +21,19 @@ class PlatformStats {
   final int pendingVerifications;
   final int openDisputes;
 
-  /// Total escrow ever released to providers (the `release` ledger rows), in
-  /// sen - the money the marketplace has actually moved.
+  /// Total money released to providers, in sen.
   final int releasedVolumeSen;
 
-  /// Bundles that reached `status: awarded`.
+  /// Bundles with `status: awarded`.
   final int bundlesAwarded;
 
-  /// Of those, how many were split across more than one provider.
+  /// How many of those went to more than one provider.
   final int splitAwards;
-
-  /// Disputes flagged as a handover dispute (follows a split bundle award).
-  final int handoverDisputes;
 
   int get totalUsers => requestors + providers;
   int get totalJobs => openJobs + inProgressJobs + completedJobs;
 
-  /// Share of awarded bundles that were split, 0 when none were awarded yet.
+  /// Share of awarded bundles that were split. 0 if none were awarded.
   double get splitAwardRate =>
       bundlesAwarded == 0 ? 0 : splitAwards / bundlesAwarded;
 }

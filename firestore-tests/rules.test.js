@@ -530,10 +530,9 @@ describe("Bundles", () => {
         updateDoc(doc(dbAs(REQUESTOR), "jobs/plain1"), {bundleId: BUNDLE_ID}));
   });
 
-  it("denies the owner re-ordering or re-lotting a bundle task", async () => {
+  it("denies the owner re-ordering a bundle task", async () => {
     await assertFails(updateDoc(doc(dbAs(REQUESTOR), `jobs/${TASK_ID}`), {
       bundleOrder: 3,
-      lotId: "wet-works",
     }));
   });
 
@@ -973,6 +972,24 @@ describe("Server-owned SSM extract doc", () => {
     await assertSucceeds(setDoc(doc(dbAs(OWNER), VERIFICATION_PATH),
         {ssmNumber: "201903350205"}));
   });
+
+  it("denies the owner writing their own ID verdict, but lets them read it",
+      async () => {
+        const path = `users/${OWNER}/private/idExtract`;
+        await assertFails(setDoc(doc(dbAs(OWNER), path),
+            {verdict: "passed", failures: []}));
+        await seed([[path, {verdict: "needsReview"}]]);
+        await assertSucceeds(getDoc(doc(dbAs(OWNER), path)));
+        await assertFails(getDoc(doc(dbAs(OTHER), path)));
+      });
+
+  it("denies every client access to idRegistry", async () => {
+    const path = "idRegistry/abc";
+    await seed([[path, {uid: OWNER}]]);
+    await assertFails(getDoc(doc(dbAs(OWNER), path)));
+    await assertFails(getDoc(doc(dbAs(ADMIN), path)));
+    await assertFails(setDoc(doc(dbAs(OWNER), "idRegistry/xyz"), {uid: OWNER}));
+  });
 });
 
 describe("User reports", () => {
@@ -1076,7 +1093,6 @@ describe("Bundle bids", () => {
     providerTrustScore: 42,
     providerScoreVisible: true,
     taskPrices: {[TASK_ID]: 15000},
-    allOrNothing: false,
     estimatedDuration: "1 week",
     message: "Happy to take this on.",
     status: "pending",
@@ -1231,4 +1247,82 @@ describe("Bundle task cancellation", () => {
         await assertSucceeds(updateDoc(
             doc(dbAs(REQUESTOR), "jobs/plain1"), {status: "cancelled"}));
       });
+});
+
+// ---------------------------------------------------------------------------
+// Price-change fields - jobs/{jobId}. Written only by the price-change Cloud
+// Functions; a requestor must not be able to reprice a job directly.
+// ---------------------------------------------------------------------------
+describe("Price change fields", () => {
+  const REQUESTOR = "requestor1";
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      ["jobs/job1", {
+        requestorId: REQUESTOR,
+        status: "in_progress",
+        acceptedBidAmountSen: 10000,
+      }],
+    ]);
+  });
+
+  const forged = {
+    priceChangeRequest: {by: "requestor", newAmountSen: 1, reason: "x"},
+    originalBidAmountSen: 1,
+    priceChangeCount: 0,
+  };
+  for (const [field, value] of Object.entries(forged)) {
+    it(`denies a requestor writing ${field}`, async () => {
+      await assertFails(updateDoc(
+          doc(dbAs(REQUESTOR), "jobs/job1"), {[field]: value}));
+    });
+  }
+
+  it("still lets the owner edit an ordinary field", async () => {
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), "jobs/job1"), {title: "Renamed"}));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fundedAtAward - jobs/{jobId}. Set only by acceptBid / awardBundle; it picks
+// the cancellation and price-change rules, so a client must not write it.
+// ---------------------------------------------------------------------------
+describe("fundedAtAward field", () => {
+  const REQUESTOR = "requestor1";
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      ["jobs/job1", {requestorId: REQUESTOR, status: "in_progress"}],
+      ["jobs/funded1", {
+        requestorId: REQUESTOR, status: "in_progress", fundedAtAward: true,
+      }],
+    ]);
+  });
+
+  it("denies the owner setting fundedAtAward", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(REQUESTOR), "jobs/job1"), {fundedAtAward: true}));
+  });
+
+  it("denies the owner clearing fundedAtAward", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(REQUESTOR), "jobs/funded1"), {fundedAtAward: false}));
+  });
+
+  it("denies creating a job that already carries fundedAtAward", async () => {
+    await assertSucceeds(setDoc(doc(dbAs(REQUESTOR), "jobs/new0"), {
+      requestorId: REQUESTOR, status: "open",
+    }));
+    await assertFails(setDoc(doc(dbAs(REQUESTOR), "jobs/new1"), {
+      requestorId: REQUESTOR, status: "open", fundedAtAward: true,
+    }));
+  });
+
+  it("still lets the owner edit an ordinary field", async () => {
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), "jobs/funded1"), {title: "Renamed"}));
+  });
 });

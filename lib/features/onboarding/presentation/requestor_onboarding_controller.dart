@@ -22,11 +22,16 @@ class RequestorOnboardingController extends ChangeNotifier {
   RequestorOnboardingData data = RequestorOnboardingData();
   String? _loadedUid;
   bool _busy = false;
+  String? _uploadingPurpose;
   String? _errorMessage;
 
   bool get isLoaded => _loadedUid != null;
   bool get isBusy => _busy;
   String? get errorMessage => _errorMessage;
+
+  /// True while the upload named [purpose] ('avatar' or 'client_document') is
+  /// in flight.
+  bool isUploading(String purpose) => _uploadingPurpose == purpose;
 
   /// Loads saved progress for [uid] once; subsequent calls are no-ops. Seeds
   /// the full name from the account's [fallbackName] when none is saved yet.
@@ -81,11 +86,13 @@ class RequestorOnboardingController extends ChangeNotifier {
   // resolving fine via their tokened download URLs, they just aren't
   // re-uploaded on re-save.
   Future<void> pickProfilePhoto() => _pickAndUpload(
+        purpose: 'avatar',
         upload: (file) => _storage.uploadAvatar(uid: _loadedUid!, file: file),
         apply: (url) => data.profilePhotoUrl = url,
       );
 
   Future<void> pickVerificationDocument() => _pickAndUpload(
+        purpose: 'client_document',
         upload: (file) => _storage.uploadVerificationImage(
           uid: _loadedUid!,
           purpose: 'client_document',
@@ -95,9 +102,11 @@ class RequestorOnboardingController extends ChangeNotifier {
       );
 
   Future<void> _pickAndUpload({
+    required String purpose,
     required Future<String> Function(XFile file) upload,
     required void Function(String url) apply,
   }) async {
+    if (_uploadingPurpose != null) return; // one upload at a time
     final XFile? file;
     try {
       file = await _picker.pickImage(
@@ -113,6 +122,7 @@ class RequestorOnboardingController extends ChangeNotifier {
     if (file == null) return; // cancelled
 
     _busy = true;
+    _uploadingPurpose = purpose;
     _errorMessage = null;
     notifyListeners();
     try {
@@ -121,6 +131,7 @@ class RequestorOnboardingController extends ChangeNotifier {
       _errorMessage = 'Could not upload the file. Please try again.';
     } finally {
       _busy = false;
+      _uploadingPurpose = null;
       notifyListeners();
     }
   }

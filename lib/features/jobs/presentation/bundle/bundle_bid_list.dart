@@ -7,11 +7,13 @@ import '../../domain/job.dart';
 import '../widgets/status_colors.dart';
 import 'bundle_task_section.dart';
 
-/// The "Bids" section: one card per package bid, with enough detail (price
-/// per task, duration, message, all-or-nothing) that the per-task summary
-/// above it can stay compact.
+/// One card per package bid: price per task, bundle price, duration, message.
 class BundleBidList extends StatelessWidget {
-  const BundleBidList({super.key, required this.bids, required this.tasks});
+  const BundleBidList({
+    super.key,
+    required this.bids,
+    required this.tasks,
+  });
 
   final List<BundleBid> bids;
   final List<Job> tasks;
@@ -25,13 +27,9 @@ class BundleBidList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if (bids.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Bids', style: theme.textTheme.titleLarge),
-        const SizedBox(height: 8),
         for (final bid in bids) ...[
           _BundleBidCard(bid: bid, titleFor: _titleFor),
           const SizedBox(height: 12),
@@ -39,6 +37,36 @@ class BundleBidList extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Opens every bid in a tall, scrollable sheet.
+Future<void> showBundleBids(
+  BuildContext context, {
+  required List<BundleBid> bids,
+  required List<Job> tasks,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (context) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.9,
+      maxChildSize: 0.95,
+      builder: (context, scroll) => ListView(
+        controller: scroll,
+        padding: const EdgeInsets.all(24),
+        children: [
+          Text(
+            'All bids (${bids.length})',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 12),
+          BundleBidList(bids: bids, tasks: tasks),
+        ],
+      ),
+    ),
+  );
 }
 
 class _BundleBidCard extends StatefulWidget {
@@ -123,16 +151,6 @@ class _BundleBidCardState extends State<_BundleBidCard> {
                 maxLines: 3,
               ),
             ),
-          if (bid.allOrNothing) ...[
-            const SizedBox(height: 8),
-            Text(
-              'All or nothing - the provider only accepts winning every '
-              'task in this bid, never a subset.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
           if (bid.message.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(

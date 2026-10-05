@@ -11,6 +11,7 @@ import '../../../../core/util/money.dart';
 import '../../../../core/util/payment_log.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../auth/presentation/auth_controller.dart';
+import '../../../disputes/data/dispute_repository.dart';
 import '../../../disputes/presentation/raise_dispute_sheet.dart';
 import '../../data/milestone_repository.dart';
 import '../../domain/job.dart';
@@ -50,7 +51,9 @@ class MilestoneSection extends StatefulWidget {
 /// Terminal statuses: money has finished moving for this milestone (paid
 /// out, or the legacy `resolved` alias - see [MilestoneStatus]'s doc).
 bool _isTerminal(MilestoneStatus s) =>
-    s == MilestoneStatus.released || s == MilestoneStatus.resolved;
+    s == MilestoneStatus.released ||
+    s == MilestoneStatus.resolved ||
+    s == MilestoneStatus.refunded;
 
 class MilestoneSectionState extends State<MilestoneSection> {
   // Cached so rebuilds don't resubscribe to Firestore.
@@ -186,6 +189,27 @@ class MilestoneSectionState extends State<MilestoneSection> {
         ),
       );
     }
+  }
+
+  /// The raiser takes back their dispute; the milestone carries on as before.
+  Future<void> _withdraw(Milestone milestone) async {
+    final repo = context.read<DisputeRepository>();
+    final confirmed = await _confirm(
+      title: 'Withdraw your dispute?',
+      body:
+          'The admin will stop reviewing it and "${milestone.description}" '
+          'goes back to where it was. No money moves.',
+      actionLabel: 'Withdraw',
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(
+      milestone,
+      () => repo.withdrawDispute(
+        jobId: milestone.jobId,
+        milestoneId: milestone.id,
+      ),
+      step: 'dispute.withdraw',
+    );
   }
 
   /// Requestor approves the proposed plan, making every milestone fundable.
@@ -479,9 +503,22 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
+  /// Part of the agreed price no milestone covers yet - after a mutual price
+  /// change kept the funded milestones but dropped the rest.
+  int _unplannedSen(List<Milestone> milestones) {
+    if (milestones.isEmpty) return 0;
+    final planned = milestones.fold<int>(0, (s, m) => s + m.amountSen);
+    return (widget.job.acceptedBidAmountSen ?? planned) - planned;
+  }
+
+  /// Whether the plan is settled. A job funded at award never goes through
+  /// plan approval: its stages are created funded and the server keeps them
+  /// adding up to the price, so any stage at all means "approved".
   bool _planApproved(List<Milestone> milestones) =>
       milestones.isNotEmpty &&
-      !milestones.any((m) => m.status == MilestoneStatus.proposed);
+      (widget.job.fundedAtAward ||
+          (_unplannedSen(milestones) == 0 &&
+              !milestones.any((m) => m.status == MilestoneStatus.proposed)));
 
   /// `'plan'`, a milestone id, or `'complete'` - the step that's dominant
   /// right now. See the class doc for the rule.
@@ -515,35 +552,44 @@ class MilestoneSectionState extends State<MilestoneSection> {
               m.status == MilestoneStatus.proposed ||
               m.status == MilestoneStatus.pending,
         );
+    // ...or, after a price change, to plan the part no milestone covers.
+    final unplannedSen = _unplannedSen(milestones);
+    final needsReplan = job.status == JobStatus.inProgress && unplannedSen != 0;
     final currentId = _currentStepId(milestones, planApproved);
 
     final rows = <Widget>[];
     var previousDone = false;
 
-    final planExpanded = !planApproved || _expandedOverride == 'plan';
-    rows.add(
-      _stepRow(
-        gutter: _gutter(
-          context: context,
-          state: planApproved ? _CircleState.done : _CircleState.upcoming,
-          topVisible: false,
-          bottomVisible: true,
-          topDone: false,
-          bottomDone: planApproved,
+    // A job funded at award has no plan to agree: it starts at its funded
+    // stage, so there is nothing to propose, approve or amend.
+    final showPlanStep = !(job.fundedAtAward && milestones.isNotEmpty);
+    if (showPlanStep) {
+      final planExpanded = !planApproved || _expandedOverride == 'plan';
+      rows.add(
+        _stepRow(
+          gutter: _gutter(
+            context: context,
+            state: planApproved ? _CircleState.done : _CircleState.upcoming,
+            topVisible: false,
+            bottomVisible: true,
+            topDone: false,
+            bottomDone: planApproved,
+          ),
+          content: _planStepContent(
+            context,
+            job,
+            milestones,
+            isRequestor: isRequestor,
+            isProvider: isProvider,
+            expanded: planExpanded,
+            planApproved: planApproved,
+            planEditable: planEditable,
+            unplannedSen: needsReplan ? unplannedSen : 0,
+          ),
         ),
-        content: _planStepContent(
-          context,
-          job,
-          milestones,
-          isRequestor: isRequestor,
-          isProvider: isProvider,
-          expanded: planExpanded,
-          planApproved: planApproved,
-          planEditable: planEditable,
-        ),
-      ),
-    );
-    previousDone = planApproved;
+      );
+      previousDone = planApproved;
+    }
 
     for (final (i, m) in milestones.indexed) {
       final isCurrent = currentId == m.id;
@@ -554,7 +600,7 @@ class MilestoneSectionState extends State<MilestoneSection> {
           gutter: _gutter(
             context: context,
             state: _circleStateFor(m.status),
-            topVisible: true,
+            topVisible: showPlanStep || i > 0,
             bottomVisible: true,
             topDone: previousDone,
             bottomDone: done,
@@ -612,6 +658,7 @@ class MilestoneSectionState extends State<MilestoneSection> {
     required bool expanded,
     required bool planApproved,
     required bool planEditable,
+    int unplannedSen = 0,
   }) {
     final theme = Theme.of(context);
     final totalSen = milestones.fold<int>(0, (s, m) => s + m.amountSen);
@@ -688,6 +735,33 @@ class MilestoneSectionState extends State<MilestoneSection> {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             );
+    } else if (unplannedSen != 0) {
+      final remaining = formatRm(unplannedSen);
+      body = isProvider
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'The agreed price changed to '
+                  '${formatRm(job.acceptedBidAmountSen ?? totalSen)}. Add '
+                  'milestones for the remaining $remaining, then the client '
+                  'approves them.',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                SecondaryButton(
+                  label: 'Plan remaining $remaining',
+                  onPressed: busy ? null : () => _amendPlan(milestones),
+                ),
+              ],
+            )
+          : Text(
+              'Waiting for the provider to plan the remaining $remaining of '
+              'the new price.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            );
     } else {
       body = isRequestor
           ? Column(
@@ -751,8 +825,10 @@ class MilestoneSectionState extends State<MilestoneSection> {
   }) {
     final theme = Theme.of(context);
     final busy = _busyId == m.id;
-    final stepNumber = index + 1; // Step 0 (the plan) is step 1.
-    final totalSteps = totalMilestones + 2; // + plan + job complete.
+    // Step 0 (the plan) is step 1, unless the job was funded at award.
+    final planSteps = job.fundedAtAward ? 0 : 1;
+    final stepNumber = index + planSteps;
+    final totalSteps = totalMilestones + planSteps + 1; // + job complete.
     final turnDescriptor = m.status == MilestoneStatus.disputed
         ? 'an admin is reviewing'
         : _myTurn(m.status, isRequestor: isRequestor)
@@ -914,19 +990,31 @@ class MilestoneSectionState extends State<MilestoneSection> {
                         const LinearProgressIndicator(),
                       ],
                       if (canDispute) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 12),
                         Align(
                           alignment: Alignment.centerLeft,
-                          child: TextButton(
+                          child: OutlinedButton.icon(
                             onPressed: busy ? null : () => _dispute(m),
-                            style: TextButton.styleFrom(
-                              foregroundColor:
-                                  theme.colorScheme.onSurfaceVariant,
-                              padding: EdgeInsets.zero,
-                              minimumSize: const Size(0, 32),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: context.fairbid.danger,
+                              side: BorderSide(color: context.fairbid.danger),
                             ),
-                            child: const Text('Something wrong?'),
+                            icon: const Icon(Icons.gavel_rounded, size: 18),
+                            label: const Text('Raise a dispute'),
+                          ),
+                        ),
+                      ],
+                      if (disputed &&
+                          m.disputedBy != null &&
+                          m.disputedBy ==
+                              context.read<AuthController>().user?.uid) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: busy ? null : () => _withdraw(m),
+                            icon: const Icon(Icons.undo, size: 18),
+                            label: const Text('Withdraw dispute'),
                           ),
                         ),
                       ],
@@ -979,12 +1067,15 @@ class MilestoneSectionState extends State<MilestoneSection> {
     final provider = job.acceptedProviderName ?? 'the provider';
     return switch (m.status) {
       MilestoneStatus.pending => 'Fund $amount to start this milestone.',
-      MilestoneStatus.funded => '$amount held in escrow, $provider is working.',
+      MilestoneStatus.funded => job.fundedAtAward
+          ? '$amount secured in escrow, $provider is working.'
+          : '$amount held in escrow, $provider is working.',
       MilestoneStatus.submitted => 'Delivered, review and release $amount.',
       MilestoneStatus.released => 'Paid out.',
       MilestoneStatus.disputed => 'On hold, an admin is reviewing.',
       MilestoneStatus.proposed => 'Awaiting client approval.',
       MilestoneStatus.resolved => 'Resolved.',
+      MilestoneStatus.refunded => '$amount went back to the client.',
     };
   }
 
@@ -1000,6 +1091,7 @@ class MilestoneSectionState extends State<MilestoneSection> {
         '${m.description}, $amount, delivered, awaiting release',
       MilestoneStatus.disputed => '${m.description}, $amount, disputed',
       MilestoneStatus.proposed => '${m.description}, $amount',
+      MilestoneStatus.refunded => '${m.description}, $amount refunded',
     };
   }
 }
@@ -1010,7 +1102,9 @@ class MilestoneSectionState extends State<MilestoneSection> {
 enum _CircleState { done, inEscrow, upcoming, disputed }
 
 _CircleState _circleStateFor(MilestoneStatus s) => switch (s) {
-  MilestoneStatus.released || MilestoneStatus.resolved => _CircleState.done,
+  MilestoneStatus.released ||
+  MilestoneStatus.resolved ||
+  MilestoneStatus.refunded => _CircleState.done,
   MilestoneStatus.funded || MilestoneStatus.submitted => _CircleState.inEscrow,
   MilestoneStatus.disputed => _CircleState.disputed,
   MilestoneStatus.proposed || MilestoneStatus.pending => _CircleState.upcoming,
@@ -1025,7 +1119,8 @@ Color _statusAccent(BuildContext context, MilestoneStatus s) => switch (s) {
   MilestoneStatus.funded => context.fairbid.verified,
   MilestoneStatus.released => context.fairbid.successText,
   MilestoneStatus.disputed => context.fairbid.danger,
-  MilestoneStatus.resolved => Theme.of(context).colorScheme.onSurfaceVariant,
+  MilestoneStatus.resolved ||
+  MilestoneStatus.refunded => Theme.of(context).colorScheme.onSurfaceVariant,
 };
 
 IconData _statusIcon(MilestoneStatus s) => switch (s) {
@@ -1035,6 +1130,7 @@ IconData _statusIcon(MilestoneStatus s) => switch (s) {
   MilestoneStatus.released => Icons.check_circle_outline,
   MilestoneStatus.disputed => Icons.gavel_rounded,
   MilestoneStatus.resolved => Icons.info_outline,
+  MilestoneStatus.refunded => Icons.undo,
 };
 
 /// One `Row(children: [SizedBox(width: 32, child: gutter), Expanded(content)])`
@@ -1207,7 +1303,7 @@ class _MicroProgress extends StatelessWidget {
     MilestoneStatus.funded => 1,
     MilestoneStatus.submitted => 2,
     MilestoneStatus.released || MilestoneStatus.resolved => 3,
-    MilestoneStatus.disputed => -1,
+    MilestoneStatus.disputed || MilestoneStatus.refunded => -1,
   };
 
   @override

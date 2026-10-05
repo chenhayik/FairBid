@@ -61,6 +61,7 @@ class VerifyStep extends StatelessWidget {
         const SizedBox(height: 8),
         UploadBox(
           onTap: onboarding.pickVerificationDocument,
+          busy: onboarding.isUploading('client_document'),
           icon: Icons.badge_outlined,
           hint: 'JPEG, PNG up to 10MB',
           pickedName:

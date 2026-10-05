@@ -22,7 +22,7 @@ import '../../jobs/presentation/widgets/job_card.dart';
 import 'home_app_bar.dart';
 
 /// Provider Home: verification status, key stat cards, and the "jobs near you"
-/// section (empty until the Jobs feature is built).
+/// section.
 class ProviderHomeScreen extends StatelessWidget {
   const ProviderHomeScreen({super.key});
 
@@ -222,8 +222,8 @@ class _TotalEarningsStat extends StatelessWidget {
   }
 }
 
-/// The nearest few open jobs for the provider home. Prompts to set a base
-/// location when none is saved yet.
+/// The nearest few open jobs for the provider home - or, with no location
+/// saved yet, the newest few plus a prompt to set one.
 class _NearbyJobs extends StatelessWidget {
   const _NearbyJobs();
 
@@ -231,18 +231,10 @@ class _NearbyJobs extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = context.watch<AuthController>().user;
     final repo = context.read<JobRepository>();
+    final base = user != null && user.hasBaseLocation
+        ? LatLng(user.baseLat!, user.baseLng!)
+        : null;
 
-    if (user == null || !user.hasBaseLocation) {
-      return AppCard(
-        child: EmptyState(
-          icon: Icons.my_location,
-          title: 'See jobs near you',
-          message: 'Browse jobs and set your location to sort by distance.',
-        ),
-      );
-    }
-
-    final base = LatLng(user.baseLat!, user.baseLng!);
     return KeyedStreamBuilder<List<Job>>(
       // Only the three nearest are shown, but "nearest" is ranked in Dart, so
       // the window has to be wide enough that a close-but-older job is not
@@ -281,20 +273,38 @@ class _NearbyJobs extends StatelessWidget {
             ),
           );
         }
+        // Newest first (the query's order) until a location makes distance
+        // meaningful.
         final ranked = [
           for (final job in jobs)
-            (job, distanceKm(base, LatLng(job.location.lat, job.location.lng)))
-        ]..sort((a, b) => a.$2.compareTo(b.$2));
+            (
+              job,
+              base == null
+                  ? null
+                  : distanceKm(base, LatLng(job.location.lat, job.location.lng)),
+            ),
+        ];
+        if (base != null) ranked.sort((a, b) => a.$2!.compareTo(b.$2!));
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (base == null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => context.push('/jobs'),
+                  icon: const Icon(Icons.my_location, size: 18),
+                  label: const Text('Set your location to sort by distance'),
+                ),
+              ),
             for (final (job, km) in ranked.take(3))
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: JobCard(
                   job: job,
-                  distanceLabel: formatDistance(km),
+                  distanceLabel: km == null ? null : formatDistance(km),
                   onTap: () => context.push('/jobs/${job.id}'),
-                  saved: user.isSaved(job.id),
+                  saved: user?.isSaved(job.id) ?? false,
                   onToggleSave: () =>
                       context.read<AuthController>().toggleSaved(job.id),
                 ),

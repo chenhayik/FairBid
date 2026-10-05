@@ -6,24 +6,15 @@ import '../domain/bundle_award.dart';
 import '../domain/job.dart';
 import 'bid_repository.dart';
 
-/// Thrown by [BundleRepository.create] when the `createBundle` callable
-/// refuses the posting - a task without a category, a deadline in the
-/// past, more tasks than [PlatformConfig.maxBundleTasks]. Carries the
-/// server's message, which is written to be shown to the requestor
-/// as-is. Mirrors `BundleBidRejectedException` on the bidding side.
+/// Thrown by [BundleRepository.create] when `createBundle` refuses the
+/// posting. The message comes from the server and can be shown as is.
 class BundleRejectedException implements Exception {
   const BundleRejectedException(this.message);
   final String message;
 }
 
-/// Reads bundled postings and creates them through the `createBundle`
-/// callable.
-///
-/// Deliberately has no update or delete: `bundles/{id}` is server-owned and
-/// `firestore.rules` denies every client write to it, exactly like
-/// `transactions` and `disputes`. A bundle's tasks are ordinary jobs, so they
-/// keep using [JobRepository] - including `watchBundleTasks`, which lives
-/// there because it returns [Job]s.
+/// Reads bundles and creates them through the `createBundle` callable.
+/// No update or delete: `firestore.rules` blocks client writes to bundles.
 abstract interface class BundleRepository {
   Future<String> create({
     required String title,
@@ -40,39 +31,29 @@ abstract interface class BundleRepository {
 
   Future<Bundle?> getById(String id);
 
-  /// Cancels an open bundle through the `cancelBundle` callable, which
-  /// cancels its still-open tasks along with it, server-side, in one batch.
-  /// A task belonging to an open bundle cannot be cancelled on its own -
-  /// `firestore.rules` freezes a task's `status` while its bundle is open,
-  /// since the task may be part of an all-or-nothing bid or a lot - so
-  /// cancelling the bundle is the only way to call the whole posting off
-  /// before it's awarded.
+  /// Cancels an open bundle (`cancelBundle`) along with its open tasks.
+  /// A task in an open bundle can't be cancelled alone (`firestore.rules`).
   Future<void> cancelBundle(String id);
 
-  /// The three award options for [bundleId], priced by `previewBundleAward`
-  /// from the stored bids. Empty when no bid covers anything yet.
+  /// The three award options for [bundleId], priced by `previewBundleAward`.
+  /// Empty when no bid covers anything yet.
   Future<List<BundleAwardOption>> previewAward(String bundleId);
 
-  /// Prices the requestor's own picks (task id -> provider id) through
-  /// `previewBundleAward`. Returns the priced pick (key `'manual'`) or, when
-  /// the server refuses it, the problems it found instead - never both.
+  /// Prices the requestor's own picks (task id -> provider id). Returns the
+  /// priced pick (key `'manual'`) or the server's problems, never both.
   Future<({BundleAwardOption? option, List<String> problems})> priceManualAward(
     String bundleId,
     Map<String, String> providerByTaskId,
   );
 
-  /// Awards the bundle: every task in [providerByTaskId] goes to that
-  /// provider, the rest are released back to ordinary bidding.
-  ///
-  /// [expectedTotalSen] is the total the requestor was shown; the server
-  /// refuses the award if the bids have changed since. Throws
-  /// [InsufficientBalanceException] when the wallet can't cover it, and
-  /// [BundleRejectedException] for anything the server refuses outright.
+  /// Awards the tasks in [providerByTaskId]; the rest go back to bidding.
+  /// Refused if the total differs from [expectedTotalSen] or balance is short.
   Future<void> award({
     required String bundleId,
     required Map<String, String> providerByTaskId,
     int? expectedTotalSen,
     DateTime? releasedDeadline,
+    bool dropUnawarded = false,
   });
 }
 
@@ -214,18 +195,19 @@ class FirestoreBundleRepository implements BundleRepository {
     required Map<String, String> providerByTaskId,
     int? expectedTotalSen,
     DateTime? releasedDeadline,
+    bool dropUnawarded = false,
   }) async {
     try {
       await _functions.httpsCallable('awardBundle').call<void>({
         'bundleId': bundleId,
         'providerByTaskId': providerByTaskId,
         'expectedTotalSen': ?expectedTotalSen,
+        if (dropUnawarded) 'dropUnawarded': true,
         if (releasedDeadline != null)
           'releasedDeadlineMillis': releasedDeadline.millisecondsSinceEpoch,
       });
     } on FirebaseFunctionsException catch (e) {
-      // The wallet gate reports the shortfall the same way acceptBid does, so
-      // the top-up prompt the job flow already has works here unchanged.
+      // Reports a shortfall like acceptBid, so the same top-up prompt works.
       final details = e.details;
       if (details is Map && details['reason'] == 'insufficient_balance') {
         throw InsufficientBalanceException(

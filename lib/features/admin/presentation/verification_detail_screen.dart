@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/face_crop.dart';
+import '../../onboarding/domain/id_extract.dart';
 import '../data/verification_repository.dart';
 import '../domain/pending_verification.dart';
 import 'widgets/document_gallery.dart';
@@ -24,6 +26,7 @@ class VerificationDetailScreen extends StatefulWidget {
 class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
   bool _busy = false;
   late final Future<List<VerificationDocument>> _identityDocs;
+  late final Future<IdExtract?> _idExtract;
 
   PendingVerification get v => widget.verification;
 
@@ -33,6 +36,7 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
     // The sensitive ID/selfie photos live in the applicant's private doc.
     _identityDocs =
         context.read<VerificationRepository>().loadIdentityDocuments(v.uid);
+    _idExtract = context.read<VerificationRepository>().loadIdExtract(v.uid);
   }
 
   Future<void> _approve() async {
@@ -128,6 +132,7 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          _FaceComparisonCard(documents: snap.data ?? const []),
                           Row(
                             children: [
                               Expanded(
@@ -160,6 +165,16 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
                     },
                   ),
                   const SizedBox(height: 24),
+                  Text('Automated ID checks', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  FutureBuilder<IdExtract?>(
+                    future: _idExtract,
+                    builder: (context, snap) => _IdChecksCard(
+                      extract: snap.data,
+                      loading: snap.connectionState == ConnectionState.waiting,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
                   const InfoBanner(
                     icon: Icons.gpp_good_outlined,
                     title: 'Before you decide',
@@ -174,6 +189,114 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
             _DecisionBar(busy: _busy, onApprove: _approve, onReject: _reject),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The face on the ID next to the face in the selfie, for a quick visual
+/// match. Hidden unless both photos are present.
+class _FaceComparisonCard extends StatelessWidget {
+  const _FaceComparisonCard({required this.documents});
+
+  final List<VerificationDocument> documents;
+
+  VerificationDocument? _find(String label) =>
+      documents.where((d) => d.label == label).firstOrNull;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = _find(VerificationDocument.idLabel);
+    final selfie = _find(VerificationDocument.selfieLabel);
+    if (id == null || selfie == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    Widget face(String label, VerificationDocument d, double size) => Column(
+          children: [
+            FaceCrop(url: d.url, box: d.faceBox, size: size),
+            const SizedBox(height: 6),
+            Text(label, style: theme.textTheme.labelLarge),
+          ],
+        );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Face comparison', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text('Compare the two faces before approving.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 12),
+            // Each crop takes half the card's width, so it fits any phone.
+            LayoutBuilder(builder: (context, constraints) {
+              const gap = 12.0;
+              final size = (constraints.maxWidth - gap) / 2;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  face('On ID', id, size),
+                  const SizedBox(width: gap),
+                  face('Selfie', selfie, size),
+                ],
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The server's advisory MyKad check. The admin still decides.
+class _IdChecksCard extends StatelessWidget {
+  const _IdChecksCard({required this.extract, required this.loading});
+
+  final IdExtract? extract;
+  final bool loading;
+
+  static String _tri(bool? v, String yes, String no) =>
+      v == null ? 'Unknown' : (v ? yes : no);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final e = extract;
+    if (e == null) {
+      return AppCard(
+        child: Text(loading ? 'Loading…' : 'No automated check yet',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+      );
+    }
+    final (label, color) = switch (e.verdict) {
+      IdVerdict.passed => ('Passed', context.fairbid.successText),
+      IdVerdict.needsReview => ('Needs review', context.fairbid.warningText),
+      IdVerdict.rejected => ('Rejected', context.fairbid.danger),
+    };
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PillBadge(label: label, color: color),
+          const SizedBox(height: 12),
+          _KeyValue(label: 'IC number', value: e.maskedIc ?? 'Not read'),
+          const SizedBox(height: 8),
+          _KeyValue(label: 'Age', value: _tri(e.ageOk, '18 or older', 'Under 18')),
+          const SizedBox(height: 8),
+          _KeyValue(
+              label: 'Name',
+              value: _tri(e.nameMatches, 'Matches account', 'Does not match')),
+          const SizedBox(height: 8),
+          _KeyValue(
+              label: 'Gender',
+              value: _tri(e.genderConsistent, 'Consistent', 'Inconsistent')),
+          for (final f in e.failures) ...[
+            const SizedBox(height: 8),
+            Text('• ${idFailureLabel(f)}', style: theme.textTheme.bodySmall),
+          ],
+        ],
       ),
     );
   }

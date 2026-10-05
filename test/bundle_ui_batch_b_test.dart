@@ -44,7 +44,6 @@ class _LiveBundleBidRepository implements BundleBidRepository {
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
-    bool allOrNothing = false,
     required String estimatedDuration,
     String message = '',
   }) => throw UnimplementedError();
@@ -294,9 +293,14 @@ void main() {
         tasksOverride: awardedTasks,
       );
 
-      expect(find.text('Aida Renovation'), findsOneWidget);
+      // Category, status and winner share one line.
+      expect(find.textContaining('Aida Renovation', findRichText: true),
+          findsOneWidget);
       expect(find.textContaining('RM 375.00'), findsOneWidget);
-      expect(find.text('Released to ordinary bidding'), findsOneWidget);
+      expect(
+        find.textContaining('Released to ordinary bidding', findRichText: true),
+        findsOneWidget,
+      );
       expect(find.text('Award'), findsNothing);
       expect(find.widgetWithText(FilledButton, 'Show award options'),
           findsNothing);
@@ -334,6 +338,8 @@ void main() {
         ],
       );
 
+      await tester.tap(find.text('View all bids (4)'));
+      await tester.pumpAndSettle();
       for (final label in [
         'Accepted',
         'Rejected',
@@ -422,68 +428,6 @@ void main() {
         find.widgetWithText(OutlinedButton, 'Award this option'),
         findsOneWidget,
       );
-    });
-  });
-
-  group('Merged award option warnings', () {
-    BundleAwardOption option(String label, List<String> warnings) =>
-        BundleAwardOption(
-          key: label,
-          label: label,
-          totalSen: 37500,
-          providerCount: 1,
-          premiumSen: 0,
-          weightedTrust: 700,
-          awards: const [
-            BundleAwardItem(
-              providerId: 'prov-1',
-              providerName: 'Aida Renovation',
-              taskAmountsSen: {'job-1': 37500},
-            ),
-          ],
-          warnings: warnings,
-        );
-
-    test('merging keeps the union of warnings, without duplicates', () {
-      final merged = mergeBundleOptions([
-        option('Cheapest', const ['Split handover A', 'Shared warning']),
-        option('Fewest providers', const ['Shared warning', 'Split handover B']),
-      ]);
-
-      expect(merged, hasLength(1));
-      expect(merged.first.combinedLabel, 'Cheapest · Fewest providers');
-      expect(merged.first.warnings,
-          ['Split handover A', 'Shared warning', 'Split handover B']);
-    });
-
-    testWidgets('the merged card shows every warning once', (tester) async {
-      final merged = mergeBundleOptions([
-        option('Cheapest', const ['Split handover A', 'Shared warning']),
-        option('Fewest providers', const ['Shared warning', 'Split handover B']),
-      ]).first;
-      await tester.binding.setSurfaceSize(const Size(800, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: AppTheme.light,
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: BundleOptionCard(
-                merged: merged,
-                tasks: [sampleJob(id: 'job-1', title: 'Waterproof the floor')],
-                primary: false,
-                busy: false,
-                enabled: true,
-                onAward: () {},
-              ),
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('Split handover A'), findsOneWidget);
-      expect(find.text('Split handover B'), findsOneWidget);
-      expect(find.text('Shared warning'), findsOneWidget);
     });
   });
 
@@ -615,27 +559,18 @@ void main() {
       expect(find.text('Pick providers yourself'), findsNothing);
     });
 
-    testWidgets('"Check price" is disabled until a task is picked', (
+    testWidgets('the sticky bar only appears once a task is picked', (
       tester,
     ) async {
       await pumpBundle(tester, bids: [bid()]);
+      expect(find.text('Award your pick'), findsNothing);
 
-      final button = tester.widget<OutlinedButton>(
-        find.widgetWithText(OutlinedButton, 'Check price'),
-      );
-      expect(button.onPressed, isNull);
-
-      final dropdown = find.byType(DropdownButtonFormField<String?>).first;
-      await tester.ensureVisible(dropdown);
-      await tester.tap(dropdown);
+      await tester.tap(find.text('Waterproof the floor'));
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('Aida Renovation').last);
       await tester.pumpAndSettle();
 
-      final enabledButton = tester.widget<OutlinedButton>(
-        find.widgetWithText(OutlinedButton, 'Check price'),
-      );
-      expect(enabledButton.onPressed, isNotNull);
+      expect(find.text('Award your pick'), findsOneWidget);
     });
   });
 
@@ -650,6 +585,116 @@ void main() {
       );
       expect(find.textContaining('1 task'), findsOneWidget);
       expect(find.textContaining('1 bid'), findsOneWidget);
+    });
+  });
+  group('Package price and trust on the bundle page', () {
+    testWidgets('an awarded task split by a package deal says so', (
+      tester,
+    ) async {
+      await pumpBundle(
+        tester,
+        bundle: sampleBundle(id: 'b1', status: BundleStatus.awarded),
+        tasksOverride: [
+          sampleJob(
+            id: 'job-1',
+            title: 'Broken roof tiles',
+            bundleId: 'b1',
+            status: JobStatus.inProgress,
+            acceptedProviderId: 'p1',
+            acceptedProviderName: 'Worker One',
+            acceptedBidAmountSen: 93334,
+          ),
+        ],
+        bids: [
+          BundleBid(
+            bundleId: 'b1',
+            providerId: 'p1',
+            providerName: 'Worker One',
+            taskPrices: const {'job-1': 100000, 'job-2': 50000},
+            bundlePriceSen: 140000,
+            estimatedDuration: '1 week',
+            status: BundleBidStatus.accepted,
+            createdAt: DateTime.now(),
+          ),
+        ],
+      );
+
+      expect(find.textContaining('Package deal price'), findsOneWidget);
+      expect(find.textContaining('1,000.00 if hired for this task alone'),
+          findsOneWidget);
+    });
+
+    testWidgets('no package note once the price was changed later', (
+      tester,
+    ) async {
+      await pumpBundle(
+        tester,
+        bundle: sampleBundle(id: 'b1', status: BundleStatus.awarded),
+        tasksOverride: [
+          sampleJob(
+            id: 'job-1',
+            title: 'Broken roof tiles',
+            bundleId: 'b1',
+            status: JobStatus.inProgress,
+            acceptedProviderId: 'p1',
+            acceptedProviderName: 'Worker One',
+            acceptedBidAmountSen: 100000,
+            originalBidAmountSen: 93334,
+          ),
+        ],
+        bids: [
+          BundleBid(
+            bundleId: 'b1',
+            providerId: 'p1',
+            providerName: 'Worker One',
+            taskPrices: const {'job-1': 100000, 'job-2': 50000},
+            bundlePriceSen: 140000,
+            estimatedDuration: '1 week',
+            status: BundleBidStatus.accepted,
+            createdAt: DateTime.now(),
+          ),
+        ],
+      );
+      expect(find.textContaining('Package deal price'), findsNothing);
+    });
+
+    Future<void> pumpCard(WidgetTester tester, {required bool visible}) async {
+      final option = BundleAwardOption(
+        key: 'recommended',
+        label: 'Recommended',
+        totalSen: 140000,
+        providerCount: 1,
+        premiumSen: 0,
+        weightedTrust: 608,
+        trustVisible: visible,
+      );
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: BundleOptionCard(
+              merged: MergedBundleOption(option, const ['Recommended']),
+              tasks: const [],
+              primary: true,
+              busy: false,
+              enabled: true,
+              onAward: () {},
+            ),
+          ),
+        ),
+      ));
+    }
+
+    testWidgets('trust reads out of 100 when every provider has a score', (
+      tester,
+    ) async {
+      await pumpCard(tester, visible: true);
+      expect(find.textContaining('Trust 61/100'), findsOneWidget);
+    });
+
+    testWidgets('trust is hidden while any provider is new', (tester) async {
+      await pumpCard(tester, visible: false);
+      expect(find.textContaining('Trust'), findsNothing);
     });
   });
 }

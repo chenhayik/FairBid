@@ -29,7 +29,6 @@ abstract interface class BundleBidRepository {
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
-    bool allOrNothing = false,
     required String estimatedDuration,
     String message = '',
   });
@@ -83,7 +82,6 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
-    bool allOrNothing = false,
     required String estimatedDuration,
     String message = '',
   }) async {
@@ -92,7 +90,6 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
         'bundleId': bundleId,
         'taskPrices': taskPrices,
         'bundlePriceSen': ?bundlePriceSen,
-        'allOrNothing': allOrNothing,
         'estimatedDuration': estimatedDuration,
         'message': message,
       });

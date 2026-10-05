@@ -6,7 +6,9 @@ import 'package:image_picker/image_picker.dart';
 import '../../../core/util/document_picker.dart';
 import '../../../core/util/ssm_number.dart';
 import '../data/document_storage_repository.dart';
+import '../data/face_checker.dart';
 import '../data/onboarding_repository.dart';
+import '../domain/id_extract.dart';
 import '../domain/onboarding_data.dart';
 import '../domain/ssm_extract.dart';
 
@@ -19,12 +21,15 @@ class OnboardingController extends ChangeNotifier {
     this._storage, {
     ImagePicker? imagePicker,
     Future<XFile?> Function()? pdfPicker,
+    FaceChecker? faceChecker,
   })  : _picker = imagePicker ?? ImagePicker(),
-        _pdfPicker = pdfPicker ?? pickSsmPdf;
+        _pdfPicker = pdfPicker ?? pickSsmPdf,
+        _faceChecker = faceChecker ?? const MlKitFaceChecker();
 
   final OnboardingRepository _repository;
   final DocumentStorageRepository _storage;
   final ImagePicker _picker;
+  final FaceChecker _faceChecker;
 
   /// Injectable so tests can exercise the upload path; the real one opens the
   /// system document picker, which no widget test can drive.
@@ -33,6 +38,8 @@ class OnboardingController extends ChangeNotifier {
   OnboardingData data = OnboardingData();
   String? _loadedUid;
   bool _busy = false;
+  String? _uploadingPurpose;
+  bool _checkingFace = false;
   String? _errorMessage;
 
   SsmExtract? _ssmExtract;
@@ -41,6 +48,11 @@ class OnboardingController extends ChangeNotifier {
   bool _ssmUploading = false;
   bool _ssmProfileUploading = false;
   bool _ssmCheckTimedOut = false;
+
+  IdExtract? _idExtract;
+  StreamSubscription<IdExtract?>? _idExtractSub;
+  Timer? _idTimeout;
+  bool _idCheckTimedOut = false;
 
   /// How long to show "checking" before admitting the verdict is not coming
   /// promptly. A cold-started Cloud Function can take a few seconds; anything
@@ -51,6 +63,14 @@ class OnboardingController extends ChangeNotifier {
   bool get isBusy => _busy;
   String? get errorMessage => _errorMessage;
 
+  /// True while the image upload whose purpose starts with [purpose] (e.g.
+  /// 'id_document', 'certificate') is in flight, including its face check.
+  bool isUploading(String purpose) =>
+      _uploadingPurpose?.startsWith(purpose) ?? false;
+
+  /// True while the on-device face check runs (before the upload starts).
+  bool get checkingFace => _checkingFace;
+
   /// The server's reading of the uploaded SSM document, or null while none has
   /// arrived. Proposals only - [applySsmExtract] is what commits them.
   SsmExtract? get ssmExtract => _ssmExtract;
@@ -60,6 +80,11 @@ class OnboardingController extends ChangeNotifier {
   /// True once [_extractWait] has passed with no verdict. The applicant is
   /// never blocked on it, so this only changes the wording.
   bool get ssmCheckTimedOut => _ssmCheckTimedOut;
+
+  /// The server's advisory reading of the uploaded MyKad photo, or null while
+  /// none has arrived. Never gates Continue.
+  IdExtract? get idExtract => _idExtract;
+  bool get idCheckTimedOut => _idCheckTimedOut;
 
   /// Loads saved progress for [uid] once; subsequent calls are no-ops.
   Future<void> loadFor(String uid) async {
@@ -78,6 +103,14 @@ class OnboardingController extends ChangeNotifier {
       if (extract != null) {
         _extractTimeout?.cancel();
         _ssmCheckTimedOut = false;
+      }
+      notifyListeners();
+    });
+    _idExtractSub ??= _repository.watchIdExtract(uid).listen((extract) {
+      _idExtract = extract;
+      if (extract != null) {
+        _idTimeout?.cancel();
+        _idCheckTimedOut = false;
       }
       notifyListeners();
     });
@@ -123,14 +156,72 @@ class OnboardingController extends ChangeNotifier {
   Future<void> pickIdDocument(ImageSource source) => _pickAndUpload(
         purpose: 'id_document',
         source: source,
-        apply: (url) => data.idDocumentUrl = url,
+        faceKind: FaceCheckKind.idCard,
+        applyBox: (box) => data.idFaceBox = box,
+        apply: (url) {
+          data.idDocumentUrl = url;
+          _startIdWait();
+        },
+        // A fresh upload supersedes any earlier verdict. The server check reads
+        // the saved ID type and typed number the moment the photo lands, so
+        // save first (for both types).
+        beforeUpload: () async {
+          _idExtract = null;
+          _idCheckTimedOut = false;
+          await _repository.save(_loadedUid!, data);
+        },
       );
+
+  /// Once the photo is up, give the verdict a bounded wait, as with SSM.
+  void _startIdWait() {
+    _idTimeout?.cancel();
+    _idTimeout = Timer(_extractWait, () {
+      if (_idExtract != null) return;
+      _idCheckTimedOut = true;
+      notifyListeners();
+    });
+  }
+
+  /// Switching type clears the uploaded ID: a photo taken under the other type
+  /// was never checked against a saved IC.
+  void setIdDocumentType(IdDocumentType type) {
+    if (type != data.idDocumentType) {
+      data
+        ..idDocumentUrl = null
+        ..idFaceBox = null;
+    }
+    data.idDocumentType = type;
+    notifyListeners();
+  }
+
+  /// A different number needs a fresh photo, so a changed IC clears the
+  /// uploaded ID.
+  void setIcNumber(String value) {
+    final changed = _digits(value) != _digits(data.icNumber);
+    data.icNumber = value.trim();
+    if (changed) {
+      data
+        ..idDocumentUrl = null
+        ..idFaceBox = null;
+    }
+  }
+
+  /// Ticking records when the applicant agreed to ID/face processing (PDPA);
+  /// unticking withdraws it.
+  void setIdConsent(bool agreed) {
+    data.idConsentAt = agreed ? DateTime.now() : null;
+    notifyListeners();
+  }
+
+  static String _digits(String s) => s.replaceAll(RegExp(r'\D'), '');
 
   /// [source] is chosen by the caller - a selfie is usually taken live, but an
   /// existing photo from the gallery is allowed too.
   Future<void> pickSelfie(ImageSource source) => _pickAndUpload(
         purpose: 'selfie',
         source: source,
+        faceKind: FaceCheckKind.selfie,
+        applyBox: (box) => data.selfieFaceBox = box,
         apply: (url) => data.selfieUrl = url,
       );
 
@@ -268,12 +359,19 @@ class OnboardingController extends ChangeNotifier {
 
   /// Picks an image from [source], uploads it to Storage under the current
   /// user's folder, and applies the resulting download URL to [data] via
-  /// [apply].
+  /// [apply]. With a [faceKind] the photo must pass the on-device face check
+  /// first (nothing is uploaded otherwise) and consent must be on record; the
+  /// found face goes to [applyBox].
   Future<void> _pickAndUpload({
     required String purpose,
     required void Function(String url) apply,
     required ImageSource source,
+    Future<void> Function()? beforeUpload,
+    FaceCheckKind? faceKind,
+    void Function(FaceBox? box)? applyBox,
   }) async {
+    if (faceKind != null && data.idConsentAt == null) return;
+    if (_uploadingPurpose != null) return; // one upload at a time
     final XFile? file;
     try {
       file = await _picker.pickImage(
@@ -291,19 +389,37 @@ class OnboardingController extends ChangeNotifier {
     if (file == null) return; // user cancelled
 
     _busy = true;
+    _uploadingPurpose = purpose;
     _errorMessage = null;
     notifyListeners();
     try {
+      FaceBox? box;
+      if (faceKind != null) {
+        _checkingFace = true;
+        notifyListeners();
+        final result = await _faceChecker.check(file.path, faceKind);
+        _checkingFace = false;
+        notifyListeners();
+        if (result.problem != null) {
+          _errorMessage = result.problem;
+          return;
+        }
+        box = result.box;
+      }
+      await beforeUpload?.call();
       final url = await _storage.uploadVerificationImage(
         uid: _loadedUid!,
         purpose: purpose,
         file: file,
       );
       apply(url);
+      applyBox?.call(box);
     } catch (_) {
       _errorMessage = 'Could not upload the file. Please try again.';
     } finally {
       _busy = false;
+      _checkingFace = false;
+      _uploadingPurpose = null;
       notifyListeners();
     }
   }
@@ -312,6 +428,8 @@ class OnboardingController extends ChangeNotifier {
   void dispose() {
     _extractTimeout?.cancel();
     _extractSub?.cancel();
+    _idTimeout?.cancel();
+    _idExtractSub?.cancel();
     super.dispose();
   }
 

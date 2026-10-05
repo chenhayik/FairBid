@@ -36,6 +36,17 @@ class PostJobController extends ChangeNotifier {
   ServiceAddress? pendingAddress;
   final List<String> photoUrls = [];
 
+  /// Bundle photos tagged only to other tasks, so task 1's AI skips them.
+  Set<String> skipForAssist = {};
+
+  /// The photo the AI assists read: the first one that shows task 1.
+  String? get _assistPhoto {
+    for (final url in photoUrls) {
+      if (!skipForAssist.contains(url)) return url;
+    }
+    return null;
+  }
+
   /// The job's single optional attached video, or null. Replacing it (via
   /// [addVideo]) uploads the new one first, then best-effort deletes the old.
   String? videoUrl;
@@ -104,7 +115,7 @@ class PostJobController extends ChangeNotifier {
     try {
       return await _assist.suggestDraft(
           roughText: roughText,
-          photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
+          photoUrl: _assistPhoto);
     } finally {
       assistingDraft = false;
       _notify();
@@ -122,7 +133,7 @@ class PostJobController extends ChangeNotifier {
       return await _assist.suggestDescription(
           category: selectedCategory,
           roughText: roughText,
-          photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
+          photoUrl: _assistPhoto);
     } finally {
       assistingDescription = false;
       _notify();
@@ -140,7 +151,7 @@ class PostJobController extends ChangeNotifier {
       priceHint = await _assist.suggestPriceRange(
           category: selectedCategory,
           description: description,
-          photoUrl: photoUrls.isNotEmpty ? photoUrls.first : null);
+          photoUrl: _assistPhoto);
     } finally {
       assistingPrice = false;
       _notify();

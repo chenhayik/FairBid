@@ -23,8 +23,9 @@ import '../widgets/insufficient_balance_dialog.dart';
 import 'bundle_bid_list.dart';
 import 'bundle_buttons.dart';
 import 'bundle_header.dart';
-import 'bundle_manual_award_section.dart';
 import 'bundle_option_card.dart';
+import 'bundle_pick_bar.dart';
+import 'bundle_pick_section.dart';
 import 'bundle_provider_view.dart';
 import 'bundle_task_section.dart';
 import 'bundle_warning_banner.dart';
@@ -81,16 +82,21 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
   /// bids list that has since moved on can be noticed and offered a refresh.
   String? _optionsSignature;
 
-  /// The client's own picks for the manual matrix: task id -> provider id,
-  /// or null for "don't award". Starts with every task unpicked.
+  /// The client's own picks: task id -> provider id, or null for "don't
+  /// award". Starts with every task unpicked.
   final Map<String, String?> _picks = {};
 
-  /// The manual pick's own priced option, or null until "Check price" is
-  /// pressed - priced on demand rather than eagerly with the automatic
-  /// options.
+  /// The picks' own priced option (from `priceManualAward`), or null while
+  /// pricing or when the server refused the picks.
   BundleAwardOption? _manualOption;
   List<String> _manualProblems = const [];
   bool _pricingManual = false;
+
+  /// The bids [_manualOption] was priced from, like [_optionsSignature].
+  String? _manualSignature;
+
+  /// Counts pricing calls so a slow, older answer can't overwrite a newer one.
+  int _pricingRun = 0;
 
   /// A cheap fingerprint of [bids]: who bid, their status, when they last
   /// changed it and what they're charging - sorted so it doesn't depend on
@@ -140,45 +146,63 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Records [providerId] as the pick for [taskId] (or clears it) and drops
-  /// any previously priced manual result - it no longer matches the matrix.
-  void _onPick(String taskId, String? providerId) {
+  /// Sets [providerId] (or null) as the pick for all of [taskIds], then
+  /// prices the picks again.
+  void _onPick(List<String> taskIds, String? providerId, List<BundleBid> bids) {
     setState(() {
-      _picks[taskId] = providerId;
-      _manualOption = null;
-      _manualProblems = const [];
+      for (final id in taskIds) {
+        _picks[id] = providerId;
+      }
     });
+    _priceManual(bids);
+  }
+
+  /// Replaces the picks with those of [option], for the client to tweak.
+  void _useOption(BundleAwardOption option, List<BundleBid> bids) {
+    setState(() {
+      _picks
+        ..clear()
+        ..addAll(option.providerByTaskId);
+    });
+    _priceManual(bids);
   }
 
   /// Prices the current picks through `previewBundleAward`.
-  Future<void> _checkManualPrice() async {
+  Future<void> _priceManual(List<BundleBid> bids) async {
     final picks = {
       for (final entry in _picks.entries)
         if (entry.value != null) entry.key: entry.value!,
     };
+    final run = ++_pricingRun;
     setState(() {
-      _pricingManual = true;
+      _pricingManual = picks.isNotEmpty;
       _manualOption = null;
       _manualProblems = const [];
+      _manualSignature = _bidsSignature(bids);
     });
+    if (picks.isEmpty) return;
     try {
       final result = await context.read<BundleRepository>().priceManualAward(
         widget.bundleId,
         picks,
       );
-      if (!mounted) return;
+      if (!mounted || run != _pricingRun) return;
       setState(() {
         _manualOption = result.option;
         _manualProblems = result.problems;
       });
     } on BundleRejectedException catch (e) {
-      if (mounted) setState(() => _manualProblems = [e.message]);
+      if (mounted && run == _pricingRun) {
+        setState(() => _manualProblems = [e.message]);
+      }
     } catch (_) {
-      if (mounted) {
+      if (mounted && run == _pricingRun) {
         setState(() => _manualProblems = ['Could not price your pick.']);
       }
     } finally {
-      if (mounted) setState(() => _pricingManual = false);
+      if (mounted && run == _pricingRun) {
+        setState(() => _pricingManual = false);
+      }
     }
   }
 
@@ -222,7 +246,9 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       if (mounted) setState(() => _error = e.message);
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Could not cancel the bundle. Please try again.');
+        setState(
+          () => _error = 'Could not cancel the bundle. Please try again.',
+        );
       }
     } finally {
       if (mounted) setState(() => _cancelling = false);
@@ -230,9 +256,9 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
   }
 
   /// Confirms and sends the award. When [option] leaves tasks uncovered, the
-  /// confirmation also collects the deadline those tasks are released back
-  /// to ordinary bidding with - defaulting to 7 days out, changeable via the
-  /// same date picker `post_job_screen`'s deadline field uses.
+  /// confirmation also asks what happens to them: released back to ordinary
+  /// bidding with a deadline - defaulting to 7 days out, changeable via the
+  /// same date picker `post_job_screen`'s deadline field uses - or dropped.
   Future<void> _award(BundleAwardOption option, List<Job> tasks) async {
     String titleFor(String taskId) {
       for (final task in tasks) {
@@ -242,6 +268,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
 
     DateTime? releasedDeadline;
+    var dropUnawarded = false;
     if (option.uncoveredTaskIds.isNotEmpty) {
       final defaultDate = DateTime.now().add(const Duration(days: 7));
       releasedDeadline = DateTime(
@@ -278,12 +305,29 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
               if (option.uncoveredTaskIds.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(
-                  '${plural(option.uncoveredTaskIds.length, 'task')} will '
-                  'be released back to ordinary bidding: '
+                  'Not awarded: '
                   '${option.uncoveredTaskIds.map(titleFor).join(', ')}.',
                 ),
+                const SizedBox(height: 8),
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Post separately')),
+                    ButtonSegment(value: true, label: Text('Drop')),
+                  ],
+                  selected: {dropUnawarded},
+                  onSelectionChanged: (s) =>
+                      setDialogState(() => dropUnawarded = s.first),
+                ),
+                if (dropUnawarded) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '${option.uncoveredTaskIds.length == 1 ? 'It' : 'They'} '
+                    'will be cancelled.',
+                  ),
+                ],
               ],
-              if (releasedDeadline != null) ...[
+              if (releasedDeadline != null && !dropUnawarded) ...[
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -355,7 +399,8 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         bundleId: widget.bundleId,
         providerByTaskId: option.providerByTaskId,
         expectedTotalSen: option.totalSen,
-        releasedDeadline: releasedDeadline,
+        releasedDeadline: dropUnawarded ? null : releasedDeadline,
+        dropUnawarded: dropUnawarded,
       );
     } catch (error) {
       failure = error;
@@ -436,7 +481,12 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
           stream: _bids,
           builder: (context, bidSnap) {
             final bids = bidSnap.data ?? const <BundleBid>[];
-            return ListView(
+            final awardable =
+                bundle.status == BundleStatus.open && bundle.biddingOpen;
+            final picking = awardable && bids.isNotEmpty;
+            final hasPick = _picks.values.any((v) => v != null);
+            final optionsFresh = _optionsSignature == _bidsSignature(bids);
+            final list = ListView(
               padding: const EdgeInsets.all(24),
               children: [
                 Text(
@@ -464,6 +514,15 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                   alignment: Alignment.centerLeft,
                   child: BundleStatusPill(bundle: bundle),
                 ),
+                if (bids.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: () =>
+                        showBundleBids(context, bids: bids, tasks: tasks),
+                    icon: const Icon(Icons.gavel_rounded),
+                    label: Text('View all bids (${bids.length})'),
+                  ),
+                ],
                 if (bundle.status == BundleStatus.open) ...[
                   const SizedBox(height: 12),
                   OutlinedBusyButton(
@@ -474,80 +533,17 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                 ],
                 const SizedBox(height: 20),
                 if (_error != null) ErrorBanner(_error!),
-                if (bundle.status == BundleStatus.open)
-                  BundleOpenTaskList(
-                    tasks: tasks,
-                    bids: bids,
-                    onOpenTask: _openTask,
-                  )
-                else
-                  BundleTaskStatusList(tasks: tasks, onOpenTask: _openTask),
-                if (bids.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  BundleBidList(bids: bids, tasks: tasks),
-                ],
-                if (bundle.status == BundleStatus.open) ...[
-                  const SizedBox(height: 24),
-                  if (bundle.biddingOpen) ...[
-                    Text('Award', style: theme.textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    if (bids.isEmpty)
-                      Text(
-                        'No bids yet.',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      )
-                    else if (_options == null)
-                      PrimaryButton(
-                        label: 'Show award options',
-                        busy: _loadingOptions,
-                        onPressed: () => _loadOptions(bids),
-                      )
-                    else if (_options!.isEmpty)
-                      Text(
-                        'No bid covers any of these tasks yet.',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      )
-                    else ...[
-                      if (_optionsSignature != _bidsSignature(bids))
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: WarningBanner(
-                            'The bids have changed since these options were '
-                            'worked out. Refresh before awarding.',
-                            trailing: TextButton(
-                              onPressed: () => _loadOptions(bids),
-                              child: const Text('Refresh'),
-                            ),
-                          ),
-                        ),
-                      for (final merged in mergeBundleOptions(_options!))
-                        BundleOptionCard(
-                          merged: merged,
-                          tasks: tasks,
-                          primary: merged.isRecommended,
-                          busy: _awarding,
-                          enabled: _optionsSignature == _bidsSignature(bids),
-                          onAward: () => _award(merged.option, tasks),
-                        ),
-                    ],
-                    const SizedBox(height: 24),
-                    BundleManualAwardSection(
+                if (!awardable) ...[
+                  if (bundle.status == BundleStatus.open)
+                    BundleTaskList(tasks: tasks, onOpenTask: _openTask)
+                  else
+                    BundleTaskStatusList(
                       tasks: tasks,
                       bids: bids,
-                      picks: _picks,
-                      onPick: _onPick,
-                      onCheckPrice: _checkManualPrice,
-                      busy: _pricingManual,
-                      option: _manualOption,
-                      problems: _manualProblems,
-                      awarding: _awarding,
-                      onAward: (option) => _award(option, tasks),
+                      onOpenTask: _openTask,
                     ),
-                  ] else
+                  if (bundle.status == BundleStatus.open) ...[
+                    const SizedBox(height: 12),
                     Text(
                       'Bidding closed on '
                       '${DateFormat.yMMMd().format(bundle.deadline!)}. This '
@@ -556,7 +552,82 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                  ],
+                ] else ...[
+                  Text('Award options', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  if (bids.isEmpty)
+                    Text(
+                      'No bids yet.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    )
+                  else if (_options == null)
+                    PrimaryButton(
+                      label: 'Show award options',
+                      busy: _loadingOptions,
+                      onPressed: () => _loadOptions(bids),
+                    )
+                  else if (_options!.isEmpty)
+                    Text(
+                      'No bid covers any of these tasks yet.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    )
+                  else ...[
+                    if (!optionsFresh)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: WarningBanner(
+                          'The bids have changed since these options were '
+                          'worked out. Refresh before awarding.',
+                          trailing: TextButton(
+                            onPressed: () => _loadOptions(bids),
+                            child: const Text('Refresh'),
+                          ),
+                        ),
+                      ),
+                    for (final merged in mergeBundleOptions(_options!))
+                      BundleOptionCard(
+                        merged: merged,
+                        tasks: tasks,
+                        primary: merged.isRecommended,
+                        busy: _awarding,
+                        enabled: optionsFresh,
+                        onAward: () => _award(merged.option, tasks),
+                        onUse: () => _useOption(merged.option, bids),
+                      ),
+                  ],
+                  const SizedBox(height: 24),
+                  if (picking)
+                    BundlePickSection(
+                      tasks: tasks,
+                      bids: bids,
+                      picks: _picks,
+                      onPick: (ids, id) => _onPick(ids, id, bids),
+                      onOpenTask: _openTask,
+                    )
+                  else
+                    BundleTaskList(tasks: tasks, onOpenTask: _openTask),
                 ],
+              ],
+            );
+            if (!(picking && hasPick)) return list;
+            // The priced pick stays in view while the client scrolls.
+            return Column(
+              children: [
+                Expanded(child: list),
+                BundlePickBar(
+                  option: _manualOption,
+                  problems: _manualProblems,
+                  pricing: _pricingManual,
+                  stale: _manualSignature != _bidsSignature(bids),
+                  awarding: _awarding,
+                  onRefresh: () => _priceManual(bids),
+                  onAward: () => _award(_manualOption!, tasks),
+                ),
               ],
             );
           },

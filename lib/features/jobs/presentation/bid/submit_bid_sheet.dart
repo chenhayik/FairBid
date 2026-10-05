@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../core/config/platform_config.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
@@ -25,14 +26,22 @@ const kBidDurations = [
 
 /// Bottom sheet where a verified provider places a bid on [job].
 class SubmitBidSheet extends StatelessWidget {
-  const SubmitBidSheet({super.key, required this.job, required this.bidder});
+  const SubmitBidSheet({
+    super.key,
+    required this.job,
+    required this.bidder,
+    this.existing,
+  });
 
   final Job job;
   final AppUser bidder;
 
+  /// The provider's pending bid when editing; null for a new bid.
+  final Bid? existing;
+
   /// Opens the sheet. Resolves once it closes (bid placed or dismissed).
   static Future<void> show(BuildContext context,
-      {required Job job, required AppUser bidder}) {
+      {required Job job, required AppUser bidder, Bid? existing}) {
     final bids = context.read<BidRepository>();
     return showModalBottomSheet<void>(
       context: context,
@@ -40,7 +49,7 @@ class SubmitBidSheet extends StatelessWidget {
       useSafeArea: true,
       builder: (_) => ChangeNotifierProvider(
         create: (_) => SubmitBidController(bids),
-        child: SubmitBidSheet(job: job, bidder: bidder),
+        child: SubmitBidSheet(job: job, bidder: bidder, existing: existing),
       ),
     );
   }
@@ -51,15 +60,20 @@ class SubmitBidSheet extends StatelessWidget {
       // Keep the form above the keyboard.
       padding:
           EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: _SubmitBidForm(job: job, bidder: bidder),
+      child: _SubmitBidForm(job: job, bidder: bidder, existing: existing),
     );
   }
 }
 
 class _SubmitBidForm extends StatefulWidget {
-  const _SubmitBidForm({required this.job, required this.bidder});
+  const _SubmitBidForm({
+    required this.job,
+    required this.bidder,
+    required this.existing,
+  });
   final Job job;
   final AppUser bidder;
+  final Bid? existing;
 
   @override
   State<_SubmitBidForm> createState() => _SubmitBidFormState();
@@ -77,6 +91,20 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
   /// renders *behind* this bottom sheet: the provider tapped Submit, saw
   /// nothing at all happen, and abandoned their only revenue action.
   bool _showEscrowError = false;
+
+  bool get _isUpdate => widget.existing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing == null) return;
+    _amount.text = (existing.amountSen / 100).toStringAsFixed(2);
+    _duration = kBidDurations.contains(existing.estimatedDuration)
+        ? existing.estimatedDuration
+        : null;
+    _message.text = existing.message;
+  }
 
   @override
   void dispose() {
@@ -110,7 +138,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
       unawaited(HapticFeedback.mediumImpact());
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Bid submitted!')));
+          SnackBar(content: Text(_isUpdate ? 'Bid updated!' : 'Bid submitted!')));
     }
   }
 
@@ -127,7 +155,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Submit a bid', style: theme.textTheme.headlineMedium),
+            Text(_isUpdate ? 'Edit your bid' : 'Submit a bid', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 4),
             Text(
               widget.job.title,
@@ -150,6 +178,9 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
                 final sen = parseRmToSen(v);
                 if (sen == null) return 'Enter your bid amount.';
                 if (sen <= 0) return 'Amount must be more than RM 0.';
+                if (sen > PlatformConfig.maxBidSen) {
+                  return "A bid can't be more than RM 50,000.";
+                }
                 return null;
               },
             ),
@@ -199,7 +230,7 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
               ),
             const SizedBox(height: 8),
             PrimaryButton(
-              label: 'Submit bid',
+              label: _isUpdate ? 'Update bid' : 'Submit bid',
               busy: controller.isBusy,
               onPressed: _submit,
             ),

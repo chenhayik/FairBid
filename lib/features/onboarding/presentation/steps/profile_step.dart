@@ -145,6 +145,7 @@ class _ProfileStepState extends State<ProfileStep> {
               UploadBox(
                 compact: true,
                 onTap: onboarding.pickCertificate,
+                busy: onboarding.isUploading('certificate'),
                 icon: Icons.upload_file_outlined,
                 hint: 'PDF, JPG, PNG up to 5MB',
                 pickedName: data.certificateUrls.isEmpty

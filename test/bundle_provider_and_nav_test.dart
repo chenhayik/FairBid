@@ -39,8 +39,6 @@ Job _task(
   String title, {
   String requestorId = 'req-9',
   String category = 'Painting',
-  String? lotId,
-  String? startsAfterJobId,
   int order = 0,
   JobStatus status = JobStatus.open,
 }) => Job(
@@ -57,8 +55,6 @@ Job _task(
   bundleId: 'b1',
   bundleOrder: order,
   bundleTaskCount: 2,
-  lotId: lotId,
-  startsAfterJobId: startsAfterJobId,
 );
 
 Bundle _bundle({
@@ -226,12 +222,8 @@ void main() {
           photoUrls: const ['https://example.com/a.jpg'],
         ),
         bundleTasks: [
-          _task('job-1', 'Paint the walls', lotId: 'lot-1'),
-          _task('job-2', 'Tile the floor',
-              order: 1,
-              category: 'Electrical',
-              lotId: 'lot-1',
-              startsAfterJobId: 'job-1'),
+          _task('job-1', 'Paint the walls'),
+          _task('job-2', 'Tile the floor', order: 1, category: 'Electrical'),
         ],
       );
 
@@ -244,9 +236,6 @@ void main() {
       expect(find.text('Paint the walls'), findsOneWidget);
       expect(find.text('Tile the floor'), findsOneWidget);
       expect(find.textContaining('Electrical • RM'), findsOneWidget);
-      expect(find.text('Starts after Paint the walls'), findsOneWidget);
-      expect(find.textContaining('Linked with Tile the floor'),
-          findsOneWidget);
       expect(find.textContaining('Energy Commission-registered'),
           findsOneWidget);
 
@@ -365,7 +354,8 @@ void main() {
       expect(find.text('2 tasks  •  1 bid'), findsOneWidget);
       expect(find.text('Cancel bundle'), findsOneWidget);
       expect(find.text('Show award options'), findsOneWidget);
-      expect(find.text('Aida Renovation'), findsWidgets);
+      // Bids open from a button near the top.
+      expect(find.text('View all bids (1)'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Bid on this bundle'),
           findsNothing);
       expect(find.widgetWithText(FilledButton, 'Edit bundle bid'),
@@ -653,7 +643,7 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Mark delivered'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Waiting for the client to review milestone 1.'),
+      expect(find.textContaining('Marked as delivered. Waiting for the client'),
           findsOneWidget);
     });
 

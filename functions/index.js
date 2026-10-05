@@ -4,37 +4,44 @@ const admin = require("firebase-admin");
 admin.initializeApp();
 
 /**
- * When a Firebase Auth account is deleted, remove its Firestore profile so no
- * orphaned `users/{uid}` document (and no phantom entry in the admin
- * verification queue) is left behind. `recursiveDelete` also clears any
- * subcollections such as `reviews`.
- *
- * Auth triggers are 1st-gen only, hence `firebase-functions/v1`.
+ * When an Auth account is deleted, remove its Firestore profile.
+ * Auth triggers are 1st-gen only, so this uses firebase-functions/v1.
  */
 exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
-  const ref = admin.firestore().doc(`users/${user.uid}`);
-  await admin.firestore().recursiveDelete(ref);
+  const db = admin.firestore();
+  const ref = db.doc(`users/${user.uid}`);
+  // If the read fails, assume suspended: keeping the IC reserved is safer.
+  let suspended = true;
+  try {
+    suspended = (await ref.get()).get("suspended") === true;
+  } catch (_err) {
+    functions.logger.warn("suspended read failed", {uid: user.uid});
+  }
+  await db.recursiveDelete(ref);
+  // Best-effort: leftover ID photos, and the IC reservation unless banned.
+  try {
+    const [files] = await admin.storage().bucket()
+        .getFiles({prefix: `verification/${user.uid}/`});
+    await Promise.all(files.map((f) => f.delete({ignoreNotFound: true})));
+    if (!suspended) {
+      const reg = await db.collection("idRegistry")
+          .where("uid", "==", user.uid).get();
+      await Promise.all(reg.docs.map((d) => d.ref.delete()));
+    }
+  } catch (_err) {
+    functions.logger.warn("verification cleanup failed", {uid: user.uid});
+  }
   functions.logger.info(`Deleted Firestore profile for ${user.uid}`);
 });
 
-// ---------------------------------------------------------------------------
-// Trust Score v2. The math lives in trust.js (dependency-free so `npm test`
-// can vector-check it against the Dart mirror); producers below (review
-// triggers, job completion, dispute rulings) write only raw aggregates, and
-// the single `recomputeTrustOnUserWrite` consumer turns them into the stored
-// `trustScore` + `trust` breakdown - no client, and no other function, ever
-// computes the score.
-// ---------------------------------------------------------------------------
+// Trust Score. The math is in trust.js; only the consumer below
+// writes the score.
 
 const {computeTrust} = require("./trust");
 
 /**
- * The single trust-score consumer: whenever a user document is written -
- * profile creation, a profile edit, an admin verification decision, or a
- * counter bump from one of the producers below - recompute the breakdown and
- * store it. Writes only when the result actually changed, which both saves
- * writes and terminates the self-trigger loop (our own write recomputes to an
- * identical breakdown and stops).
+ * Recomputes a user's trust breakdown whenever the user doc is written.
+ * It skips the write if nothing changed, which stops a trigger loop.
  */
 exports.recomputeTrustOnUserWrite = functions.firestore
     .document("users/{uid}")
@@ -60,15 +67,8 @@ exports.recomputeTrustOnUserWrite = functions.firestore
     });
 
 /**
- * Producer: a new review bumps the reviewee's rating aggregates. The consumer
- * above folds them into the Trust Score. (Server-side so a client can't forge
- * ratings - rules deny client writes to these fields.)
- *
- * Idempotent against at-least-once trigger retries: a `countedInTrust` marker
- * on the review doc itself (set in the same transaction as the increment)
- * means a replayed event sees it already true and returns without
- * double-counting. This is isolated from `moderateReview`'s subtract logic
- * (guarded by its own `!review.hidden` check), which is untouched.
+ * A new review adds its rating to the reviewee's totals (server-side).
+ * A `countedInTrust` flag on the review stops retries counting twice.
  */
 exports.recomputeTrustScore = functions.firestore
     .document("users/{revieweeId}/reviews/{reviewId}")
@@ -94,26 +94,11 @@ exports.recomputeTrustScore = functions.firestore
       });
     });
 
-const {uidsToCount, isHandoverDispute} = require("./bundles");
+const {uidsToCount} = require("./bundles");
 
 /**
- * Producer: when a job completes (last milestone released, or a dispute
- * ruling closed it out), both participants earn a completed job toward their
- * track record. One trigger covers every completion path. A bundled task
- * counts once per participant per bundle, not once per task: a
- * `bundles/{bundleId}/completionCounts/{uid}` marker records the first task
- * that earned each participant their bump, and later tasks of the same
- * bundle skip a uid that already has one.
- *
- * Idempotent against at-least-once trigger retries: a `completionCounted`
- * marker is read and set on the job doc inside the same transaction as the
- * increments, so a replayed event sees it already true and returns without
- * double-counting. NOTE: that marker write is itself an update to this same
- * job doc, which re-fires this trigger and `closeChatOnJobEnd` - both no-op
- * on it: `before.status === "completed"` is already true here (the job's
- * status doesn't change again), so this trigger's own guard above returns
- * immediately on the replay; `closeChatOnJobEnd` no-ops because
- * `ended === wasEnded` (both true).
+ * When a job completes, both people get +1 completed job.
+ * A bundle counts once per person; `completionCounted` blocks retries.
  */
 exports.onJobCompleted = functions.firestore
     .document("jobs/{jobId}")
@@ -158,20 +143,11 @@ exports.onJobCompleted = functions.firestore
       });
     });
 
-// ---------------------------------------------------------------------------
-// Requestor job-posting counters (jobsPosted / hireRate) - power the public
-// profile's client-history strip (lib/features/profile/domain/
-// public_profile.dart). Both fields (plus the jobsAssigned they're derived
-// from) are server-owned, exactly like the Trust Score fields above - see
-// firestore.rules' trustFields().
-// ---------------------------------------------------------------------------
+// Requestor counters (jobsPosted, hireRate), written only by the server.
 
 /**
- * Applies [postedDelta]/[assignedDelta] to [uid]'s `jobsPosted`/
- * `jobsAssigned` counters and recomputes `hireRate` (0–100 int, the share of
- * posted jobs that reached an assigned/accepted state) from the result,
- * inside one transaction. No jobs posted yet -> `hireRate` is cleared
- * entirely, never a misleading "0%".
+ * Adds the deltas to a user's job counters and recalculates `hireRate`.
+ * With no jobs posted, `hireRate` is removed instead of showing 0%.
  */
 async function bumpRequestorCounters(uid, {postedDelta = 0, assignedDelta = 0}) {
   const db = admin.firestore();
@@ -192,11 +168,7 @@ async function bumpRequestorCounters(uid, {postedDelta = 0, assignedDelta = 0}) 
   });
 }
 
-/**
- * A job posting bumps its requestor's `jobsPosted` counter. Mirrors
- * `logJobPosted` below (same trigger document, a separate function so the
- * timeline write and the counter write stay independent).
- */
+/** Adds 1 to the requestor's `jobsPosted` when a job is created. */
 exports.bumpJobsPostedOnCreate = functions.firestore
     .document("jobs/{jobId}")
     .onCreate(async (snap) => {
@@ -205,11 +177,7 @@ exports.bumpJobsPostedOnCreate = functions.firestore
       await bumpRequestorCounters(requestorId, {postedDelta: 1});
     });
 
-/**
- * A job reaching an assigned/accepted state (open -> in_progress, i.e. a bid
- * was accepted) bumps its requestor's `jobsAssigned` counter, the numerator
- * behind `hireRate`.
- */
+/** Adds 1 to the requestor's `jobsAssigned` when a bid is accepted. */
 exports.bumpJobsAssignedOnAccept = functions.firestore
     .document("jobs/{jobId}")
     .onUpdate(async (change) => {
@@ -220,17 +188,10 @@ exports.bumpJobsAssignedOnAccept = functions.firestore
       await bumpRequestorCounters(after.requestorId, {assignedDelta: 1});
     });
 
-// ---------------------------------------------------------------------------
-// Wallet + milestone escrow.
-//
-// Firestore rules reject every client write to `walletBalanceSen`, to a
-// milestone's funded/released status and to the `transactions` ledger, so all
-// money movement flows through these callables (the admin SDK bypasses
-// rules) - exactly how `recomputeTrustScore` protects the Trust Score.
-// ---------------------------------------------------------------------------
+// Wallet and escrow. Clients can't write money fields, so only these
+// callables (using the admin SDK) move money.
 
-/** `fromUid`/`toUid` sentinel for the escrow leg of a fund/release entry. */
-const ESCROW = "escrow";
+const {ESCROW, appendLedger, writeFundedMilestone} = require("./common");
 
 /** Rejects unauthenticated calls; returns the caller's uid. */
 function callerUid(context) {
@@ -269,12 +230,8 @@ async function assertAdmin(tx, db, uid) {
 }
 
 /**
- * Throws if `users/{uid}` is suspended. Read inside [tx], before any writes.
- * The soft-suspension gate for state-changing callables: a suspended account
- * keeps read access (so it can still see the "account suspended" screen and
- * its reason) but can take no marketplace or money action. Firestore rules
- * block the direct client writes (jobs, bids, reviews, chat, profile); this
- * covers the money/work callables the admin SDK would otherwise let through.
+ * Throws if the user is suspended. Read inside [tx], before any writes.
+ * Suspended users can read, but can't take money or work actions.
  */
 async function assertNotSuspended(tx, db, uid) {
   const snap = await tx.get(db.doc(`users/${uid}`));
@@ -287,48 +244,28 @@ async function assertNotSuspended(tx, db, uid) {
 }
 
 /**
- * Statuses that end a milestone's lifecycle. A job completes only when every
- * milestone is `released` (paid to the provider). A refunded dispute now
- * returns its milestone to `pending` for rework rather than ending it, so a
- * refund can no longer silently "complete" a job. `resolved` is retained here
- * solely so any pre-existing legacy document - the status a refund used to
- * write - can still complete.
+ * Milestone statuses that count as finished; a job completes when all are.
+ * `resolved` is only kept for old data.
  */
-const isTerminal = (status) => status === "released" || status === "resolved";
+const isTerminal = (status) =>
+  status === "released" || status === "resolved" || status === "refunded";
 
-// Max milestones in one plan. Must stay in sync with
-// PlatformConfig.maxMilestones (lib/core/config/platform_config.dart).
+// Max milestones per plan. Keep in sync with PlatformConfig.maxMilestones.
 const MAX_MILESTONES = 20;
-
-/**
- * Appends an entry to the append-only `transactions` ledger in the same
- * transaction/batch as the balance write. `participantIds` holds the entry's
- * real uids (never the escrow sentinel), for the history query.
- */
-function appendLedger(txOrBatch, entry) {
-  const ref = admin.firestore().collection("transactions").doc();
-  txOrBatch.set(ref, {
-    ...entry,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-}
 
 /** A milestone whose money is committed and so can't be re-planned. */
 const isLocked = (status) =>
   status === "funded" || status === "submitted" ||
   status === "disputed" || isTerminal(status);
 
+const {completesJob} = require("./price_change");
+
+/** Turns a milestones query snapshot into rows for [completesJob]. */
+const milestoneRows = (snap) => snap.docs.map((d) => ({id: d.id, ...d.data()}));
+
 /**
- * Requestor accepts a provider's bid: the winning bid becomes `accepted`,
- * every other still-pending bid on the job is `rejected`, and the job moves
- * to `in_progress` with the winner's fields set. No money moves yet - that
- * happens at `fundMilestone` - but the accepted amount becomes a commitment
- * against the requestor's wallet, tracked as `escrowLockedSen`, so a
- * requestor can't accept more work than their balance can eventually fund.
- * Server-side (this used to be a client Firestore transaction) because both
- * the balance gate and the amount trusted for it need to be tamper-proof;
- * `onBidAccepted`, a Firestore trigger on the bid write, still notifies the
- * winner.
+ * Requestor accepts a bid; other pending bids are rejected.
+ * The bid amount moves from the wallet into escrow as one funded stage.
  */
 exports.acceptBid = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -340,10 +277,8 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
   const winnerRef = bidsRef.doc(providerId);
   const walletRef = db.doc(`users/${uid}`);
 
-  // Transactions can't run queries, so the candidate pending-bid ids are
-  // fetched once outside it; each is re-read (and re-validated) by reference
-  // inside the transaction, which is what makes the accept safe against a
-  // concurrent accept or withdraw.
+  // Queries can't run inside a transaction, so fetch pending bid refs first.
+  // Each is re-read inside the transaction to stay safe from races.
   const candidates = await bidsRef.where("status", "==", "pending").get();
   const otherRefs = candidates.docs
       .map((d) => d.ref)
@@ -375,10 +310,8 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
           "failed-precondition", "This bid is no longer pending.",
           {reason: "race"});
     }
-    // Trust only the server-stored bid amount, never client input - but the
-    // rules' own amountSen validation could in principle be bypassed by a
-    // stale/legacy doc, so re-validate it here too (defense in depth) before
-    // it drives the wallet debit below.
+    // Use the stored bid amount, never client input; re-check it before
+    // the wallet debit.
     const amount = checkAmount(winner.amountSen);
     const wallet = walletSnap.data() || {};
     const available =
@@ -397,33 +330,32 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
     // Writes.
     tx.update(winnerRef, {status: "accepted"});
     for (let i = 0; i < otherRefs.length; i++) {
-      // Skip anything withdrawn/resolved since the pre-fetch - nothing to
-      // reject.
+      // Skip bids withdrawn or resolved since the pre-fetch.
       if (otherSnaps[i].data()?.status === "pending") {
         tx.update(otherRefs[i], {status: "rejected"});
       }
     }
+    // The full price goes into escrow now, so `escrowLockedSen` is unused.
     tx.update(walletRef, {
-      escrowLockedSen: (wallet.escrowLockedSen || 0) + amount,
+      walletBalanceSen: (wallet.walletBalanceSen || 0) - amount,
+    });
+    writeFundedMilestone(tx, {
+      jobRef, title: job.title, requestorId: uid, providerId, amountSen: amount,
     });
     tx.update(jobRef, {
       status: "in_progress",
       acceptedProviderId: providerId,
       acceptedProviderName: winner.providerName || null,
       acceptedBidAmountSen: amount,
+      originalBidAmountSen: amount,
+      fundedAtAward: true,
     });
   });
 });
 
 /**
- * Provider proposes (or amends) the milestone plan for their in-progress job.
- * The plan is authored by the provider but only becomes fundable once the
- * requestor approves it (`approveMilestonePlan`), so every milestone is
- * written `proposed`. Server-owned because the amount split is the money
- * contract: it must total the accepted bid exactly (the check that used to
- * live only in the client), and locked milestones - already funded or beyond -
- * can't be re-priced. Any amendment resets the un-locked tail to `proposed`,
- * forcing fresh approval.
+ * Provider proposes or changes the milestone plan; each row starts `proposed`.
+ * Amounts must add up to the accepted bid, and locked milestones stay.
  */
 exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -438,7 +370,7 @@ exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
         "invalid-argument", `A plan can have at most ${MAX_MILESTONES} ` +
         "milestones.");
   }
-  // Normalise + validate each row, keyed by a 0-based order.
+  // Clean each row and number it from 0.
   const rows = plan.map((m, i) => ({
     order: i,
     description: typeof m.description === "string" ? m.description.trim() : "",
@@ -472,6 +404,12 @@ exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError(
           "failed-precondition", "This job is not in progress.");
     }
+    // Jobs paid at award have no plan to propose. Otherwise a refunded
+    // stage could be stranded as rows nobody can approve.
+    if (job.fundedAtAward === true) {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "This job is paid in one payment.");
+    }
     if (typeof job.acceptedBidAmountSen !== "number") {
       throw new functions.https.HttpsError(
           "failed-precondition", "This job has no accepted bid amount.");
@@ -482,8 +420,7 @@ exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
           "Milestone amounts must add up to the accepted bid.");
     }
 
-    // Locked milestones (funded or beyond) can't be re-planned: the incoming
-    // plan must keep each one at the same order and amount, and can't drop it.
+    // Locked milestones keep the same order and amount, and can't be dropped.
     const byId = new Map(existing.docs.map((d) => [d.id, d.data()]));
     for (const [id, m] of byId) {
       if (!isLocked(m.status)) continue;
@@ -495,8 +432,7 @@ exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
       }
     }
 
-    // Write the plan. Locked rows are left untouched; every other row is
-    // (re)written as `proposed`, so any amendment needs fresh approval.
+    // Write the plan. Locked rows stay; the rest become `proposed`.
     for (const row of rows) {
       const id = `m${row.order}`;
       const current = byId.get(id);
@@ -514,14 +450,14 @@ exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
             admin.firestore.FieldValue.serverTimestamp(),
       });
     }
-    // Drop any previously-proposed/pending milestone the amendment removed.
+    // Delete unlocked milestones that the new plan removed.
     for (const [id, m] of byId) {
       const stillThere = rows.some((r) => `m${r.order}` === id);
       if (!stillThere && !isLocked(m.status)) {
         tx.delete(milestonesRef.doc(id));
       }
     }
-    // A new plan supersedes any earlier rejection note.
+    // A new plan clears any earlier rejection note.
     if (job.planRejectionNote) {
       tx.update(jobRef, {planRejectionNote: null});
     }
@@ -535,11 +471,7 @@ exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
   });
 });
 
-/**
- * Requestor approves the proposed plan: every `proposed` milestone becomes
- * `pending` (fundable). This is the consent step that the unilateral split
- * used to skip.
- */
+/** Requestor approves the plan: `proposed` milestones become `pending`. */
 exports.approveMilestonePlan = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const jobId = checkId(data.jobId, "jobId");
@@ -579,11 +511,7 @@ exports.approveMilestonePlan = functions.https.onCall(async (data, context) => {
   });
 });
 
-/**
- * Requestor sends the proposed plan back to the provider with a note: the
- * `proposed` milestones are cleared so the provider re-proposes, and the note
- * is stored on the job for them to see.
- */
+/** Requestor rejects the plan with a note; proposed milestones are deleted. */
 exports.rejectMilestonePlan = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const jobId = checkId(data.jobId, "jobId");
@@ -621,10 +549,7 @@ exports.rejectMilestonePlan = functions.https.onCall(async (data, context) => {
   });
 });
 
-/**
- * Requestor funds a pending milestone: their wallet is debited and the money
- * is held in escrow (tracked on the ledger) until they release it.
- */
+/** Requestor funds a pending milestone: wallet money goes into escrow. */
 exports.fundMilestone = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const jobId = checkId(data.jobId, "jobId");
@@ -663,8 +588,7 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
 
     tx.update(walletRef, {
       walletBalanceSen: balance - milestone.amountSen,
-      // This portion of the accepted-bid commitment is now actually
-      // escrowed, not just locked against future funding.
+      // This part of the commitment is now really in escrow, so unlock it.
       escrowLockedSen:
           Math.max(0, (wallet.escrowLockedSen || 0) - milestone.amountSen),
     });
@@ -691,9 +615,8 @@ exports.fundMilestone = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Requestor releases a submitted milestone: the provider's wallet is credited
- * and, when this was the job's last unreleased milestone, the job completes -
- * the gate that unlocks reviews for both parties.
+ * Requestor releases a delivered milestone and pays the provider.
+ * If it was the last one, the job completes and reviews unlock.
  */
 exports.releaseMilestone = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -741,8 +664,7 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
           (providerSnap.data()?.walletBalanceSen || 0) + amountSen,
     });
     tx.update(milestoneRef, {status: "released"});
-    const wasLast = allMilestones.docs.every(
-        (doc) => doc.id === milestoneId || isTerminal(doc.data().status));
+    const wasLast = completesJob(job, milestoneRows(allMilestones), milestoneId);
     if (wasLast) {
       tx.update(jobRef, {status: "completed"});
     }
@@ -768,39 +690,19 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
       {uid, jobId, milestoneId});
 });
 
-// Per-top-up cap. Must stay in sync with PlatformConfig.maxTopUpSen
-// (lib/core/config/platform_config.dart), the source of truth.
+// Max per top-up. Keep in sync with PlatformConfig.maxTopUpSen.
 const MAX_TOPUP_SEN = 1000000; // RM 10,000
 
-// Cumulative cap on a single wallet's balance - otherwise a client could loop
-// topUpWallet calls (each under the per-call cap) to mint unlimited balance.
-// Must stay in sync with PlatformConfig.maxWalletBalanceSen
-// (lib/core/config/platform_config.dart), the source of truth.
+// Max wallet balance, so repeated top-ups can't mint unlimited money.
+// Keep in sync with PlatformConfig.maxWalletBalanceSen.
 const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
 
-/**
- * True only when running under the Firebase emulator suite. Deployed
- * instances never set this, so it is a reliable "not production" test.
- */
+/** True only in the Firebase emulator; deployed functions never set this. */
 const isEmulator = () => process.env.FUNCTIONS_EMULATOR === "true";
 
 /**
- * Demo-only top-up that stands in for a payment gateway: credits the caller's
- * own wallet, capped per call (MAX_TOPUP_SEN) and capped in total
- * (MAX_WALLET_BALANCE_SEN) so a tampered - or merely looping - client can't
- * mint absurd balances. A transaction (not a batch) is needed now: the total
- * cap is a balance precondition, so the current balance must be read and
- * checked atomically with the increment.
- *
- * EMULATOR ONLY. The caps above bound how fast a caller can mint balance, but
- * they do not stop them: this credits a real, spendable wallet with no payment
- * taken, and any authenticated user could call it directly regardless of
- * whether the client shows the button. Hiding the UI is not a control. The
- * only real top-up path in production is createTopUpBill + reconcileTopUp,
- * where toyyibPay is the arbiter of whether money actually moved.
- *
- * Keep in sync with PlatformConfig.demoTopUpEnabled, which gates the client
- * button on the same condition.
+ * Demo top-up with no real payment, so it only works in the emulator.
+ * Real top-ups use toyyibPay. Matches PlatformConfig.demoTopUpEnabled.
  */
 exports.topUpWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -860,8 +762,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     const walletSnap = await tx.get(walletRef);
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
-    // Gate on the AVAILABLE balance - money locked against an accepted bid
-    // isn't free to withdraw, even though it hasn't left walletBalanceSen yet.
+    // Use the available balance; money locked for a bid can't be withdrawn.
     const available = balance - (wallet.escrowLockedSen || 0);
     if (available < amountSen) {
       functions.logger.error("withdrawFromWallet rejected: insufficient balance",
@@ -877,8 +778,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
       type: "withdraw",
       participantIds: [uid],
     });
-    // A receipt to the actor is deliberate here - money leaving the wallet
-    // should always leave a visible trace.
+    // Always send a receipt when money leaves the wallet.
     notify(tx, uid, {
       type: "payment",
       title: "Withdrawal complete",
@@ -889,17 +789,8 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
   functions.logger.info("withdrawFromWallet completed", {uid, amountSen});
 });
 
-// ---------------------------------------------------------------------------
-// toyyibPay (sandbox) wallet top-up - the real payment-gateway path,
-// alongside the demo `topUpWallet` above (left untouched). A requestor
-// creates a bill here; toyyibPay's hosted page collects payment in a WebView;
-// and the money only ever moves in `creditToyyibpayTopup`, which never trusts
-// a caller-supplied status - it re-verifies against toyyibPay's own
-// `getBillTransactions` API and credits the amount stored in OUR OWN
-// `topups/{billCode}` record, never the gateway's. Both `toyyibpayCallback`
-// (the webhook) and `reconcileToyyibpayTopup` (a client-driven safety net for
-// a dropped callback) share that one helper so the two paths can't diverge.
-// ---------------------------------------------------------------------------
+// toyyibPay top-up. Money only moves in `creditToyyibpayTopup`, which
+// re-checks the bill with toyyibPay and credits the amount we stored.
 
 const {defineSecret} = require("firebase-functions/params");
 const toyyibpaySecret = defineSecret("TOYYIBPAY_SECRET_KEY");
@@ -910,11 +801,8 @@ const TOYYIBPAY_CALLBACK_URL =
     "https://us-central1-fairbid-c9340.cloudfunctions.net/toyyibpayCallback";
 
 /**
- * Requestor starts a real top-up: creates a toyyibPay sandbox bill for
- * `data.amountSen` and returns its hosted payment page for the client to open
- * in a WebView. Capped exactly like `topUpWallet` (per-call and cumulative),
- * so an over-cap top-up can't even be initiated - but no money moves here;
- * that only happens once the bill is independently confirmed paid.
+ * Creates a toyyibPay bill and returns its payment page URL.
+ * Same caps as `topUpWallet`; no money moves until the bill is paid.
  */
 exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     .https.onCall(async (data, context) => {
@@ -956,11 +844,11 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
         billAmount: String(amountSen),
         billReturnUrl: TOYYIBPAY_RETURN_URL,
         billCallbackUrl: TOYYIBPAY_CALLBACK_URL,
-        billExternalReferenceNo: uid,
+        // Unique per bill, or toyyibPay may treat a new payment as a repeat.
+        billExternalReferenceNo: `${uid}-${Date.now()}`,
         billTo: user.displayName || "FairBid user",
         billEmail: user.email || "user@fairbid.app",
-        // toyyibPay rejects an empty billPhone; fall back to a placeholder
-        // when the profile has no phone (it's only used on the receipt).
+        // toyyibPay rejects an empty phone, so use a placeholder if none.
         billPhone: user.phone || "0123456789",
         billPaymentChannel: "2",
         billExpiryDays: "1",
@@ -991,14 +879,8 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     });
 
 /**
- * The authoritative verify-and-credit for one bill - the actual money path,
- * shared by `toyyibpayCallback` and `reconcileToyyibpayTopup` so they can't
- * diverge. Always re-fetches the bill's transactions from toyyibPay itself
- * (never trusts a caller-supplied status), matches the paid amount against
- * our own stored `topups/{billCode}` record (crediting THAT amount, never the
- * gateway's), and credits the wallet at most once via a transactional
- * re-read. Returns `{credited, reason}`; `reason` is one of `"not_paid"`,
- * `"unknown_bill"`, `"amount_mismatch"`, `"already_credited"` or `"credited"`.
+ * Checks a bill with toyyibPay and credits the wallet at most once.
+ * Used by the webhook and the reconcile call. Returns `{credited, reason}`.
  */
 async function creditToyyibpayTopup(billCode) {
   const db = admin.firestore();
@@ -1027,8 +909,7 @@ async function creditToyyibpayTopup(billCode) {
     return {credited: false, reason: "unknown_bill"};
   }
 
-  // getBillTransactions reports the ringgit amount as a decimal string
-  // ("10.00") - convert to sen before comparing to our own stored amount.
+  // toyyibPay gives the amount as ringgit text ("10.00"); convert to sen.
   const paidSen = Math.round(parseFloat(paid.billpaymentAmount) * 100);
   if (paidSen !== topupSnap.data().amountSen) {
     functions.logger.error("toyyibpay amount mismatch", {
@@ -1056,8 +937,7 @@ async function creditToyyibpayTopup(billCode) {
     const wallet = walletSnap.data() || {};
     const newBalance = (wallet.walletBalanceSen || 0) + rec.amountSen;
     if (newBalance > MAX_WALLET_BALANCE_SEN) {
-      // Genuinely-paid money is credited regardless - the cap is only ever
-      // pre-checked at bill creation, never a reason to refuse real funds.
+      // Paid money is always credited; the cap is only a pre-check.
       functions.logger.warn("toyyibpay credit exceeds wallet cap",
           {billCode, uid: rec.uid, newBalance});
     }
@@ -1069,8 +949,7 @@ async function creditToyyibpayTopup(billCode) {
       creditedAt: admin.firestore.FieldValue.serverTimestamp(),
       invoiceNo: paid.billpaymentInvoiceNo,
     });
-    // Mirrors topUpWallet's ledger write exactly, plus a `ref` back to the
-    // bill for support/audit lookups.
+    // Same ledger entry as topUpWallet, plus a `ref` to the bill.
     appendLedger(tx, {
       fromUid: null,
       toUid: rec.uid,
@@ -1086,12 +965,8 @@ async function creditToyyibpayTopup(billCode) {
 }
 
 /**
- * toyyibPay's server-to-server webhook - the money path. Answers 200 for
- * every business-logic outcome (paid-but-forged-billcode, amount mismatch,
- * not yet paid, or a genuine credit) so toyyibPay stops retrying once we've
- * made a decision; only an actual failure to reach toyyibPay's API answers
- * 500, so toyyibPay retries and `reconcileToyyibpayTopup` remains the
- * client-driven backstop for the same gap.
+ * toyyibPay's webhook. Replies 200 once we have decided (credit or reject);
+ * replies 500 only if toyyibPay's API can't be reached, so it retries.
  */
 exports.toyyibpayCallback = functions.runWith({secrets: [toyyibpaySecret]})
     .https.onRequest(async (req, res) => {
@@ -1123,10 +998,8 @@ exports.toyyibpayCallback = functions.runWith({secrets: [toyyibpaySecret]})
     });
 
 /**
- * Client-driven safety net for a callback toyyibPay never delivered: the
- * client calls this once the WebView returns. The caller must own the bill;
- * it then runs the exact same verify-and-credit helper as the webhook, so
- * the two paths can never disagree on when money moves.
+ * Backup for a missed webhook: the client calls this after the WebView closes.
+ * The caller must own the bill; it uses the same credit helper.
  */
 exports.reconcileToyyibpayTopup =
     functions.runWith({secrets: [toyyibpaySecret]})
@@ -1151,10 +1024,8 @@ exports.reconcileToyyibpayTopup =
         });
 
 /**
- * Admin ruling on a flagged review. Hiding removes it from public display
- * AND reverses its rating out of the reviewee's aggregates - otherwise a
- * hidden abusive review would keep poisoning the Trust Score. Keeping just
- * clears the flag. Only this function may write `hidden` (rules forbid it).
+ * Admin ruling on a flagged review. Hiding it also removes its rating from
+ * the reviewee's totals; keeping it just clears the flag.
  */
 exports.moderateReview = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -1176,9 +1047,7 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
     }
 
     if (hide && !review.hidden) {
-      // The `!review.hidden` guard prevents a double-subtract if the same
-      // review is somehow moderated twice. The Trust Score consumer picks the
-      // new aggregates up from this write.
+      // The `!review.hidden` check stops a double subtract if moderated twice.
       tx.update(userRef, {
         ratingSum:
             Math.max(0, (userSnap.data()?.ratingSum || 0) - review.rating),
@@ -1202,21 +1071,12 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Account suspension (admin moderation).
-//
-// A soft ban: `setUserSuspended` flips the `suspended` flag on the target's
-// profile (an admin can suspend neither themselves nor another admin). The
-// flag is server-owned - Firestore rules deny every client write to it, so a
-// suspended user can't lift their own ban - and it gates both the client (the
-// router sends a suspended user to the "account suspended" screen) and the
-// money/work callables (`assertNotSuspended`). Reversible at any time.
-// ---------------------------------------------------------------------------
+// Account suspension. Only admins can set `suspended` (rules block clients);
+// it blocks the app screens and the money callables.
 
 /**
- * Admin suspends or reinstates a user. `data.suspended` is the target state
- * (true = suspend, false = reinstate); `data.reason` is an optional note shown
- * to the user. Notifies the user either way.
+ * Admin suspends (true) or reinstates (false) a user, with an optional reason.
+ * The user is notified either way.
  */
 exports.setUserSuspended = functions.https.onCall(async (data, context) => {
   const callerId = callerUid(context);
@@ -1272,9 +1132,8 @@ exports.setUserSuspended = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Admin-only: clears every second factor from an account, for a user who
- * lost their authenticator app. Firebase offers no self-service recovery.
- * Refresh tokens are revoked so the old session can't linger.
+ * Admin-only: removes all 2FA factors for a user who lost their authenticator.
+ * Refresh tokens are revoked so the old session ends.
  */
 exports.adminClearMfa = functions.https.onCall(async (data, context) => {
   const callerId = callerUid(context);
@@ -1293,17 +1152,13 @@ exports.adminClearMfa = functions.https.onCall(async (data, context) => {
   await admin.auth().revokeRefreshTokens(targetUid);
 });
 
-// ---------------------------------------------------------------------------
-// Dispute resolution (plan §3.3.3). Raising a dispute freezes the milestone;
-// an admin ruling pays the escrowed amount out. Both live here so the
-// milestone flip and the dispute record (and later the money) move in one
-// transaction that clients can't forge.
-// ---------------------------------------------------------------------------
+// Disputes. Raising one freezes the milestone; an admin ruling pays out escrow.
+
+const {disputeRefundPlan} = require("./payouts");
 
 /**
- * A job participant disputes a funded/delivered milestone: the milestone is
- * frozen (`→ disputed`) and a `disputes/{id}` doc opens for admin review.
- * No money moves until the admin rules.
+ * A participant disputes a funded or delivered milestone, which freezes it.
+ * No money moves until an admin rules.
  */
 exports.raiseDispute = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -1342,19 +1197,16 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
           "Only a funded or delivered milestone can be disputed.");
     }
 
-    // Read before any writes: the predecessor task tells us whether this is
-    // a split handover, for the phase-6 dispute metric.
-    const predecessorJob = job.startsAfterJobId ?
-        (await tx.get(db.doc(`jobs/${job.startsAfterJobId}`))).data() || null :
-        null;
-
-    tx.update(milestoneRef, {status: "disputed"});
+    // disputedBy lets the raiser withdraw it from the milestone card.
+    tx.update(milestoneRef, {status: "disputed", disputedBy: uid});
     tx.set(disputeRef, {
       jobId,
       jobTitle: job.title || null,
       milestoneId,
       milestoneDescription: milestone.description || "",
       amountSen: milestone.amountSen,
+      // Where the milestone goes back to if the dispute is withdrawn.
+      milestoneStatusBefore: milestone.status,
       raisedByUid: uid,
       raisedByRole: isRequestor ? "requestor" : "provider",
       requestorId: job.requestorId,
@@ -1369,7 +1221,6 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       resolvedAt: null,
       ...(job.bundleId ? {bundleId: job.bundleId} : {}),
-      handoverDispute: isHandoverDispute(job, predecessorJob),
     });
     notify(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
       type: "dispute",
@@ -1383,13 +1234,59 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Admin ruling on an open dispute. `release` pays the escrowed amount to the
- * provider and marks the milestone `released` - terminal, and if it was the
- * job's last one the job completes, unlocking reviews (mirrors
- * `releaseMilestone`). `refund` returns the money to the requestor and sends
- * the milestone back to `pending` for rework (carrying the ruling note), so
- * the worker can re-deliver instead of being stranded - the job stays in
- * progress and never auto-completes off a refund.
+ * The person who raised an open dispute withdraws it. The milestone goes back
+ * to where it was (in escrow, or delivered) and no money moves.
+ */
+exports.withdrawDispute = functions.https.onCall(async (data, context) => {
+  const uid = callerUid(context);
+  const jobId = checkId(data.jobId, "jobId");
+  const milestoneId = checkId(data.milestoneId, "milestoneId");
+  const db = admin.firestore();
+  const jobRef = db.doc(`jobs/${jobId}`);
+  const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
+  const openQuery = db.collection("disputes")
+      .where("jobId", "==", jobId)
+      .where("milestoneId", "==", milestoneId)
+      .where("status", "==", "open");
+
+  await db.runTransaction(async (tx) => {
+    const [jobSnap, milestoneSnap, disputes] = await Promise.all([
+      tx.get(jobRef), tx.get(milestoneRef), tx.get(openQuery),
+    ]);
+    const disputeDoc = disputes.docs[0];
+    const dispute = disputeDoc?.data();
+    if (!dispute || milestoneSnap.data()?.status !== "disputed") {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "There is no open dispute to withdraw.");
+    }
+    if (dispute.raisedByUid !== uid) {
+      throw new functions.https.HttpsError(
+          "permission-denied", "Only the person who raised it can withdraw it.");
+    }
+    const job = jobSnap.data();
+    tx.update(milestoneRef, {
+      status: dispute.milestoneStatusBefore === "submitted" ?
+          "submitted" : "funded",
+      disputedBy: null,
+    });
+    tx.update(disputeDoc.ref, {
+      status: "withdrawn",
+      resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    const isRequestor = dispute.raisedByRole === "requestor";
+    notify(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
+      type: "dispute",
+      title: "Dispute withdrawn",
+      body: `The ${isRequestor ? "client" : "provider"} withdrew their ` +
+          `dispute on "${job.title}". The work carries on as before.`,
+      route: `/jobs/${jobId}`,
+    });
+  });
+});
+
+/**
+ * Admin rules on a dispute. `release` pays the provider. `refund` gives the
+ * client back all money still held and ends the job.
  */
 exports.resolveDispute = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -1411,60 +1308,103 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     const dispute = disputeSnap.data();
     if (dispute?.status !== "open") {
       throw new functions.https.HttpsError(
-          "failed-precondition", "This dispute has already been resolved.");
+          "failed-precondition", "This dispute has already been closed.");
     }
 
     const jobRef = db.doc(`jobs/${dispute.jobId}`);
-    const milestoneRef =
-        jobRef.collection("milestones").doc(dispute.milestoneId);
-    const beneficiaryUid = resolution === "release" ?
-        dispute.providerId : dispute.requestorId;
-    const beneficiaryRef = db.doc(`users/${beneficiaryUid}`);
-    const [milestoneSnap, allMilestones, beneficiarySnap] = await Promise.all([
+    const milestonesRef = jobRef.collection("milestones");
+    const milestoneRef = milestonesRef.doc(dispute.milestoneId);
+    const requestorRef = db.doc(`users/${dispute.requestorId}`);
+    const providerRef = db.doc(`users/${dispute.providerId}`);
+    const [milestoneSnap, allMilestones, requestorSnap, providerSnap, jobSnap,
+      openOnJob] = await Promise.all([
       tx.get(milestoneRef),
-      tx.get(jobRef.collection("milestones")),
-      tx.get(beneficiaryRef),
+      tx.get(milestonesRef),
+      tx.get(requestorRef),
+      tx.get(providerRef),
+      tx.get(jobRef),
+      tx.get(db.collection("disputes")
+          .where("jobId", "==", dispute.jobId)
+          .where("status", "==", "open")),
     ]);
     if (milestoneSnap.data()?.status !== "disputed") {
       throw new functions.https.HttpsError(
           "failed-precondition", "This milestone is not under dispute.");
     }
+    const job = jobSnap.data();
     const amountSen = dispute.amountSen;
+    const released = resolution === "release";
+    let refundedSen = 0;
 
-    const beneficiaryUpdate = {
-      walletBalanceSen:
-          (beneficiarySnap.data()?.walletBalanceSen || 0) + amountSen,
-    };
-    if (resolution === "refund") {
-      // The milestone reopens to `pending` below (re-fundable), so this
-      // amount is a live commitment against the requestor's wallet again -
-      // re-lock it.
-      beneficiaryUpdate.escrowLockedSen =
-          (beneficiarySnap.data()?.escrowLockedSen || 0) + amountSen;
-    }
-    tx.update(beneficiaryRef, beneficiaryUpdate);
-    if (resolution === "release") {
-      // Terminal: the provider is paid. Completing the job when this was the
-      // last un-released milestone is the review-unlock gate.
-      tx.update(milestoneRef, {status: "released"});
-      const wasLast = allMilestones.docs.every(
-          (doc) => doc.id === dispute.milestoneId ||
-              isTerminal(doc.data().status));
-      if (wasLast) {
+    if (released) {
+      // Provider is paid. If it was the last milestone, the job completes.
+      tx.update(providerRef, {
+        walletBalanceSen:
+            (providerSnap.data()?.walletBalanceSen || 0) + amountSen,
+      });
+      tx.update(milestoneRef, {status: "released", disputedBy: null});
+      if (completesJob(job, milestoneRows(allMilestones),
+          dispute.milestoneId)) {
         tx.update(jobRef, {status: "completed"});
       }
-    } else {
-      // Refund: the requestor gets their money back and the milestone reopens
-      // for rework (re-fundable, re-deliverable) with the ruling note attached.
-      // The job stays in progress - a refund must never look like success.
-      tx.update(milestoneRef, {
-        status: "pending",
-        submissionNote: null,
-        reworkNote: rulingNote || null,
-        reworkCount: admin.firestore.FieldValue.increment(1),
+      appendLedger(tx, {
+        fromUid: ESCROW,
+        toUid: dispute.providerId,
+        amountSen,
+        type: "dispute_release",
+        jobId: dispute.jobId,
+        jobTitle: dispute.jobTitle || null,
+        milestoneId: dispute.milestoneId,
+        participantIds: [dispute.providerId],
       });
+    } else {
+      // Refund: every stage still holding money goes back and the job ends,
+      // so it can't simply be funded again as if nothing happened.
+      const plan = disputeRefundPlan(job, milestoneRows(allMilestones));
+      refundedSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
+      const wallet = requestorSnap.data() || {};
+      tx.update(requestorRef, {
+        walletBalanceSen: (wallet.walletBalanceSen || 0) + refundedSen,
+        escrowLockedSen:
+            Math.max(0, (wallet.escrowLockedSen || 0) - plan.unlockSen),
+      });
+      for (const refund of plan.refunds) {
+        tx.update(milestonesRef.doc(refund.id),
+            {status: "refunded", disputedBy: null});
+        appendLedger(tx, {
+          fromUid: ESCROW,
+          toUid: dispute.requestorId,
+          amountSen: refund.amountSen,
+          type: refund.id === dispute.milestoneId ?
+              "dispute_refund" : "refund",
+          jobId: dispute.jobId,
+          jobTitle: dispute.jobTitle || null,
+          milestoneId: refund.id,
+          participantIds: [dispute.requestorId],
+        });
+      }
+      for (const id of plan.deleteIds) tx.delete(milestonesRef.doc(id));
+      tx.update(jobRef, {
+        status: "cancelled",
+        cancelledBy: "dispute",
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancellationReason: "Ended after an admin refunded the client",
+        cancellationRequestedBy: null,
+        cancellationRequestedAt: null,
+        priceChangeRequest: null,
+      });
+      // Other open disputes on this job end with it; their money is refunded.
+      for (const other of openOnJob.docs) {
+        if (other.id === disputeId) continue;
+        tx.update(other.ref, {
+          status: "resolved",
+          resolution: "refund",
+          rulingNote: "Closed because the job ended after another dispute.",
+          resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
       // A ruling against the provider counts against their track record.
-      tx.update(db.doc(`users/${dispute.providerId}`), {
+      tx.update(providerRef, {
         disputesLost: admin.firestore.FieldValue.increment(1),
       });
     }
@@ -1474,47 +1414,35 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
       rulingNote: rulingNote || null,
       resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    appendLedger(tx, {
-      fromUid: ESCROW,
-      toUid: beneficiaryUid,
-      amountSen,
-      type: resolution === "release" ? "dispute_release" : "dispute_refund",
-      jobId: dispute.jobId,
-      jobTitle: dispute.jobTitle || null,
-      milestoneId: dispute.milestoneId,
-      participantIds: [beneficiaryUid],
-    });
-    // Both parties learn the outcome; the admin is the actor.
-    const released = resolution === "release";
+    const note = rulingNote ? ` Admin's note: "${rulingNote}"` : "";
     notify(tx, dispute.providerId, {
       type: "dispute",
-      title: "Dispute resolved",
+      title: released ? "Dispute decided: you were paid" :
+          "Dispute decided: the client was refunded",
       body: released ?
-          `Ruled in your favour: ${rm(amountSen)} was released to you for ` +
-          `"${dispute.jobTitle}".` :
-          `The client was refunded ${rm(amountSen)} on ` +
-          `"${dispute.jobTitle}". The milestone is reopened for rework.`,
+          `${rm(amountSen)} for "${dispute.jobTitle}" was paid to your ` +
+          `wallet.${note}` :
+          `The client got ${rm(refundedSen)} back and ` +
+          `"${dispute.jobTitle}" has ended.${note}`,
       route: `/jobs/${dispute.jobId}`,
     });
     notify(tx, dispute.requestorId, {
       type: "dispute",
-      title: "Dispute resolved",
+      title: released ? "Dispute decided: the provider was paid" :
+          "Dispute decided: you were refunded",
       body: released ?
-          `${rm(amountSen)} was released to the provider for ` +
-          `"${dispute.jobTitle}".` :
-          `You were refunded ${rm(amountSen)} on "${dispute.jobTitle}". ` +
-          "The milestone is reopened for rework.",
+          `${rm(amountSen)} for "${dispute.jobTitle}" was paid to the ` +
+          `provider.${note}` :
+          `${rm(refundedSen)} is back in your wallet and ` +
+          `"${dispute.jobTitle}" has ended.${note}`,
       route: `/jobs/${dispute.jobId}`,
     });
   });
 });
 
 /**
- * Admin-only, idempotent Trust Score v2 backfill: recounts every user's
- * `jobsCompleted` (as provider or requestor) and `disputesLost` from the
- * source collections and writes just those counters - the
- * `recomputeTrustOnUserWrite` consumer then rebuilds each user's breakdown.
- * Safe to re-run; also usable later as a "recount everything" repair tool.
+ * Admin-only, safe to re-run: recounts each user's `jobsCompleted` and
+ * `disputesLost` from the source data. The trust consumer rebuilds scores.
  */
 exports.backfillTrust = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -1540,9 +1468,7 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
           .where("providerId", "==", doc.id)
           .where("resolution", "==", "refund")),
     ]);
-    // Unconditional write: fixes the counters AND fires the consumer, which
-    // computes the `trust` map for users that predate v2 (and no-ops for
-    // anyone already up to date).
+    // Always write: it fixes the counters and re-triggers the trust recompute.
     await doc.ref.update({
       jobsCompleted: asProvider + asRequestor,
       disputesLost: refunds,
@@ -1552,15 +1478,8 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
   return {users: users.size, updated};
 });
 
-// ---------------------------------------------------------------------------
-// Mid-flight job cancellation.
-//
-// Cancelling an in-progress job is mutual: either party requests, the
-// counterparty accepts (an admin can override). The safety property is that
-// cancellation can never strand escrow - it is refused while any milestone
-// holds committed money (`funded`/`submitted`/`disputed`); that money must
-// first be released, or disputed and ruled on, through the paths above.
-// ---------------------------------------------------------------------------
+// Job cancellation: one side asks, the other accepts (an admin can override).
+// It never strands escrow: it is blocked, or the money is refunded.
 
 /** True if any milestone still holds committed escrow. */
 function hasHeldEscrow(milestonesSnap) {
@@ -1574,12 +1493,33 @@ const ESCROW_HELD_MESSAGE =
     "This job still has money in escrow. Release each funded milestone, or " +
     "resolve any dispute, before cancelling.";
 
+const STAGE_DELIVERED_MESSAGE =
+    "A delivered or disputed stage must be released or resolved before " +
+    "this job can be cancelled.";
+
+const {
+  canCancelFunded,
+  cancellationPlan,
+  planIncrease,
+  planDecrease,
+  finishedByDecrease,
+} = require("./payouts");
+
 /**
- * The still-locked portion of [job]'s accepted bid: the total minus whatever
- * has already been funded (which moved that slice from `escrowLockedSen`
- * into actual escrow at `fundMilestone`) - i.e. every terminal (released)
- * milestone. Cancellation is refused while any milestone is
- * funded/submitted/disputed, so those statuses never occur here.
+ * Returns why [job] can't be cancelled now, or null if it can.
+ * Funded-at-award jobs only block on delivered or disputed stages.
+ */
+function cancellationBlocker(job, milestonesSnap) {
+  if (job.fundedAtAward) {
+    return canCancelFunded(milestoneRows(milestonesSnap)) ?
+        null : STAGE_DELIVERED_MESSAGE;
+  }
+  return hasHeldEscrow(milestonesSnap) ? ESCROW_HELD_MESSAGE : null;
+}
+
+/**
+ * The part of the accepted bid still locked: the total minus released
+ * milestones. Legacy jobs only.
  */
 function remainingLockedSen(job, milestonesSnap) {
   const funded = milestonesSnap.docs.reduce((sum, doc) => {
@@ -1590,23 +1530,47 @@ function remainingLockedSen(job, milestonesSnap) {
 }
 
 /**
- * Deletes every not-yet-funded milestone, releases the requestor's remaining
- * unfunded commitment on this job (locked at accept, decremented as each
- * milestone was funded) back to their available balance, and marks the job
- * cancelled with an audit trail. Callers must already have verified authority
- * and re-checked the escrow guard inside [tx]; [remainingSen] is
- * [remainingLockedSen] computed by the caller from the same reads.
+ * Cancels the job and settles money: unfunded milestones are deleted and
+ * funded stages refunded. Caller checks authority and [cancellationBlocker].
  */
-function finaliseCancellation(tx, jobRef, milestonesSnap, cancelledBy,
-    requestorWalletRef, requestorWalletSnap, remainingSen) {
-  for (const doc of milestonesSnap.docs) {
-    if (!isLocked(doc.data().status)) tx.delete(doc.ref);
-  }
-  if (remainingSen > 0) {
-    const locked = requestorWalletSnap.data()?.escrowLockedSen || 0;
-    tx.update(requestorWalletRef, {
-      escrowLockedSen: Math.max(0, locked - remainingSen),
-    });
+function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy,
+    requestorWalletRef, requestorWalletSnap) {
+  const wallet = requestorWalletSnap.data() || {};
+  if (job.fundedAtAward) {
+    const plan = cancellationPlan(milestoneRows(milestonesSnap));
+    for (const id of plan.deleteIds) {
+      tx.delete(jobRef.collection("milestones").doc(id));
+    }
+    const refundSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
+    if (refundSen > 0 || plan.unlockSen > 0) {
+      tx.update(requestorWalletRef, {
+        walletBalanceSen: (wallet.walletBalanceSen || 0) + refundSen,
+        escrowLockedSen:
+            Math.max(0, (wallet.escrowLockedSen || 0) - plan.unlockSen),
+      });
+    }
+    for (const refund of plan.refunds) {
+      appendLedger(tx, {
+        fromUid: ESCROW,
+        toUid: job.requestorId,
+        amountSen: refund.amountSen,
+        type: "refund",
+        jobId: jobRef.id,
+        jobTitle: job.title || null,
+        milestoneId: refund.id,
+        participantIds: [job.requestorId],
+      });
+    }
+  } else {
+    for (const doc of milestonesSnap.docs) {
+      if (!isLocked(doc.data().status)) tx.delete(doc.ref);
+    }
+    const remainingSen = remainingLockedSen(job, milestonesSnap);
+    if (remainingSen > 0) {
+      tx.update(requestorWalletRef, {
+        escrowLockedSen: Math.max(0, (wallet.escrowLockedSen || 0) - remainingSen),
+      });
+    }
   }
   tx.update(jobRef, {
     status: "cancelled",
@@ -1614,13 +1578,13 @@ function finaliseCancellation(tx, jobRef, milestonesSnap, cancelledBy,
     cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
     cancellationRequestedBy: null,
     cancellationRequestedAt: null,
+    priceChangeRequest: null,
   });
 }
 
 /**
- * Either party asks to cancel an in-progress job. Records the request for the
- * counterparty to accept; does not change the job status. Refused while escrow
- * is held.
+ * Either party asks to cancel an in-progress job; the other side must accept.
+ * Refused while escrow is held.
  */
 exports.requestJobCancellation =
   functions.https.onCall(async (data, context) => {
@@ -1653,9 +1617,13 @@ exports.requestJobCancellation =
             "failed-precondition",
             "A cancellation request is already pending.");
       }
-      if (hasHeldEscrow(milestones)) {
+      if (job.priceChangeRequest) {
         throw new functions.https.HttpsError(
-            "failed-precondition", ESCROW_HELD_MESSAGE);
+            "failed-precondition", "Resolve the pending price change first.");
+      }
+      const blocker = cancellationBlocker(job, milestones);
+      if (blocker) {
+        throw new functions.https.HttpsError("failed-precondition", blocker);
       }
       tx.update(jobRef, {
         cancellationRequestedBy: isRequestor ? "requestor" : "provider",
@@ -1673,9 +1641,8 @@ exports.requestJobCancellation =
   });
 
 /**
- * The counterparty answers a pending cancellation request. Accepting cancels
- * the job (re-checking the escrow guard); declining clears the request and
- * leaves the job in progress.
+ * The other party accepts or declines a cancellation request.
+ * Accepting re-checks the escrow guard and cancels the job.
  */
 exports.respondToJobCancellation =
   functions.https.onCall(async (data, context) => {
@@ -1709,7 +1676,7 @@ exports.respondToJobCancellation =
             "You raised this request; the other party must respond.");
       }
 
-      // The requester (the party that is NOT responding) learns the outcome.
+      // The requester gets told the outcome.
       const requesterUid = responderRole === "requestor" ?
           job.acceptedProviderId : job.requestorId;
       if (!accept) {
@@ -1727,14 +1694,14 @@ exports.respondToJobCancellation =
         });
         return;
       }
-      if (hasHeldEscrow(milestones)) {
-        throw new functions.https.HttpsError(
-            "failed-precondition", ESCROW_HELD_MESSAGE);
+      const blocker = cancellationBlocker(job, milestones);
+      if (blocker) {
+        throw new functions.https.HttpsError("failed-precondition", blocker);
       }
       const requestorWalletRef = db.doc(`users/${job.requestorId}`);
       const requestorWalletSnap = await tx.get(requestorWalletRef);
-      finaliseCancellation(tx, jobRef, milestones, uid, requestorWalletRef,
-          requestorWalletSnap, remainingLockedSen(job, milestones));
+      finaliseCancellation(tx, jobRef, job, milestones, uid, requestorWalletRef,
+          requestorWalletSnap);
       notify(tx, requesterUid, {
         type: "cancellation",
         title: "Job cancelled",
@@ -1745,9 +1712,8 @@ exports.respondToJobCancellation =
   });
 
 /**
- * Admin override: cancels an in-progress job unilaterally (e.g. as the outcome
- * of an unworkable dispute). Still refused while escrow is held - the admin
- * resolves the dispute first, which settles the money.
+ * Admin cancels an in-progress job without agreement.
+ * Still blocked while escrow is held; resolve the dispute first.
  */
 exports.adminCancelJob = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -1768,15 +1734,15 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError(
           "failed-precondition", "This job is not in progress.");
     }
-    if (hasHeldEscrow(milestones)) {
-      throw new functions.https.HttpsError(
-          "failed-precondition", ESCROW_HELD_MESSAGE);
+    const blocker = cancellationBlocker(job, milestones);
+    if (blocker) {
+      throw new functions.https.HttpsError("failed-precondition", blocker);
     }
     const requestorWalletRef = db.doc(`users/${job.requestorId}`);
     const requestorWalletSnap = await tx.get(requestorWalletRef);
     tx.update(jobRef, {cancellationReason: reason || null});
-    finaliseCancellation(tx, jobRef, milestones, "admin", requestorWalletRef,
-        requestorWalletSnap, remainingLockedSen(job, milestones));
+    finaliseCancellation(tx, jobRef, job, milestones, "admin",
+        requestorWalletRef, requestorWalletSnap);
     for (const partyUid of [job.requestorId, job.acceptedProviderId]) {
       notify(tx, partyUid, {
         type: "cancellation",
@@ -1789,24 +1755,290 @@ exports.adminCancelJob = functions.https.onCall(async (data, context) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Bidding deadline enforcement.
-//
-// Firestore rules (jobBiddingOpen) already block a new/updated bid once a
-// job's deadline passes, but nothing flips the job's own status on its
-// own - an open job whose deadline lapsed with no bid accepted would
-// otherwise sit "open" forever. This periodic sweep closes those out, reusing
-// `cancelled` rather than adding a new terminal status: the existing
-// `logJobStatusChange` timeline trigger already logs a cancellation, and
-// `closeChatOnJobEnd` is a no-op here (an open job never has a conversation
-// yet).
-// ---------------------------------------------------------------------------
+// Price change. Either party proposes a new price; the other accepts or declines.
+// `acceptedBidAmountSen` is the live price; checks are in price_change.js.
+
+const {
+  validatePriceChange,
+  escrowLockDelta,
+} = require("./price_change");
+
+/** Which side of [job] [uid] is on, or null. */
+function jobRole(job, uid) {
+  if (job?.requestorId === uid) return "requestor";
+  if (job?.acceptedProviderId === uid) return "provider";
+  return null;
+}
+
+/** The uid of the other participant. */
+const counterpartyUid = (job, role) =>
+  role === "requestor" ? job.acceptedProviderId : job.requestorId;
+
+/** Proposes a new price; nothing changes until the other party accepts. */
+exports.requestPriceChange = functions.https.onCall(async (data, context) => {
+  const uid = callerUid(context);
+  const jobId = checkId(data.jobId, "jobId");
+  const newAmountSen = checkAmount(data.newAmountSen);
+  const reason = typeof data.reason === "string" ? data.reason.trim() : "";
+  if (reason === "" || reason.length > 500) {
+    throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Give a reason for the change (up to 500 characters).");
+  }
+  const db = admin.firestore();
+  const jobRef = db.doc(`jobs/${jobId}`);
+
+  await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, db, uid);
+    const [jobSnap, milestones] = await Promise.all([
+      tx.get(jobRef),
+      tx.get(jobRef.collection("milestones")),
+    ]);
+    const job = jobSnap.data();
+    const role = jobRole(job, uid);
+    if (!role) {
+      throw new functions.https.HttpsError(
+          "permission-denied",
+          "Only the job's participants can change its price.");
+    }
+    if (job.priceChangeRequest) {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "A price change is already pending.");
+    }
+    if (job.cancellationRequestedBy) {
+      throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Resolve the pending cancellation request first.");
+    }
+    const problem = validatePriceChange({
+      job, milestones: milestones.docs.map((d) => d.data()), newAmountSen,
+    });
+    if (problem) {
+      throw new functions.https.HttpsError("failed-precondition", problem);
+    }
+    tx.update(jobRef, {
+      priceChangeRequest: {
+        by: role,
+        newAmountSen,
+        reason,
+        requestedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+    });
+    notify(tx, counterpartyUid(job, role), {
+      type: "price_change",
+      title: "Price change requested",
+      body: `The ${role === "requestor" ? "client" : "provider"} proposed ` +
+          `changing the price of "${job.title}" from ` +
+          `${rm(job.acceptedBidAmountSen)} to ${rm(newAmountSen)}.`,
+      route: `/jobs/${jobId}`,
+    });
+  });
+});
 
 /**
- * Every 6 hours, cancels any still-open job whose bidding deadline has
- * passed. Requires the Blaze plan and the Cloud Scheduler API, plus the
- * `jobs` composite index on (status ASC, deadline ASC) - see
- * firestore.indexes.json.
+ * Moves money for a price change of [delta] sen on a funded-at-award job.
+ * Increase: wallet to escrow. Decrease: refund. True means the job is done.
+ */
+function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
+  wallet, delta}) {
+  const balance = wallet.walletBalanceSen || 0;
+  const ledger = {
+    jobId: jobRef.id,
+    jobTitle: job.title || null,
+    participantIds: [job.requestorId],
+  };
+  if (delta > 0) {
+    tx.update(walletRef, {walletBalanceSen: balance - delta});
+    const plan = planIncrease(rows, delta);
+    if (plan.grow) {
+      tx.update(milestonesRef.doc(plan.grow.id),
+          {amountSen: plan.grow.amountSen});
+      appendLedger(tx, {
+        ...ledger, fromUid: job.requestorId, toUid: ESCROW, amountSen: delta,
+        type: "fund", milestoneId: plan.grow.id,
+      });
+    } else {
+      writeFundedMilestone(tx, {
+        jobRef, title: job.title, requestorId: job.requestorId,
+        providerId: job.acceptedProviderId, amountSen: delta,
+        order: plan.add.order, description: "Price change",
+      });
+    }
+    return false;
+  }
+  const refundSen = -delta;
+  const plan = planDecrease(rows, refundSen);
+  tx.update(walletRef, {walletBalanceSen: balance + refundSen});
+  for (const {id, amountSen} of plan.updates) {
+    tx.update(milestonesRef.doc(id), {amountSen});
+  }
+  for (const id of plan.deleteIds) tx.delete(milestonesRef.doc(id));
+  appendLedger(tx, {
+    ...ledger, fromUid: ESCROW, toUid: job.requestorId, amountSen: refundSen,
+    type: "refund", milestoneId: plan.deleteIds[0] ?? plan.updates[0].id,
+  });
+  return finishedByDecrease(rows, plan.deleteIds);
+}
+
+/**
+ * The other party accepts or declines a price change. Accepting re-checks it,
+ * moves the money, and (legacy jobs) deletes unfunded milestones to re-plan.
+ */
+exports.respondToPriceChange =
+  functions.https.onCall(async (data, context) => {
+    const uid = callerUid(context);
+    const jobId = checkId(data.jobId, "jobId");
+    const accept = data.accept === true;
+    const db = admin.firestore();
+    const jobRef = db.doc(`jobs/${jobId}`);
+    const milestonesRef = jobRef.collection("milestones");
+
+    await db.runTransaction(async (tx) => {
+      await assertNotSuspended(tx, db, uid);
+      const [jobSnap, milestones] = await Promise.all([
+        tx.get(jobRef),
+        tx.get(milestonesRef),
+      ]);
+      const job = jobSnap.data();
+      const request = job?.priceChangeRequest;
+      if (job?.status !== "in_progress" || !request) {
+        throw new functions.https.HttpsError(
+            "failed-precondition", "There is no pending price change.");
+      }
+      const role = jobRole(job, uid);
+      if (!role) {
+        throw new functions.https.HttpsError(
+            "permission-denied", "Only the job's participants can respond.");
+      }
+      if (role === request.by) {
+        throw new functions.https.HttpsError(
+            "failed-precondition",
+            "You raised this request; the other party must respond.");
+      }
+      const requesterUid = counterpartyUid(job, role);
+
+      if (!accept) {
+        tx.update(jobRef, {priceChangeRequest: null});
+        notify(tx, requesterUid, {
+          type: "price_change",
+          title: "Price change declined",
+          body: `The other party declined the new price for "${job.title}". ` +
+              "The price is unchanged.",
+          route: `/jobs/${jobId}`,
+        });
+        return;
+      }
+
+      const oldSen = job.acceptedBidAmountSen;
+      const newSen = request.newAmountSen;
+      const walletRef = db.doc(`users/${job.requestorId}`);
+      const walletSnap = await tx.get(walletRef);
+      const problem = validatePriceChange({
+        job, milestones: milestones.docs.map((d) => d.data()),
+        newAmountSen: newSen,
+      });
+      if (problem) {
+        throw new functions.https.HttpsError("failed-precondition", problem);
+      }
+      const wallet = walletSnap.data() || {};
+      const delta = escrowLockDelta(oldSen, newSen);
+      if (delta > 0) {
+        const available =
+            (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
+        if (available < delta) {
+          throw new functions.https.HttpsError(
+              "failed-precondition",
+              "Insufficient available balance to accept this price change.", {
+                reason: "insufficient_balance",
+                shortfallSen: delta - available,
+                availableSen: available,
+                requiredSen: delta,
+              });
+        }
+      }
+
+      // Writes.
+      let completed = false;
+      if (job.fundedAtAward) {
+        completed = repriceFundedStages(tx, {
+          job, jobRef, milestonesRef, rows: milestoneRows(milestones),
+          walletRef, wallet, delta,
+        });
+      } else {
+        tx.update(walletRef, {
+          escrowLockedSen: Math.max(0, (wallet.escrowLockedSen || 0) + delta),
+        });
+        for (const doc of milestones.docs) {
+          if (!isLocked(doc.data().status)) tx.delete(doc.ref);
+        }
+      }
+      const count = (job.priceChangeCount || 0) + 1;
+      tx.update(jobRef, {
+        acceptedBidAmountSen: newSen,
+        originalBidAmountSen: job.originalBidAmountSen ?? oldSen,
+        priceChangeCount: count,
+        priceChangeRequest: null,
+        planRejectionNote: null,
+        ...(completed ? {status: "completed"} : {}),
+      });
+      tx.set(jobRef.collection("events").doc(`price_change_${count}`), {
+        type: "price_changed",
+        title: `Price changed: ${rm(oldSen)} → ${rm(newSen)}`,
+        at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      const body = `The price of "${job.title}" is now ${rm(newSen)}. ` +
+          (job.fundedAtAward ?
+              (delta > 0 ?
+                  "The extra amount has been moved into escrow." :
+                  "The difference was refunded to the client.") :
+              "The provider needs to propose a new milestone plan for the " +
+              "unfunded remainder.");
+      notify(tx, requesterUid, {
+        type: "price_change", title: "Price change accepted", body,
+        route: `/jobs/${jobId}`,
+      });
+      notify(tx, uid, {
+        type: "price_change", title: "Price changed", body,
+        route: `/jobs/${jobId}`,
+      });
+    });
+  });
+
+/** The party that raised a price change takes it back. */
+exports.withdrawPriceChange = functions.https.onCall(async (data, context) => {
+  const uid = callerUid(context);
+  const jobId = checkId(data.jobId, "jobId");
+  const db = admin.firestore();
+  const jobRef = db.doc(`jobs/${jobId}`);
+
+  await db.runTransaction(async (tx) => {
+    const job = (await tx.get(jobRef)).data();
+    const request = job?.priceChangeRequest;
+    if (!request) {
+      throw new functions.https.HttpsError(
+          "failed-precondition", "There is no pending price change.");
+    }
+    const role = jobRole(job, uid);
+    if (!role || role !== request.by) {
+      throw new functions.https.HttpsError(
+          "permission-denied", "Only the party that asked can withdraw it.");
+    }
+    tx.update(jobRef, {priceChangeRequest: null});
+    notify(tx, counterpartyUid(job, role), {
+      type: "price_change",
+      title: "Price change withdrawn",
+      body: `The price change request for "${job.title}" was withdrawn.`,
+      route: `/jobs/${jobId}`,
+    });
+  });
+});
+
+// Bidding deadline. Rules block late bids, so this sweep cancels open jobs
+// whose deadline passed with no accepted bid.
+
+/**
+ * Every 6 hours, cancels open jobs whose bidding deadline has passed.
+ * Needs the Blaze plan, Cloud Scheduler, and the index in firestore.indexes.json.
  */
 exports.closeExpiredJobs = functions.pubsub
     .schedule("every 6 hours")
@@ -1827,16 +2059,12 @@ exports.closeExpiredJobs = functions.pubsub
       functions.logger.info(`closeExpiredJobs: closed ${snap.size} job(s)`);
     });
 
-// Grace window during which a completed/cancelled job's chat stays writable
-// for loose ends, after which it becomes read-only (never deleted - the
-// history is dispute evidence).
+// Chat stays open 14 days after a job ends, then is read-only (kept as evidence).
 const CHAT_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
- * Closes a job's chat 14 days after the job ends. While the job is in progress
- * (which includes any period a dispute is open, since a disputed job can't
- * complete) the chat stays open. Sets `chatClosesAt` on the conversation, if
- * one exists - never creates the doc, and never deletes messages.
+ * Sets a conversation's `chatClosesAt` 14 days after its job ends.
+ * Never creates the conversation or deletes messages.
  */
 exports.closeChatOnJobEnd = functions.firestore
     .document("jobs/{jobId}")
@@ -1861,17 +2089,8 @@ exports.closeChatOnJobEnd = functions.firestore
       });
     });
 
-// ---------------------------------------------------------------------------
-// Notifications (plan §3.4.2).
-//
-// One pipeline feeds both surfaces: every event writes a doc to
-// `users/{uid}/notifications`, which the in-app list and bell badge stream
-// directly, and the single `onNotificationCreated` trigger fans out as an FCM
-// push. Business logic never talks to FCM itself - it just calls `notify()`
-// inside the transaction it already runs, so the notification is atomic with
-// the action it describes. Being a subcollection of the user doc, the
-// existing `cleanupUserDoc` recursive delete already covers cleanup.
-// ---------------------------------------------------------------------------
+// Notifications. Code calls `notify()` inside its transaction; a trigger
+// then sends the FCM push.
 
 /** Formats sen as `RM 1,234.50` for notification copy. */
 function rm(sen) {
@@ -1880,9 +2099,8 @@ function rm(sen) {
 }
 
 /**
- * Queues a notification for [uid]. Written through the caller's transaction
- * or batch so it commits (or aborts) together with the event itself. The
- * `onNotificationCreated` trigger turns it into a push afterwards.
+ * Queues a notification for [uid] in the caller's transaction or batch, so it
+ * commits together with the event. A trigger sends the push later.
  */
 function notify(txOrBatch, uid, {type, title, body, route = null}) {
   if (!uid) return; // defensive: never write to users/undefined
@@ -1899,11 +2117,8 @@ function notify(txOrBatch, uid, {type, title, body, route = null}) {
 }
 
 /**
- * The fan-out: a new notification doc becomes an FCM push to every device
- * token the user has registered. Tokens the platform reports as dead
- * (uninstall, cleared data, rotation) are pruned so the array can't grow
- * stale forever. Delivery is best-effort - the in-app list is the source of
- * truth and already has the doc.
+ * Sends a new notification as an FCM push to the user's devices.
+ * Dead tokens are removed. Delivery is best-effort; the in-app list is the truth.
  */
 exports.onNotificationCreated = functions.firestore
     .document("users/{uid}/notifications/{notificationId}")
@@ -1941,10 +2156,7 @@ exports.onNotificationCreated = functions.firestore
       }
     });
 
-/**
- * New bid → tell the requestor. A trigger (not a notify() call) because bids
- * are direct client writes with no callable to hook.
- */
+/** New bid: tell the requestor. A trigger because bids are client writes. */
 exports.onBidCreated = functions.firestore
     .document("jobs/{jobId}/bids/{bidId}")
     .onCreate(async (snap, context) => {
@@ -1964,11 +2176,7 @@ exports.onBidCreated = functions.firestore
       await batch.commit();
     });
 
-/**
- * Bid flipped to accepted → tell the winning provider (the bid doc id is
- * their uid). Rejected bids stay silent - one push per losing bidder on every
- * acceptance would be noise, and the bid list already shows the outcome.
- */
+/** Bid accepted: tell the winner. Losers aren't notified, to avoid noise. */
 exports.onBidAccepted = functions.firestore
     .document("jobs/{jobId}/bids/{bidId}")
     .onUpdate(async (change, context) => {
@@ -1982,8 +2190,33 @@ exports.onBidAccepted = functions.firestore
         type: "bid_accepted",
         title: "Your bid was accepted!",
         body: `You won "${jobSnap.data()?.title || "a job"}" for ` +
-            `${rm(after.amountSen || 0)}. Propose your milestone plan to ` +
-            "get started.",
+            `${rm(after.amountSen || 0)}. The payment is secured in escrow ` +
+            "- you can get started.",
+        route: `/jobs/${context.params.jobId}`,
+      });
+      await batch.commit();
+    });
+
+/** Work delivered: tell the requestor to review and release. */
+exports.onMilestoneDelivered = functions.firestore
+    .document("jobs/{jobId}/milestones/{milestoneId}")
+    .onUpdate(async (change, context) => {
+      const before = change.before.data();
+      const after = change.after.data();
+      if (before.status === after.status || after.status !== "submitted") {
+        return;
+      }
+      const jobSnap = await admin.firestore()
+          .doc(`jobs/${context.params.jobId}`).get();
+      const job = jobSnap.data();
+      if (!job?.requestorId) return;
+      const batch = admin.firestore().batch();
+      notify(batch, job.requestorId, {
+        type: "milestone",
+        title: "Work delivered",
+        body: `${job.acceptedProviderName || "Your provider"} marked ` +
+            `"${after.description || job.title}" as delivered. Review it ` +
+            `and release ${rm(after.amountSen || 0)}.`,
         route: `/jobs/${context.params.jobId}`,
       });
       await batch.commit();
@@ -2015,10 +2248,8 @@ exports.onMessageCreated = functions.firestore
     });
 
 /**
- * Admin verification decision → tell the applicant. Guarded on the actual
- * status transition so ordinary profile edits (which also fire this
- * user-document trigger) never send a push. Writing the notification into a
- * subcollection does not re-fire user-document triggers, so no loop.
+ * Verification decided: tell the applicant, only when the status changes.
+ * Other profile edits don't send a push.
  */
 exports.onVerificationDecided = functions.firestore
     .document("users/{uid}")
@@ -2040,9 +2271,9 @@ exports.onVerificationDecided = functions.firestore
         route: "/home",
       });
       await batch.commit();
-      // The uploaded SSM document has served its purpose now that a human has
-      // ruled on it; it is not kept beyond the decision. See ssm.js.
+      // Uploaded ID/SSM documents are deleted once a human has ruled on them.
       await require("./ssm").deleteSsmDocument(context.params.uid);
+      await require("./idcheck").deleteIdDocuments(context.params.uid);
     });
 
 /** New review → tell the reviewee. */
@@ -2062,15 +2293,8 @@ exports.onReviewCreated = functions.firestore
       await batch.commit();
     });
 
-// ---------------------------------------------------------------------------
-// Job activity timeline: a per-job, server-written event log shown on the job
-// detail. Events live at `jobs/{jobId}/events/{eventId}`, written only by the
-// triggers below (client writes are denied - see firestore.rules), so the
-// timeline can't be forged. Deterministic event ids make at-least-once
-// trigger retries idempotent (overwrite instead of duplicate), at the cost of
-// collapsing a rare repeat of the same transition (e.g. a re-fund after a
-// refund) - acceptable here.
-// ---------------------------------------------------------------------------
+// Job timeline: server-written events at `jobs/{jobId}/events/{eventId}`.
+// Fixed event ids make trigger retries safe (overwrite, not duplicate).
 
 /** Writes (or, on a retried trigger, overwrites) one timeline entry. */
 function logJobEvent(jobId, eventId, type, title) {
@@ -2084,11 +2308,7 @@ exports.logJobPosted = functions.firestore.document("jobs/{jobId}")
     .onCreate((snap, ctx) =>
       logJobEvent(ctx.params.jobId, "posted", "posted", "Job posted"));
 
-/**
- * Logs the job-level transitions worth surfacing on the timeline. Guarded on
- * an actual `status` change, so the many non-status writes on this doc -
- * bidCount, completionCounted, cancellation request fields - are ignored.
- */
+/** Logs job status changes on the timeline; other writes are ignored. */
 exports.logJobStatusChange = functions.firestore
     .document("jobs/{jobId}")
     .onUpdate((change, ctx) => {
@@ -2113,10 +2333,8 @@ exports.logJobStatusChange = functions.firestore
     });
 
 /**
- * Logs the meaningful milestone-status transitions on the timeline - skips
- * `proposed`/`pending` from the plan/approve flow (noise), and only logs a
- * `pending` transition when it follows `disputed` (a dispute refund reopening
- * the milestone for rework).
+ * Logs milestone status changes on the timeline. Skips `proposed`/`pending`,
+ * except `pending` after `disputed` (a refund reopening it).
  */
 exports.logMilestoneStatusChange = functions.firestore
     .document("jobs/{jobId}/milestones/{milestoneId}")
@@ -2128,6 +2346,14 @@ exports.logMilestoneStatusChange = functions.firestore
       const milestoneId = ctx.params.milestoneId;
       const d = after.description;
       const amt = after.amountSen;
+      // Dispute steps can repeat, so they get the trigger's unique event id.
+      const once = `${milestoneId}_${ctx.eventId}`;
+      const wasDisputed = before?.status === "disputed";
+      if (wasDisputed &&
+          (after.status === "funded" || after.status === "submitted")) {
+        return logJobEvent(jobId, once, "dispute_withdrawn",
+            `Dispute withdrawn. "${d}" is back on track.`);
+      }
       switch (after.status) {
         case "funded":
           return logJobEvent(jobId, `${milestoneId}_funded`, "funded",
@@ -2136,42 +2362,39 @@ exports.logMilestoneStatusChange = functions.firestore
           return logJobEvent(jobId, `${milestoneId}_submitted`, "submitted",
               `Work delivered: "${d}"`);
         case "released":
-          return logJobEvent(jobId, `${milestoneId}_released`, "released",
-              `Payment released: "${d}" (${rm(amt)})`);
+          return wasDisputed ?
+              logJobEvent(jobId, once, "released",
+                  `Admin decided for the provider: ${rm(amt)} paid for ` +
+                  `"${d}"`) :
+              logJobEvent(jobId, `${milestoneId}_released`, "released",
+                  `Payment released: "${d}" (${rm(amt)})`);
         case "disputed":
-          return logJobEvent(jobId, `${milestoneId}_disputed`, "disputed",
-              `Disputed: "${d}"`);
+          return logJobEvent(jobId, once, "disputed",
+              `Dispute raised on "${d}". ${rm(amt)} is on hold until an ` +
+              "admin decides.");
+        case "refunded":
+          return logJobEvent(jobId, once, "refunded", wasDisputed ?
+              `Admin decided for the client: ${rm(amt)} refunded for "${d}"` :
+              `Refunded to the client: "${d}" (${rm(amt)})`);
         case "pending":
-          if (before?.status !== "disputed") return null;
-          return logJobEvent(jobId, `${milestoneId}_refunded`, "refunded",
-              `Refunded & reopened: "${d}"`);
+          if (!wasDisputed) return null;
+          return logJobEvent(jobId, once, "refunded",
+              `Refunded to the client: "${d}". The stage is open again.`);
         default:
           return null;
       }
     });
 
-// ---------------------------------------------------------------------------
-// Gemini posting assistant (plan §3.4.5).
-//
-// Proxied through this callable so the API key never ships in the APK - it
-// lives in Cloud Secret Manager (`firebase functions:secrets:set GEMINI_KEY`),
-// the same reasoning that keeps wallet writes server-side. Both assists are
-// advisory: every failure path returns null rather than throwing, so the
-// post-job form keeps working when the quota is hit or the model misbehaves.
-// ---------------------------------------------------------------------------
+// Gemini posting assistant. The API key stays server-side in Secret Manager.
+// Every failure returns null so the post-job form keeps working.
 
-// `defineSecret` is already required above, for `toyyibpaySecret`.
 const {GoogleGenAI, Type, ThinkingLevel, MediaResolution} =
     require("@google/genai");
 const geminiKey = defineSecret("GEMINI_KEY");
-// Current Gemini Flash-Lite id; requires the @google/genai SDK.
+// Gemini Flash-Lite model id.
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
-/** System instruction for the description helper: rough text → a short,
- * scannable, up-to-three-section description (What needs doing / Access &
- * details / Expected outcome). Tuned for directness: plain words, no
- * filler/preamble, fragments over full sentences, and a section is dropped
- * rather than padded when the note gives it no basis. */
+/** System instruction for the description helper (three short sections). */
 const DESCRIPTION_SYSTEM = "You help customers on FairBid, a Malaysian " +
     "home-services marketplace, turn a rough note into a job posting a " +
     "provider can scan in seconds. Use plain, everyday words. No preamble, " +
@@ -2197,8 +2420,7 @@ const DESCRIPTION_SYSTEM = "You help customers on FairBid, a Malaysian " +
     "is provided, use it to make the description more specific and " +
     "accurate.";
 
-/** System instruction for the fair-price guide; the JSON shape is enforced
- * by `PRICE_SCHEMA`, so no "reply with ONLY JSON" wording is needed here. */
+/** System instruction for the fair-price guide. */
 const PRICE_SYSTEM = "You estimate fair market prices for home services " +
     "in Malaysia. Give a realistic ringgit range for the job described, " +
     "based only on what it states. If a photo is provided, factor it in. " +
@@ -2247,10 +2469,8 @@ const PRICE_SCHEMA = {
 };
 
 /**
- * Parses the model's price reply. `PRICE_SCHEMA` constrains the model to
- * clean JSON, but a truncated body can still throw, so this stays
- * try/catch. Returns `{minSen, maxSen}` (integer sen - the client never
- * handles floating ringgit) or null when unusable.
+ * Parses the model's price reply into `{minSen, maxSen}`, or null if bad.
+ * Wrapped in try/catch because a cut-off reply can still throw.
  */
 function parsePriceJson(text) {
   try {
@@ -2263,9 +2483,7 @@ function parsePriceJson(text) {
   }
 }
 
-/** Parses the one-shot draft reply, or null when it is unusable. */
-// The schema constrains the shape, not the sense: a blank title or a silly
-// range still has to be caught here.
+/** Parses the draft reply, or null if unusable (blank title, odd range). */
 function parseDraftJson(text) {
   try {
     const draft = JSON.parse(String(text));
@@ -2290,8 +2508,7 @@ function parseDraftJson(text) {
 const {IMG_PREFIX} = require("./common");
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Fetches a job photo as base64 inline data, or null (→ text-only). SSRF-
- * guarded to this project's Storage bucket; all failures degrade to null. */
+/** Fetches a job photo as base64, or null; only our own bucket is allowed. */
 async function fetchInlineImage(photoUrl) {
   try {
     if (typeof photoUrl !== "string" || !photoUrl.startsWith(IMG_PREFIX)) {
@@ -2310,10 +2527,8 @@ async function fetchInlineImage(photoUrl) {
 }
 
 /**
- * One callable serving both post-a-job assists, keyed by `kind`
- * ('description' | 'price') so the prompt/parse/guard logic lives in one
- * place. Returns `{description}` / `{minSen, maxSen}`, or null for
- * "no suggestion" - the client treats null as a soft miss, never an error.
+ * Serves the post-a-job assists by `kind` ('description', 'price', 'draft').
+ * Returns the suggestion or null; the client treats null as a soft miss.
  */
 exports.suggestJobDetails = functions
     .runWith({secrets: [geminiKey]})
@@ -2355,7 +2570,7 @@ exports.suggestJobDetails = functions
           responseSchema: PRICE_SCHEMA,
           thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
         };
-        // A draft has no category yet: working it out is half the point.
+        // A draft has no category yet; the model picks it.
         const text = kind === "draft" ?
             `Customer's note: ${roughText}` :
             kind === "description" ?
@@ -2386,10 +2601,8 @@ exports.suggestJobDetails = functions
       } catch (err) {
         const status = typeof err?.status === "number" ? err.status :
             (typeof err?.code === "number" ? err.code : null);
-        // 400/403/404 = a real config bug (bad model id, permission, API
-        // disabled) we must be able to find in logs; 429/network/offline/
-        // parse are advisory soft-misses. Never log the API key or the
-        // request body.
+        // 400/403/404 are config bugs, so log them as errors; other failures
+        // are soft misses. Never log the API key or request body.
         if (status === 400 || status === 403 || status === 404) {
           functions.logger.error("assist MISCONFIGURED",
               {status, model: GEMINI_MODEL, kind});
@@ -2401,12 +2614,11 @@ exports.suggestJobDetails = functions
       }
     });
 
-// ---------------------------------------------------------------------------
-// SSM document extraction. Implemented in its own module (like trust.js) and
-// re-exported here so the Firebase CLI discovers the trigger.
-// ---------------------------------------------------------------------------
+// Triggers defined in other modules, re-exported so the Firebase CLI
+// finds them.
 
 exports.extractSsmDocument = require("./ssm").extractSsmDocument;
+exports.extractIdDocument = require("./idcheck").extractIdDocument;
 
 exports.createBundle = require("./bundles").createBundle;
 exports.submitBundleBid = require("./bundles").submitBundleBid;
@@ -2415,5 +2627,3 @@ exports.cancelBundle = require("./bundles").cancelBundle;
 exports.previewBundleAward = require("./bundle_award").previewBundleAward;
 exports.awardBundle = require("./bundle_award").awardBundle;
 exports.closeExpiredBundles = require("./bundles").closeExpiredBundles;
-exports.notifyDependentTask = require("./bundles").notifyDependentTask;
-exports.recordHandover = require("./bundles").recordHandover;

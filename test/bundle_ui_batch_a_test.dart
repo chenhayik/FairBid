@@ -27,7 +27,6 @@ class _FailingBundleBidRepository implements BundleBidRepository {
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
-    bool allOrNothing = false,
     required String estimatedDuration,
     String message = '',
   }) async {
@@ -202,7 +201,6 @@ void main() {
           category: 'Home Repair',
           location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Penang'),
           budget: const JobBudget(minSen: 30000, maxSen: 50000),
-          startsAfterJobId: 'job-1',
         );
         await pumpSheet(
           tester,
@@ -214,12 +212,6 @@ void main() {
         // blind.
         expect(find.textContaining('RM 200.00'), findsOneWidget);
         expect(find.textContaining('RM 300.00'), findsOneWidget);
-
-        // The dependent task says when it starts.
-        expect(
-          find.textContaining('Starts after Waterproof the floor'),
-          findsOneWidget,
-        );
 
         // The description is collapsed until "Show details" is tapped.
         expect(
@@ -234,80 +226,100 @@ void main() {
       },
     );
 
-    testWidgets(
-      'linked tasks say so in plain terms, not "bid together" jargon',
-      (tester) async {
-        final first = Job(
-          id: 'job-1',
-          requestorId: 'req-1',
-          requestorName: 'Test User',
-          title: 'Waterproof the floor',
-          description: 'Seal the wet area.',
-          category: 'Home Repair',
-          location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Penang'),
-          lotId: 'wet-area',
-        );
-        final second = Job(
-          id: 'job-2',
-          requestorId: 'req-1',
-          requestorName: 'Test User',
-          title: 'Tile the floor',
-          description: 'Lay the tiles.',
-          category: 'Home Repair',
-          location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Penang'),
-          lotId: 'wet-area',
-        );
-        await pumpSheet(
-          tester,
-          bundleBids: FakeBundleBidRepository(),
-          tasks: [first, second],
-        );
-
-        expect(
-          find.textContaining(
-              'Linked with Tile the floor — linked tasks go to the same '
-              'provider.'),
-          findsOneWidget,
-        );
-        expect(find.textContaining('Bid together with'), findsNothing);
-      },
-    );
   });
 
-  group('Bundle bid sheet: bundle price needs two tasks', () {
+  group('Bundle bid sheet: optional package deal', () {
+    final tasks = [
+      sampleJob(id: 'job-1', title: 'Waterproof the floor'),
+      sampleJob(id: 'job-2', title: 'Tile the floor'),
+    ];
+    final addDeal = find.text('+ Add a package deal (optional)');
+    final dealField = find.text('Price if you win all 2 tasks (RM)');
+
     testWidgets(
-      'the bundle price and all-or-nothing switch are disabled and cleared '
-      'below two ticked tasks, then re-enable once a second is picked',
+      'the package deal link shows from two ticked tasks, reveals the field, '
+      'and Remove clears and hides it again',
       (tester) async {
-        final tasks = [
-          sampleJob(id: 'job-1', title: 'Waterproof the floor'),
-          sampleJob(id: 'job-2', title: 'Tile the floor'),
-        ];
         await pumpSheet(
           tester,
           bundleBids: FakeBundleBidRepository(),
           tasks: tasks,
         );
 
-        AppTextField bundlePriceField() => tester.widget<AppTextField>(
-              find.byWidgetPredicate(
-                  (w) => w is AppTextField && w.label == 'Bundle price (RM)'),
-            );
-        SwitchListTile allOrNothingTile() => tester.widget<SwitchListTile>(
-              find.widgetWithText(SwitchListTile, 'All or nothing'),
-            );
-
-        expect(bundlePriceField().enabled, isFalse);
-        expect(allOrNothingTile().onChanged, isNull);
-        expect(find.text('Pick at least two tasks'), findsNWidgets(2));
-
-        await tapAt(
-            tester, find.widgetWithText(CheckboxListTile, 'Waterproof the floor'));
+        expect(addDeal, findsNothing);
+        await tapAt(tester,
+            find.widgetWithText(CheckboxListTile, 'Waterproof the floor'));
+        expect(addDeal, findsNothing);
         await tapAt(
             tester, find.widgetWithText(CheckboxListTile, 'Tile the floor'));
+        expect(addDeal, findsOneWidget);
+        expect(dealField, findsNothing);
 
-        expect(bundlePriceField().enabled, isTrue);
-        expect(allOrNothingTile().onChanged, isNotNull);
+        await tapAt(tester, addDeal);
+        expect(dealField, findsOneWidget);
+        expect(addDeal, findsNothing);
+
+        await fillField(tester, 'Price if you win all 2 tasks (RM)', '80.00');
+        await tapAt(tester, find.widgetWithText(TextButton, 'Remove'));
+        expect(dealField, findsNothing);
+        expect(addDeal, findsOneWidget);
+
+        // Re-opening it starts empty.
+        await tapAt(tester, addDeal);
+        final field = tester.widget<TextFormField>(
+          find.descendant(
+            of: find.byType(AppTextField).last,
+            matching: find.byType(TextFormField),
+          ),
+        );
+        expect(field.controller!.text, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'dropping below two ticked tasks hides the package deal field',
+      (tester) async {
+        await pumpSheet(
+          tester,
+          bundleBids: FakeBundleBidRepository(),
+          tasks: tasks,
+        );
+        await tapAt(tester,
+            find.widgetWithText(CheckboxListTile, 'Waterproof the floor'));
+        await tapAt(
+            tester, find.widgetWithText(CheckboxListTile, 'Tile the floor'));
+        await tapAt(tester, addDeal);
+        expect(dealField, findsOneWidget);
+
+        await tapAt(
+            tester, find.widgetWithText(CheckboxListTile, 'Tile the floor'));
+        expect(dealField, findsNothing);
+        expect(addDeal, findsNothing);
+      },
+    );
+
+    testWidgets(
+      'editing a bid that has a bundle price shows the field already open',
+      (tester) async {
+        final existing = BundleBid(
+          bundleId: 'b1',
+          providerId: 'prov-1',
+          providerName: 'Pro Fixer',
+          taskPrices: const {'job-1': 10000, 'job-2': 10000},
+          bundlePriceSen: 15000,
+          estimatedDuration: 'Less than 1 week',
+          message: 'I can do this.',
+        );
+        await pumpSheet(
+          tester,
+          bundleBids: FakeBundleBidRepository(),
+          tasks: tasks,
+          existing: existing,
+        );
+
+        expect(dealField, findsOneWidget);
+        expect(addDeal, findsNothing);
+        expect(find.text('RM 50.00 off your task total'), findsOneWidget);
       },
     );
   });
@@ -332,7 +344,7 @@ void main() {
     });
   });
 
-  group('Post a bundle: template sheet and invalid-submit feedback', () {
+  group('Post a bundle: draft card and invalid-submit feedback', () {
     Future<void> openPostJob(WidgetTester tester) async {
       await tester.binding.setSurfaceSize(const Size(800, 2400));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -347,72 +359,6 @@ void main() {
       await tester.tap(find.text('+ Post a job'));
       await tester.pumpAndSettle();
     }
-
-    testWidgets(
-      'the template sheet lists each template\'s task titles under its name',
-      (tester) async {
-        await openPostJob(tester);
-
-        await tester.ensureVisible(find.text('Start from a template'));
-        await tester.tap(find.text('Start from a template'));
-        await tester.pumpAndSettle();
-
-        expect(
-          find.textContaining(
-              'Plumbing rough-in · Waterproofing · Tiling · Electrical '
-              'fittings'),
-          findsOneWidget,
-        );
-      },
-    );
-
-    testWidgets(
-      'picking a template only asks to replace typed content AFTER a '
-      "template is picked, not before the sheet even opens",
-      (tester) async {
-        await openPostJob(tester);
-        await fillField(tester, 'Job title', 'My own title');
-
-        await tester.ensureVisible(find.text('Start from a template'));
-        await tester.tap(find.text('Start from a template'));
-        await tester.pumpAndSettle();
-
-        // The sheet opened straight away - no confirmation blocked it.
-        expect(find.text('Replace your tasks with this template?'), findsNothing);
-        expect(find.text('Bathroom renovation'), findsOneWidget);
-
-        await tester.tap(find.text('Bathroom renovation'));
-        await tester.pumpAndSettle();
-
-        // Only now, because there was content to lose, is it asked.
-        expect(
-          find.text('Replace your tasks with this template?'),
-          findsOneWidget,
-        );
-      },
-    );
-
-    testWidgets(
-      "a task still linked by a template shows a disabled remove button, "
-      'not a missing one',
-      (tester) async {
-        await openPostJob(tester);
-
-        await tester.ensureVisible(find.text('Start from a template'));
-        await tester.tap(find.text('Start from a template'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Move-in prep'));
-        await tester.pumpAndSettle();
-
-        final lockedButton = find.byWidgetPredicate((w) =>
-            w is IconButton &&
-            w.tooltip ==
-                'Linked by the template. Tap Clear template to remove it.');
-        expect(lockedButton, findsWidgets);
-        final icon = tester.widget<IconButton>(lockedButton.first);
-        expect(icon.onPressed, isNull);
-      },
-    );
 
     testWidgets(
       'the AI draft card says it only fills task 1 once the form is a '

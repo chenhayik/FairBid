@@ -29,6 +29,9 @@ class PlatformConfig {
   static const double priceWeight = 0.6;
   static const double trustWeight = 0.4;
 
+  /// Highest bid, or bundle bid total (RM 50,000): no wallet can fund more.
+  static const int maxBidSen = maxWalletBalanceSen;
+
   /// Per-top-up cap (RM 10,000) for the demo wallet, enforced by the
   /// `topUpWallet` Cloud Function (which keeps its own copy in sync).
   static const int maxTopUpSen = 1000000;

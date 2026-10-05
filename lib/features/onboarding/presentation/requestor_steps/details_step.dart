@@ -116,6 +116,7 @@ class _DetailsStepState extends State<DetailsStep> {
         UploadBox(
           compact: true,
           onTap: onboarding.pickProfilePhoto,
+          busy: onboarding.isUploading('avatar'),
           icon: Icons.add_a_photo_outlined,
           hint: 'JPEG or PNG',
           pickedName: data.profilePhotoUrl == null ? null : 'Photo added',

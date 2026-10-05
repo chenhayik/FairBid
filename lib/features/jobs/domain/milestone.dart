@@ -11,7 +11,10 @@ enum MilestoneStatus {
   submitted,
   released,
   disputed,
-  resolved;
+  resolved,
+
+  /// Money went back to the client after a dispute ended the job.
+  refunded;
 
   String get storage => switch (this) {
     MilestoneStatus.proposed => 'proposed',
@@ -21,6 +24,7 @@ enum MilestoneStatus {
     MilestoneStatus.released => 'released',
     MilestoneStatus.disputed => 'disputed',
     MilestoneStatus.resolved => 'resolved',
+    MilestoneStatus.refunded => 'refunded',
   };
 
   String get label => switch (this) {
@@ -31,6 +35,7 @@ enum MilestoneStatus {
     MilestoneStatus.released => 'Paid out',
     MilestoneStatus.disputed => 'Disputed, on hold',
     MilestoneStatus.resolved => 'Resolved',
+    MilestoneStatus.refunded => 'Refunded to client',
   };
 
   static MilestoneStatus fromStorage(String? value) => switch (value) {
@@ -41,6 +46,7 @@ enum MilestoneStatus {
     'released' => MilestoneStatus.released,
     'disputed' => MilestoneStatus.disputed,
     'resolved' => MilestoneStatus.resolved,
+    'refunded' => MilestoneStatus.refunded,
     _ => MilestoneStatus.proposed,
   };
 }
@@ -61,6 +67,7 @@ class Milestone {
     this.submissionNote,
     this.reworkNote,
     this.reworkCount = 0,
+    this.disputedBy,
     this.createdAt,
   });
 
@@ -96,6 +103,9 @@ class Milestone {
   /// refunded dispute. 0 for a milestone that has never been disputed.
   final int reworkCount;
 
+  /// Uid of whoever raised the open dispute, so only they can withdraw it.
+  final String? disputedBy;
+
   final DateTime? createdAt;
 
   /// Fields written to Firestore. `status`/`createdAt` for a new milestone are
@@ -121,6 +131,7 @@ class Milestone {
         submissionNote: m['submissionNote'] as String?,
         reworkNote: m['reworkNote'] as String?,
         reworkCount: (m['reworkCount'] as num?)?.toInt() ?? 0,
+        disputedBy: m['disputedBy'] as String?,
         createdAt: m['createdAt'] as DateTime?,
       );
 }

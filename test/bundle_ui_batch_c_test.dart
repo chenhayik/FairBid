@@ -1,10 +1,9 @@
-// UI fixes for job detail, handover, My Jobs, feed card and admin stats
+// UI fixes for job detail, My Jobs, feed card and admin stats
 // (batch C). Reuses the fakes/helpers already built up in widget_test.dart
 // rather than duplicating them.
 import 'package:fairbid/core/widgets/app_widgets.dart';
 import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
-import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -368,115 +367,6 @@ void main() {
 
         expect(find.text('First task'), findsOneWidget);
         expect(find.text('Second task'), findsNothing);
-      },
-    );
-  });
-
-  group('Handover banner names the previous task', () {
-    testWidgets(
-      'names the predecessor task when it can be loaded, with warning '
-      'styling and the action below the text',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-
-        final predecessor = sampleJob(
-          id: 'job-0',
-          title: 'Waterproofing',
-          requestorId: 'req-9',
-          status: JobStatus.completed,
-        );
-        final dependent = sampleJob(
-          requestorId: 'req-9',
-          status: JobStatus.inProgress,
-          acceptedProviderId: 'uid-1',
-          acceptedProviderName: 'New User',
-          acceptedBidAmountSen: 15000,
-          startsAfterJobId: 'job-0',
-        );
-        final auth = FakeAuthRepository()
-          ..verificationStatus = 'approved'
-          ..baseLat = 3.139
-          ..baseLng = 101.6869;
-        await tester.pumpWidget(
-          buildApp(auth, jobs: [predecessor, dependent]),
-        );
-        await tester.pumpAndSettle();
-        await openRegisterAs(tester, 'Work');
-        await tester.tap(
-          find.descendant(
-            of: find.byType(NavigationBar),
-            matching: find.text('My jobs'),
-          ),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Fix leaking sink').first);
-        await tester.pumpAndSettle();
-
-        expect(find.text('Site handover needed'), findsOneWidget);
-        expect(
-          find.textContaining(
-            'Record the site handover before you start. This task follows '
-            '"Waterproofing".',
-          ),
-          findsOneWidget,
-        );
-        expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
-        expect(find.widgetWithText(TextButton, 'Record handover'),
-            findsOneWidget);
-      },
-    );
-  });
-
-  group('Handover timeline entry', () {
-    testWidgets(
-      'names who recorded it when it was the accepted provider',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-
-        final job = sampleJob(
-          status: JobStatus.completed,
-          acceptedProviderId: 'prov-1',
-          acceptedProviderName: 'Pro Fixer',
-          acceptedBidAmountSen: 15000,
-        );
-        final jobs = FakeJobRepository([job], {
-          'job-1': [
-            JobEvent(
-              id: 'handover',
-              type: 'handover',
-              title: 'Site handover recorded',
-              at: DateTime.now(),
-              note: 'Site is clear.',
-              by: 'prov-1',
-            ),
-          ],
-        });
-        await tester.pumpWidget(
-          buildApp(FakeAuthRepository(), jobRepository: jobs),
-        );
-        await tester.pumpAndSettle();
-        await fillField(tester, 'Email', 'a@b.com');
-        await fillField(tester, 'Password', 'secret123');
-        await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
-        await tester.pumpAndSettle();
-        // Completed jobs are hidden from the Home "Active Jobs" list, so
-        // open it via My Jobs instead.
-        await tester.tap(
-          find.descendant(
-            of: find.byType(NavigationBar),
-            matching: find.text('My jobs'),
-          ),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Fix leaking sink').first);
-        await tester.pumpAndSettle();
-
-        await tester.tap(find.text('Activity'));
-        await tester.pumpAndSettle();
-
-        expect(find.text('Recorded by Pro Fixer'), findsOneWidget);
       },
     );
   });

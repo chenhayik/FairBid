@@ -3,21 +3,19 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/platform_stats.dart';
 
-/// Loads the admin dashboard's platform statistics. UI depends on this
-/// interface so tests can use a fake without Firestore.
+/// Loads platform stats for the admin dashboard.
+/// The UI uses this interface so tests can use a fake.
 abstract interface class StatsRepository {
-  /// One-shot load (pull-to-refresh re-calls it; counts don't need realtime).
+  /// Loads the numbers once. Pull-to-refresh calls it again.
   Future<PlatformStats> load();
 
-  /// Runs the `backfillTrust` Cloud Function: recounts every user's completed
-  /// jobs and lost disputes so their Trust Score breakdown is recomputed.
-  /// Idempotent. Returns the number of users processed.
+  /// Recounts every user's completed jobs and lost disputes (`backfillTrust`).
+  /// Safe to run again. Returns how many users were processed.
   Future<int> recomputeTrustScores();
 }
 
-/// Firestore-backed [StatsRepository] built on server-side aggregation
-/// queries - `count()`/`sum()` return a single number per query instead of
-/// downloading every document, which is the correct way to count at scale.
+/// Firestore version of [StatsRepository]. Uses `count()`/`sum()` queries,
+/// so no documents are downloaded.
 class FirestoreStatsRepository implements StatsRepository {
   FirestoreStatsRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -44,7 +42,7 @@ class FirestoreStatsRepository implements StatsRepository {
     final bundles = _firestore.collection('bundles');
     final disputes = _firestore.collection('disputes');
 
-    // All aggregations run concurrently; each returns one number.
+    // Runs all the queries at the same time.
     final results = await Future.wait([
       _count(users.where('role', isEqualTo: 'requestor')),
       _count(users.where('role', isEqualTo: 'provider')),
@@ -63,7 +61,6 @@ class FirestoreStatsRepository implements StatsRepository {
       _count(bundles
           .where('status', isEqualTo: 'awarded')
           .where('splitAward', isEqualTo: true)),
-      _count(disputes.where('handoverDispute', isEqualTo: true)),
     ]);
 
     return PlatformStats(
@@ -77,7 +74,6 @@ class FirestoreStatsRepository implements StatsRepository {
       releasedVolumeSen: results[7],
       bundlesAwarded: results[8],
       splitAwards: results[9],
-      handoverDisputes: results[10],
     );
   }
 }

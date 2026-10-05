@@ -50,8 +50,9 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
       if (!mounted) return;
       context.pop();
       messenger.showSnackBar(SnackBar(
-        content: Text('${formatRm(d.amountSen)} '
-            '${resolution == DisputeResolution.release ? 'released to the provider' : 'refunded to the client'}.'),
+        content: Text(resolution == DisputeResolution.release
+            ? '${formatRm(d.amountSen)} paid to the provider.'
+            : 'The client was refunded and the job has ended.'),
       ));
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;
@@ -172,19 +173,21 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
                   const SizedBox(height: 12),
                   _ChatHistoryCard(dispute: d),
                   const SizedBox(height: 24),
-                  const InfoBanner(
+                  InfoBanner(
                     icon: Icons.gpp_good_outlined,
-                    title: 'Before you rule',
-                    body: 'Read both sides and the chat. Releasing pays the '
-                        'provider and closes the milestone. Refunding returns '
-                        'the money to the client and reopens the milestone for '
-                        'rework. The job stays in progress. Rulings are final '
-                        'and move real wallet balances.',
+                    title: 'Your two choices',
+                    body: 'Pay the provider: ${formatRm(d.amountSen)} goes to '
+                        'the provider and the work carries on.\n'
+                        'Refund the client: all money still held for this job '
+                        'goes back to the client, the job ends, and it counts '
+                        'against the provider.\n'
+                        'Both are final.',
                   ),
                 ],
               ),
             ),
             _RulingBar(
+              amountSen: d.amountSen,
               busy: _busy,
               onRefund: () => _rule(DisputeResolution.refund),
               onRelease: () => _rule(DisputeResolution.release),
@@ -359,11 +362,13 @@ class _ChatLine extends StatelessWidget {
 /// Sticky bottom bar with the two rulings on the escrowed amount.
 class _RulingBar extends StatelessWidget {
   const _RulingBar({
+    required this.amountSen,
     required this.busy,
     required this.onRefund,
     required this.onRelease,
   });
 
+  final int amountSen;
   final bool busy;
   final VoidCallback onRefund;
   final VoidCallback onRelease;
@@ -377,27 +382,26 @@ class _RulingBar extends StatelessWidget {
         color: Colors.white,
         border: Border(top: BorderSide(color: context.fairbid.borderSubtle)),
       ),
-      child: Row(
+      // Stacked so each label can say exactly what happens.
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: busy ? null : onRefund,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: danger,
-                side: BorderSide(color: danger),
-              ),
-              icon: const Icon(Icons.undo_rounded, size: 18),
-              label: const Text('Refund'),
-            ),
+          PrimaryButton(
+            label: 'Pay the provider ${formatRm(amountSen)}',
+            busy: busy,
+            trailingIcon: Icons.check_rounded,
+            onPressed: onRelease,
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: PrimaryButton(
-              label: 'Release',
-              busy: busy,
-              trailingIcon: Icons.check_rounded,
-              onPressed: onRelease,
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : onRefund,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: danger,
+              side: BorderSide(color: danger),
             ),
+            icon: const Icon(Icons.undo_rounded, size: 18),
+            label: const Text('Refund the client and end the job'),
           ),
         ],
       ),
@@ -429,14 +433,19 @@ class _RulingNoteDialogState extends State<_RulingNoteDialog> {
   Widget build(BuildContext context) {
     final release = widget.resolution == DisputeResolution.release;
     return AlertDialog(
-      title: Text(release ? 'Release to provider?' : 'Refund the client?'),
+      title: Text(release
+          ? 'Pay the provider?'
+          : 'Refund the client and end the job?'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-              'Explain your ruling (shared with both parties). This is final '
-              'and moves the escrowed money.',
+              release
+                  ? 'The money in this dispute goes to the provider. '
+                      'Explain why; both sides will see it.'
+                  : 'All money still held goes back to the client and the job '
+                      'is cancelled. Explain why; both sides will see it.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant)),
           const SizedBox(height: 12),
@@ -464,7 +473,7 @@ class _RulingNoteDialogState extends State<_RulingNoteDialog> {
           onPressed: _controller.text.trim().isEmpty
               ? null
               : () => Navigator.of(context).pop(_controller.text.trim()),
-          child: Text(release ? 'Release' : 'Refund'),
+          child: Text(release ? 'Pay provider' : 'Refund and end job'),
         ),
       ],
     );

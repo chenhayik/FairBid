@@ -15,6 +15,7 @@ import 'package:fairbid/core/util/money.dart';
 import 'package:fairbid/core/util/service_categories.dart';
 import 'package:fairbid/core/util/ssm_number.dart';
 import 'package:fairbid/core/widgets/app_widgets.dart';
+import 'package:fairbid/core/widgets/face_crop.dart';
 import 'package:fairbid/core/widgets/form_widgets.dart';
 import 'package:fairbid/features/admin/data/moderation_repository.dart';
 import 'package:fairbid/features/admin/data/stats_repository.dart';
@@ -62,12 +63,16 @@ import 'package:fairbid/features/notifications/data/notification_repository.dart
 import 'package:fairbid/features/notifications/data/push_service.dart';
 import 'package:fairbid/features/notifications/domain/app_notification.dart';
 import 'package:fairbid/features/onboarding/data/document_storage_repository.dart';
+import 'package:fairbid/features/onboarding/data/face_checker.dart';
 import 'package:fairbid/features/onboarding/data/onboarding_repository.dart';
 import 'package:fairbid/features/onboarding/data/requestor_onboarding_repository.dart';
 import 'package:fairbid/features/onboarding/domain/onboarding_data.dart';
 import 'package:fairbid/features/onboarding/domain/requestor_onboarding_data.dart';
+import 'package:fairbid/features/onboarding/domain/id_extract.dart';
 import 'package:fairbid/features/onboarding/domain/ssm_extract.dart';
 import 'package:fairbid/features/onboarding/presentation/onboarding_controller.dart';
+import 'package:fairbid/features/onboarding/presentation/requestor_onboarding_controller.dart';
+import 'package:fairbid/features/onboarding/presentation/requestor_steps/details_step.dart';
 import 'package:fairbid/features/onboarding/presentation/steps/identity_step.dart';
 import 'package:fairbid/features/onboarding/presentation/steps/profile_step.dart';
 import 'package:fairbid/features/onboarding/presentation/steps/service_step.dart';
@@ -430,12 +435,20 @@ class FakeOnboardingRepository implements OnboardingRepository {
   /// Set before pumping to drive the SSM step's verdict card.
   SsmExtract? ssmExtract;
 
+  /// Same for the ID card's advisory check.
+  IdExtract? idExtract;
+
   @override
   Future<OnboardingData> load(String uid) async => saved ?? OnboardingData();
 
   @override
   Stream<SsmExtract?> watchSsmExtract(String uid) async* {
     yield ssmExtract;
+  }
+
+  @override
+  Stream<IdExtract?> watchIdExtract(String uid) async* {
+    yield idExtract;
   }
 
   @override
@@ -517,12 +530,6 @@ class FakeDocumentStorageRepository implements DocumentStorageRepository {
     required String uid,
     required XFile file,
   }) async => 'https://fake.storage/disputes/$uid';
-
-  @override
-  Future<String> uploadHandoverPhoto({
-    required String jobId,
-    required XFile file,
-  }) async => 'https://fake.storage/handovers/$jobId';
 
   @override
   Future<void> deleteByUrl(String url) async {}
@@ -647,6 +654,40 @@ class FakeJobRepository implements JobRepository {
     _notify();
   }
 
+  /// Price-change calls made against this fake, as `'kind:jobId[:arg]'`
+  /// (`request:j1:12000`, `accept:j1`, `decline:j1`, `withdraw:j1`).
+  final priceChangeCalls = <String>[];
+
+  /// When set, thrown by the next [respondToPriceChange].
+  Object? respondToPriceChangeError;
+
+  @override
+  Future<void> requestPriceChange(
+    String jobId, {
+    required int newAmountSen,
+    required String reason,
+  }) async {
+    priceChangeCalls.add('request:$jobId:$newAmountSen');
+  }
+
+  @override
+  Future<void> respondToPriceChange(
+    String jobId, {
+    required bool accept,
+  }) async {
+    final err = respondToPriceChangeError;
+    if (err != null) {
+      respondToPriceChangeError = null;
+      throw err;
+    }
+    priceChangeCalls.add('${accept ? 'accept' : 'decline'}:$jobId');
+  }
+
+  @override
+  Future<void> withdrawPriceChange(String jobId) async {
+    priceChangeCalls.add('withdraw:$jobId');
+  }
+
   @override
   Future<void> adminCancelJob(String jobId, {String? reason}) async {
     final i = _jobs.indexWhere((j) => j.id == jobId);
@@ -668,35 +709,6 @@ class FakeJobRepository implements JobRepository {
     await for (final _ in _changes.stream) {
       yield current();
     }
-  }
-
-  /// Arguments of the last [recordHandover] call, or null.
-  Map<String, Object?>? lastHandover;
-
-  /// When set, thrown by the next [recordHandover] instead of recording it.
-  Object? recordHandoverError;
-
-  @override
-  Future<void> recordHandover({
-    required String jobId,
-    required String note,
-    List<String> photoUrls = const [],
-  }) async {
-    final error = recordHandoverError;
-    if (error != null) throw error;
-    lastHandover = {'jobId': jobId, 'note': note, 'photoUrls': photoUrls};
-    _events.putIfAbsent(jobId, () => []).insert(
-          0,
-          JobEvent(
-            id: 'handover',
-            type: 'handover',
-            title: 'Site handover recorded',
-            at: DateTime.now(),
-            note: note,
-            photoUrls: photoUrls,
-          ),
-        );
-    _notify();
   }
 
   @override
@@ -728,6 +740,14 @@ class FakeJobRepository implements JobRepository {
     final i = _jobs.indexWhere((j) => j.id == id);
     if (i == -1) return;
     _jobs[i] = _rebuild(_jobs[i], status: JobStatus.completed);
+    _notify();
+  }
+
+  /// Mimics a refund ruling, which ends the job.
+  void cancel(String id) {
+    final i = _jobs.indexWhere((j) => j.id == id);
+    if (i == -1) return;
+    _jobs[i] = _rebuild(_jobs[i], status: JobStatus.cancelled);
     _notify();
   }
 
@@ -781,9 +801,6 @@ class FakeJobRepository implements JobRepository {
     bundleId: j.bundleId,
     bundleOrder: j.bundleOrder,
     bundleTaskCount: j.bundleTaskCount,
-    lotId: j.lotId,
-    startsAfterJobId: j.startsAfterJobId,
-    gapDays: j.gapDays,
     releasedAt: j.releasedAt,
   );
 }
@@ -907,6 +924,7 @@ class FakeMilestoneRepository implements MilestoneRepository {
     String? note,
     String? reworkNote,
     int? reworkCount,
+    String? disputedBy,
   }) => Milestone(
     id: m.id,
     jobId: m.jobId,
@@ -918,6 +936,7 @@ class FakeMilestoneRepository implements MilestoneRepository {
     submissionNote: note ?? m.submissionNote,
     reworkNote: reworkNote ?? m.reworkNote,
     reworkCount: reworkCount ?? m.reworkCount,
+    disputedBy: disputedBy,
     createdAt: m.createdAt,
   );
 
@@ -984,18 +1003,10 @@ class FakeMilestoneRepository implements MilestoneRepository {
     _maybeComplete(jobId);
   }
 
-  /// Mimics a dispute ruling of `refund`: reopens the milestone for rework and
-  /// leaves the job in progress (the issue-#1 fix).
+  /// Mimics a dispute ruling of `refund`: the money goes back and the job ends.
   void resolveRefund(String jobId, String milestoneId, {String? note}) {
-    _update(
-      milestoneId,
-      (m) => _withStatus(
-        m,
-        MilestoneStatus.pending,
-        reworkNote: note,
-        reworkCount: m.reworkCount + 1,
-      ),
-    );
+    _update(milestoneId, (m) => _withStatus(m, MilestoneStatus.refunded));
+    jobs.cancel(jobId);
   }
 
   @override
@@ -1118,7 +1129,11 @@ class FakeDisputeRepository implements DisputeRepository {
     raised.add((jobId: jobId, milestoneId: milestoneId, statement: statement));
     milestones?._update(
       milestoneId,
-      (m) => milestones!._withStatus(m, MilestoneStatus.disputed),
+      (m) => milestones!._withStatus(
+        m,
+        MilestoneStatus.disputed,
+        disputedBy: 'uid-1',
+      ),
     );
     _open.add(
       Dispute(
@@ -1140,6 +1155,22 @@ class FakeDisputeRepository implements DisputeRepository {
     _changes.add(null);
   }
 
+  final withdrawn = <String>[];
+
+  @override
+  Future<void> withdrawDispute({
+    required String jobId,
+    required String milestoneId,
+  }) async {
+    withdrawn.add(milestoneId);
+    milestones?._update(
+      milestoneId,
+      (m) => milestones!._withStatus(m, MilestoneStatus.funded),
+    );
+    _open.removeWhere((d) => d.milestoneId == milestoneId);
+    _changes.add(null);
+  }
+
   @override
   Future<void> resolveDispute({
     required String disputeId,
@@ -1148,8 +1179,7 @@ class FakeDisputeRepository implements DisputeRepository {
   }) async {
     resolutions[disputeId] = resolution;
     lastRulingNote = rulingNote;
-    // Mirror the Cloud Function's milestone effect: release closes it,
-    // refund reopens it for rework (job stays in progress).
+    // Mirror the Cloud Function: release pays out, refund ends the job.
     final d = _open.cast<Dispute?>().firstWhere(
       (d) => d!.id == disputeId,
       orElse: () => null,
@@ -1186,6 +1216,9 @@ class FakeVerificationRepository implements VerificationRepository {
   final decisions = <String, bool>{};
   String? lastReason;
 
+  /// Set to drive the admin's "Automated ID checks" section.
+  IdExtract? idExtract;
+
   @override
   Stream<List<PendingVerification>> watchPending() async* {
     yield List.of(_pending);
@@ -1194,14 +1227,20 @@ class FakeVerificationRepository implements VerificationRepository {
     }
   }
 
+  /// What the review gallery loads; add a selfie to show the face comparison.
+  List<VerificationDocument> identityDocuments = const [
+    VerificationDocument(
+      label: 'Identity Document',
+      url: 'https://fake.storage/id.jpg',
+    ),
+  ];
+
   @override
   Future<List<VerificationDocument>> loadIdentityDocuments(String uid) async =>
-      const [
-        VerificationDocument(
-          label: 'Identity Document',
-          url: 'https://fake.storage/id.jpg',
-        ),
-      ];
+      identityDocuments;
+
+  @override
+  Future<IdExtract?> loadIdExtract(String uid) async => idExtract;
 
   @override
   Future<void> decide({
@@ -1565,7 +1604,6 @@ class FakeStatsRepository implements StatsRepository {
             releasedVolumeSen: 1234500,
             bundlesAwarded: 20,
             splitAwards: 5,
-            handoverDisputes: 2,
           );
 
   final PlatformStats _stats;
@@ -1810,6 +1848,7 @@ class FakeBundleRepository implements BundleRepository {
     required Map<String, String> providerByTaskId,
     int? expectedTotalSen,
     DateTime? releasedDeadline,
+    bool dropUnawarded = false,
   }) async {
     final error = awardError;
     if (error != null) throw error;
@@ -1818,6 +1857,7 @@ class FakeBundleRepository implements BundleRepository {
       'providerByTaskId': providerByTaskId,
       'expectedTotalSen': expectedTotalSen,
       'releasedDeadline': releasedDeadline,
+      'dropUnawarded': dropUnawarded,
     };
   }
 
@@ -1859,7 +1899,6 @@ class FakeBundleBidRepository implements BundleBidRepository {
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
-    bool allOrNothing = false,
     required String estimatedDuration,
     String message = '',
   }) async {
@@ -1867,7 +1906,6 @@ class FakeBundleBidRepository implements BundleBidRepository {
       'bundleId': bundleId,
       'taskPrices': taskPrices,
       'bundlePriceSen': bundlePriceSen,
-      'allOrNothing': allOrNothing,
       'estimatedDuration': estimatedDuration,
       'message': message,
     };
@@ -1925,7 +1963,7 @@ Job sampleJob({
   int? bundleOrder,
   int? bundleTaskCount,
   DateTime? releasedAt,
-  String? startsAfterJobId,
+  int? originalBidAmountSen,
 }) => Job(
   id: id,
   requestorId: requestorId,
@@ -1940,13 +1978,13 @@ Job sampleJob({
   acceptedProviderId: acceptedProviderId,
   acceptedProviderName: acceptedProviderName,
   acceptedBidAmountSen: acceptedBidAmountSen,
+  originalBidAmountSen: originalBidAmountSen,
   deadline: deadline,
   bidCount: bidCount,
   bundleId: bundleId,
   bundleOrder: bundleOrder,
   bundleTaskCount: bundleTaskCount,
   releasedAt: releasedAt,
-  startsAfterJobId: startsAfterJobId,
 );
 
 /// Builds a sample pending bid on [jobId] for tests. Defaults to an
@@ -2422,19 +2460,28 @@ void main() {
     Future<OnboardingController> pumpStep(
       WidgetTester tester, {
       ProviderType type = ProviderType.business,
+      IdDocumentType idType = IdDocumentType.passport,
+      bool consent = true,
     }) async {
       await tester.binding.setSurfaceSize(const Size(500, 2400));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
+      // A verdict is preloaded so the ID card is not a never-settling spinner.
       final controller = OnboardingController(
-        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeOnboardingRepository(FakeAuthRepository())
+          ..idExtract = const IdExtract(verdict: IdVerdict.passed),
         FakeDocumentStorageRepository(),
       );
-      await controller.loadFor('provider-1');
+      await tester.runAsync(() async {
+        await controller.loadFor('provider-1');
+        await Future<void>.delayed(Duration.zero);
+      });
       controller.data
         ..providerType = type
+        ..idDocumentType = idType
         ..idDocumentUrl = 'https://fake.storage/id'
-        ..selfieUrl = 'https://fake.storage/selfie';
+        ..selfieUrl = 'https://fake.storage/selfie'
+        ..idConsentAt = consent ? DateTime(2026, 9, 30) : null;
 
       await tester.pumpWidget(MaterialApp(
         theme: AppTheme.light,
@@ -2572,6 +2619,592 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.data.ssmNumberNormalized, 'SA0085324V');
+    });
+
+    String hint(WidgetTester tester) =>
+        tester.widget<Text>(find.textContaining('Still needed:')).data!;
+
+    testWidgets('an invalid MyKad number shows an error and blocks Continue', (
+      tester,
+    ) async {
+      await pumpStep(tester,
+          type: ProviderType.individual, idType: IdDocumentType.mykad);
+
+      expect(hint(tester), contains('a valid MyKad number'));
+      await fillField(tester, 'MyKad Number', '901301-07-1234');
+      await tester.pumpAndSettle();
+
+      expect(find.text('The birth date in this number is not a real date.'),
+          findsOneWidget);
+      expect(continueButton(tester).onPressed, isNull);
+      expect(hint(tester), contains('a valid MyKad number'));
+    });
+
+    testWidgets('a valid MyKad number clears the requirement', (
+      tester,
+    ) async {
+      final controller = await pumpStep(tester,
+          type: ProviderType.individual, idType: IdDocumentType.mykad);
+
+      await fillField(tester, 'MyKad Number', '900101-07-1234');
+      await tester.pumpAndSettle();
+
+      expect(find.text('Still needed: a valid MyKad number.'), findsNothing);
+      expect(controller.data.icNumber, '900101-07-1234');
+      // A number typed after the photo went up invalidates the photo.
+      expect(controller.data.idDocumentUrl, isNull);
+    });
+
+    testWidgets('Passport hides the MyKad field', (tester) async {
+      await pumpStep(tester,
+          type: ProviderType.individual, idType: IdDocumentType.mykad);
+      expect(find.text('MyKad Number'), findsOneWidget);
+
+      await tester.tap(find.text('Passport'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('MyKad Number'), findsNothing);
+      // The MyKad photo was never checked as a passport, so a fresh one is due.
+      expect(hint(tester), isNot(contains('MyKad number')));
+      expect(hint(tester), contains('a photo of your ID'));
+    });
+
+    test('changing the IC clears the uploaded ID, re-typing the same does not',
+        () {
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeDocumentStorageRepository(),
+      );
+      controller.data.idDocumentUrl = 'https://fake.storage/id';
+
+      controller.setIcNumber('900101-07-1234');
+      expect(controller.data.idDocumentUrl, isNull);
+
+      controller.data.idDocumentUrl = 'https://fake.storage/id';
+      controller.setIcNumber('900101071234'); // same digits, no dashes
+      expect(controller.data.idDocumentUrl, isNotNull);
+
+      controller.setIcNumber('850615-10-5567');
+      expect(controller.data.idDocumentUrl, isNull);
+    });
+
+    test('the IC is private and the ID type is public', () {
+      final data = OnboardingData()
+        ..icNumber = '900101-07-1234'
+        ..idDocumentType = IdDocumentType.passport;
+      expect(data.toMap().containsKey('icNumber'), isFalse);
+      expect(data.privateMap()['icNumber'], '900101-07-1234');
+      expect(OnboardingData.fromMap(data.toMap()).idDocumentType,
+          IdDocumentType.passport);
+      expect(OnboardingData.fromMap(null).idDocumentType,
+          IdDocumentType.mykad);
+    });
+  });
+
+  group('Automated ID check', () {
+    test('switching ID type clears the uploaded photo, same type keeps it', () {
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeDocumentStorageRepository(),
+      );
+      controller.data.idDocumentUrl = 'https://fake.storage/id';
+
+      controller.setIdDocumentType(IdDocumentType.mykad); // unchanged
+      expect(controller.data.idDocumentUrl, isNotNull);
+
+      controller.setIdDocumentType(IdDocumentType.passport);
+      expect(controller.data.idDocumentUrl, isNull);
+    });
+
+    test('the ID type is saved before the photo uploads, for both types',
+        () async {
+      for (final type in IdDocumentType.values) {
+        final events = <String>[];
+        final controller = OnboardingController(
+          _OrderRepo(FakeAuthRepository(), events),
+          _OrderStorage(events),
+          imagePicker: _FakePicker(),
+          faceChecker: FakeFaceChecker(),
+        );
+        await controller.loadFor('provider-1');
+        controller.data
+          ..idDocumentType = type
+          ..idConsentAt = DateTime(2026, 9, 30);
+
+        await controller.pickIdDocument(ImageSource.gallery);
+
+        expect(events, ['save:${type.name}', 'upload'], reason: type.name);
+      }
+    });
+
+    test('IdExtract.fromMap reads the function output and tolerates gaps', () {
+      final extract = IdExtract.fromMap({
+        'verdict': 'rejected',
+        'failures': ['ic-mismatch', 7, 'name-mismatch'],
+        'maskedIc': '******-07-**34',
+        'ageOk': true,
+        'nameMatches': null,
+        'storagePath': 'verification/u/id_document_1.jpg',
+      });
+      expect(extract!.verdict, IdVerdict.rejected);
+      expect(extract.failures, ['ic-mismatch', 'name-mismatch']);
+      expect(extract.maskedIc, '******-07-**34');
+      expect(extract.ageOk, isTrue);
+      expect(extract.nameMatches, isNull);
+      expect(extract.genderConsistent, isNull);
+      expect(IdExtract.fromMap({'verdict': 'weird'}), isNull);
+      expect(IdExtract.fromMap(null), isNull);
+      expect(idFailureLabel('ic-mismatch'), contains('does not match'));
+      expect(idFailureLabel('mystery'), 'mystery');
+    });
+
+    Future<OnboardingController> pumpCard(
+      WidgetTester tester, {
+      IdExtract? extract,
+    }) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final repo = FakeOnboardingRepository(FakeAuthRepository())
+        ..idExtract = extract;
+      final controller =
+          OnboardingController(repo, FakeDocumentStorageRepository());
+      await tester.runAsync(() async {
+        await controller.loadFor('provider-1');
+        await Future<void>.delayed(Duration.zero);
+      });
+      controller.data
+        ..idDocumentType = IdDocumentType.mykad
+        ..icNumber = '900101-07-1234'
+        ..idDocumentUrl = 'https://fake.storage/id'
+        ..selfieUrl = 'https://fake.storage/selfie'
+        ..idConsentAt = DateTime(2026, 9, 30);
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<OnboardingController>.value(
+          value: controller,
+          child: const Scaffold(
+            body: SingleChildScrollView(
+              padding: EdgeInsets.all(16),
+              child: IdentityStep(),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+      return controller;
+    }
+
+    FilledButton continueButton(WidgetTester tester) => tester
+        .widget<FilledButton>(find.widgetWithText(FilledButton, 'Continue'));
+
+    testWidgets('shows a checking state until the verdict arrives', (
+      tester,
+    ) async {
+      await pumpCard(tester);
+      expect(find.textContaining('Checking your card'), findsOneWidget);
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('a verdict that never comes degrades to a background note', (
+      tester,
+    ) async {
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeDocumentStorageRepository(),
+        imagePicker: _FakePicker(),
+        faceChecker: FakeFaceChecker(),
+      );
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.runAsync(() async {
+        await controller.loadFor('provider-1');
+        await Future<void>.delayed(Duration.zero);
+      });
+      controller.data
+        ..icNumber = '900101-07-1234'
+        ..idConsentAt = DateTime(2026, 9, 30)
+        ..selfieUrl = 'https://fake.storage/selfie';
+      await controller.pickIdDocument(ImageSource.gallery);
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<OnboardingController>.value(
+          value: controller,
+          child: const Scaffold(
+            body: SingleChildScrollView(child: IdentityStep()),
+          ),
+        ),
+      ));
+      await tester.pump();
+      expect(find.textContaining('Checking your card'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 31));
+      expect(find.textContaining('Checking your card'), findsNothing);
+      expect(find.textContaining('finish checking this in the background'),
+          findsOneWidget);
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('a needs-review verdict lists each failure label', (
+      tester,
+    ) async {
+      await pumpCard(tester,
+          extract: const IdExtract(
+              verdict: IdVerdict.needsReview,
+              failures: ['name-mismatch', 'unknown-pb-code']));
+      expect(find.text(idFailureLabel('name-mismatch')), findsOneWidget);
+      expect(find.text(idFailureLabel('unknown-pb-code')), findsOneWidget);
+      expect(find.text('An admin will review your documents.'), findsOneWidget);
+    });
+
+    testWidgets('a passed verdict says the card looks good', (tester) async {
+      await pumpCard(tester,
+          extract: const IdExtract(verdict: IdVerdict.passed));
+      expect(find.text('Card details look good'), findsOneWidget);
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('a rejected verdict lists reasons but never blocks Continue', (
+      tester,
+    ) async {
+      await pumpCard(tester,
+          extract: const IdExtract(
+              verdict: IdVerdict.rejected, failures: ['ic-mismatch']));
+      expect(find.text(idFailureLabel('ic-mismatch')), findsOneWidget);
+      expect(find.textContaining('retaking a clear'), findsOneWidget);
+      expect(find.text('An admin will review your documents.'), findsOneWidget);
+      expect(continueButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('the card is hidden for passports', (tester) async {
+      final controller = await pumpCard(tester);
+      controller.setIdDocumentType(IdDocumentType.passport);
+      await tester.pump();
+      expect(find.textContaining('Checking your card'), findsNothing);
+    });
+  });
+
+  group('Upload progress', () {
+    Future<OnboardingController> build(
+      _GatedStorage storage,
+      FaceChecker faces,
+    ) async {
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        storage,
+        imagePicker: _FakePicker(),
+        faceChecker: faces,
+      );
+      await controller.loadFor('provider-1');
+      controller.data
+        ..icNumber = '900101-07-1234'
+        ..idConsentAt = DateTime(2026, 9, 30);
+      return controller;
+    }
+
+    Future<void> pumpIdentity(
+      WidgetTester tester,
+      OnboardingController controller,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<OnboardingController>.value(
+          value: controller,
+          child: const Scaffold(
+            body: SingleChildScrollView(child: IdentityStep()),
+          ),
+        ),
+      ));
+      await tester.pump();
+    }
+
+    // The ID box is the first UploadBox on the page (individual, MyKad).
+    Finder idBox() => find.byType(UploadBox).at(0);
+
+    Future<void> tapIdBox(WidgetTester tester) async {
+      await tester.tap(find.textContaining('JPEG, PNG up to 10MB'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Choose from gallery'));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('the ID box spins while its upload is pending', (tester) async {
+      final storage = _GatedStorage();
+      final controller = await build(storage, FakeFaceChecker());
+      await pumpIdentity(tester, controller);
+
+      await tapIdBox(tester);
+      expect(find.descendant(of: idBox(), matching: find.text('Uploading…')),
+          findsOneWidget);
+      expect(
+          find.descendant(
+              of: idBox(), matching: find.byType(CircularProgressIndicator)),
+          findsOneWidget);
+      // The selfie box is untouched.
+      expect(find.descendant(
+          of: find.byType(UploadBox).at(1), matching: find.text('Uploading…')),
+          findsNothing);
+
+      storage.gate.complete('https://fake.storage/id');
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Document uploaded'), findsOneWidget);
+      expect(find.text('Uploading…'), findsNothing);
+      await tester.pump(const Duration(seconds: 31)); // the ID-check wait timer
+    });
+
+    testWidgets('a pending face check shows "Checking photo…"', (tester) async {
+      final faces = _GatedFaceChecker();
+      final storage = _GatedStorage()..gate.complete('https://fake.storage/id');
+      final controller = await build(storage, faces);
+      await pumpIdentity(tester, controller);
+
+      await tapIdBox(tester);
+      expect(find.descendant(of: idBox(), matching: find.text('Checking photo…')),
+          findsOneWidget);
+      expect(
+          find.descendant(
+              of: idBox(), matching: find.byType(CircularProgressIndicator)),
+          findsOneWidget);
+
+      faces.gate.complete(const FaceCheckResult());
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Checking photo…'), findsNothing);
+      expect(find.text('Document uploaded'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 31)); // the ID-check wait timer
+    });
+
+    test('a second pick while one is in flight starts no second upload',
+        () async {
+      final storage = _GatedStorage();
+      final controller = await build(storage, FakeFaceChecker());
+
+      final first = controller.pickIdDocument(ImageSource.gallery);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.isUploading('id_document'), isTrue);
+      expect(controller.isUploading('selfie'), isFalse);
+
+      await controller.pickSelfie(ImageSource.gallery); // ignored
+      expect(storage.purposes, ['id_document']);
+
+      storage.gate.complete('https://fake.storage/id');
+      await first;
+      expect(controller.isUploading('id_document'), isFalse);
+      expect(controller.data.selfieUrl, isNull);
+      controller.dispose(); // cancels the ID-check wait timer
+    });
+
+    testWidgets('the requestor profile photo box spins while uploading',
+        (tester) async {
+      final storage = _GatedStorage();
+      final controller = RequestorOnboardingController(
+        FakeRequestorOnboardingRepository(FakeAuthRepository()),
+        storage,
+        imagePicker: _FakePicker(),
+      );
+      await controller.loadFor('client-1');
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<RequestorOnboardingController>.value(
+          value: controller,
+          child: const Scaffold(
+            body: SingleChildScrollView(child: DetailsStep()),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      await tester.tap(find.byType(UploadBox));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Uploading…'), findsOneWidget);
+      expect(
+          find.descendant(
+              of: find.byType(UploadBox),
+              matching: find.byType(CircularProgressIndicator)),
+          findsOneWidget);
+
+      storage.gate.complete('https://fake.storage/avatar');
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Photo added'), findsOneWidget);
+      expect(find.text('Uploading…'), findsNothing);
+    });
+  });
+
+  group('Face check and consent', () {
+    const box =
+        FaceBox(left: 0.25, top: 0.25, width: 0.5, height: 0.5, aspect: 1.5);
+    const noFace = FaceCheckResult(problem: 'Face the camera straight on.');
+
+    Future<(OnboardingController, List<String>)> build(
+      FakeFaceChecker faces, {
+      bool consent = true,
+    }) async {
+      final events = <String>[];
+      final controller = OnboardingController(
+        _OrderRepo(FakeAuthRepository(), events),
+        _OrderStorage(events),
+        imagePicker: _FakePicker(),
+        faceChecker: faces,
+      );
+      await controller.loadFor('provider-1');
+      if (consent) controller.data.idConsentAt = DateTime(2026, 9, 30);
+      return (controller, events);
+    }
+
+    test('FaceBox survives toMap/fromMap, and bad maps give null', () {
+      expect(FaceBox.fromMap(box.toMap()), box);
+      expect(FaceBox.fromMap(null), isNull);
+      expect(FaceBox.fromMap({'left': 0.1}), isNull);
+    });
+
+    test('a face problem shows the message and uploads nothing', () async {
+      final (controller, events) = await build(FakeFaceChecker(noFace));
+
+      await controller.pickSelfie(ImageSource.gallery);
+
+      expect(controller.errorMessage, noFace.problem);
+      expect(events, isEmpty, reason: 'no save and no upload');
+      expect(controller.data.selfieUrl, isNull);
+      expect(controller.isBusy, isFalse);
+    });
+
+    test('a passing photo uploads and its face box lands in privateMap',
+        () async {
+      final faces = FakeFaceChecker(const FaceCheckResult(box: box));
+      final (controller, events) = await build(faces);
+
+      await controller.pickSelfie(ImageSource.gallery);
+      await controller.pickIdDocument(ImageSource.gallery);
+
+      expect(faces.calls, [FaceCheckKind.selfie, FaceCheckKind.idCard]);
+      expect(events, contains('upload'));
+      expect(controller.data.selfieUrl, isNotNull);
+      final private = controller.data.privateMap();
+      expect(private['selfieFaceBox'], box.toMap());
+      expect(private['idFaceBox'], box.toMap());
+      expect(controller.data.toMap().containsKey('selfieFaceBox'), isFalse);
+    });
+
+    test('changing the IC drops the old ID face box', () async {
+      final (controller, _) =
+          await build(FakeFaceChecker(const FaceCheckResult(box: box)));
+      await controller.pickIdDocument(ImageSource.gallery);
+      expect(controller.data.idFaceBox, box);
+
+      controller.setIcNumber('900101-07-1234');
+      expect(controller.data.idFaceBox, isNull);
+    });
+
+    test('without consent nothing is checked or uploaded', () async {
+      final faces = FakeFaceChecker();
+      final (controller, events) = await build(faces, consent: false);
+
+      await controller.pickSelfie(ImageSource.gallery);
+      await controller.pickIdDocument(ImageSource.gallery);
+
+      expect(faces.calls, isEmpty);
+      expect(events, isEmpty);
+    });
+
+    test('consent is stamped in privateMap only, and unticking clears it', () {
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeDocumentStorageRepository(),
+      );
+      expect(controller.data.privateMap()['idConsentAt'], isNull);
+
+      controller.setIdConsent(true);
+      expect(controller.data.privateMap()['idConsentAt'], isA<DateTime>());
+      expect(controller.data.toMap().containsKey('idConsentAt'), isFalse);
+
+      controller.setIdConsent(false);
+      expect(controller.data.privateMap()['idConsentAt'], isNull);
+    });
+
+    testWidgets('uploads stay locked and the hint asks until consent is ticked',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final controller = OnboardingController(
+        FakeOnboardingRepository(FakeAuthRepository()),
+        FakeDocumentStorageRepository(),
+      );
+      await tester.runAsync(() async {
+        await controller.loadFor('provider-1');
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: ChangeNotifierProvider<OnboardingController>.value(
+          value: controller,
+          child: const Scaffold(
+            body: SingleChildScrollView(child: IdentityStep()),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      String hint() =>
+          tester.widget<Text>(find.textContaining('Still needed:')).data!;
+      final selfieBox = find.textContaining('Make sure face and ID are clear');
+
+      expect(hint(), contains('your consent to identity checks'));
+      await tester.tap(selfieBox, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(find.text('Add your selfie'), findsNothing);
+
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pumpAndSettle();
+      expect(hint(), isNot(contains('consent')));
+      expect(controller.data.idConsentAt, isNotNull);
+      await tester.tap(selfieBox);
+      await tester.pumpAndSettle();
+      expect(find.text('Add your selfie'), findsOneWidget);
+    });
+
+    testWidgets('a failed image shows its icon inside the visible crop', (
+      tester,
+    ) async {
+      for (final box in <FaceBox?>[
+        const FaceBox(left: 0.4, top: 0.3, width: 0.2, height: 0.2, aspect: 1.5),
+        null,
+      ]) {
+        await tester.pumpWidget(MaterialApp(
+          home: Center(
+            child: FaceCrop(url: 'https://fake.storage/gone.jpg', box: box),
+          ),
+        ));
+        await tester.pumpAndSettle(); // the test HTTP client answers 400
+
+        final icon = find.byIcon(Icons.broken_image_outlined);
+        expect(icon, findsOneWidget, reason: 'box: $box');
+        expect(icon.hitTestable(), findsOneWidget, reason: 'box: $box');
+        final crop = tester.getRect(find.byType(FaceCrop));
+        expect(crop.contains(tester.getCenter(icon)), isTrue, reason: 'box: $box');
+      }
+    });
+
+    test('FaceCropLayout pads the box by 20% and scales it to the width', () {
+      // Padded box is (0.15, 0.15, 0.7, 0.7); at 100 wide the image is 100/0.7.
+      const b =
+          FaceBox(left: 0.25, top: 0.25, width: 0.5, height: 0.5, aspect: 1);
+      final l = FaceCropLayout.of(b, 100);
+      expect(l.imageW, closeTo(142.857, 0.001));
+      expect(l.imageH, closeTo(142.857, 0.001));
+      expect(l.cropH, closeTo(100, 0.001));
+      expect(l.left, closeTo(-21.428, 0.001));
+      expect(l.top, closeTo(-21.428, 0.001));
+    });
+
+    test('FaceCropLayout keeps the padding inside the image', () {
+      const b = FaceBox(left: 0, top: 0, width: 0.5, height: 0.5, aspect: 2);
+      final l = FaceCropLayout.of(b, 100); // padded (0, 0, 0.6, 0.6)
+      expect(l.left, 0);
+      expect(l.top, 0);
+      expect(l.imageW, closeTo(166.667, 0.001));
+      expect(l.imageH, closeTo(83.333, 0.001));
+      expect(l.cropH, closeTo(50, 0.001));
     });
   });
 
@@ -4448,6 +5081,36 @@ void main() {
       );
     });
 
+    testWidgets('the Compare button opens a side-by-side table of bids', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(500, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        buildApp(FakeAuthRepository(), jobs: [sampleJob(bidCount: 2)], bids: valueBids()),
+      );
+      await tester.pumpAndSettle();
+      await openOwnJob(tester);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Compare 2 bids'));
+      await tester.pumpAndSettle();
+
+      final table = find.byType(DataTable);
+      expect(find.text('Compare 2 bids'), findsWidgets);
+      expect(table, findsOneWidget);
+      expect(find.descendant(of: table, matching: find.text('Cheap Charlie')),
+          findsOneWidget);
+      expect(find.descendant(of: table, matching: find.text('Trusty Tina')),
+          findsOneWidget);
+
+      // Picking a row starts that bid's accept.
+      await tester.tap(
+          find.descendant(of: table, matching: find.text('Cheap Charlie')));
+      await tester.pumpAndSettle();
+      expect(find.text('Accept this bid?'), findsOneWidget);
+    });
+
     testWidgets('re-sorting by Price reorders but keeps the badge fixed', (
       tester,
     ) async {
@@ -5171,6 +5834,99 @@ void main() {
       expect(find.text('1'), findsOneWidget);
     });
 
+    Future<void> openDetail(
+      WidgetTester tester,
+      FakeVerificationRepository repo, {
+      Size size = const Size(500, 2400),
+    }) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
+      await tester.pumpWidget(buildApp(auth, verification: repo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alex Rivera'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('detail says when no automated ID check has run', (
+      tester,
+    ) async {
+      await openDetail(tester, FakeVerificationRepository([samplePending()]));
+      expect(find.text('Automated ID checks'), findsOneWidget);
+      expect(find.text('No automated check yet'), findsOneWidget);
+    });
+
+    testWidgets('detail shows the automated ID check result', (tester) async {
+      await openDetail(tester, FakeVerificationRepository([samplePending()])
+        ..idExtract = const IdExtract(
+          verdict: IdVerdict.needsReview,
+          failures: ['name-mismatch'],
+          maskedIc: '******-07-**34',
+          ageOk: true,
+          nameMatches: false,
+        ));
+      expect(find.textContaining('Needs review', findRichText: true),
+          findsOneWidget);
+      expect(find.text('******-07-**34'), findsOneWidget);
+      expect(find.text('18 or older'), findsOneWidget);
+      expect(find.text('Does not match'), findsOneWidget);
+      expect(find.textContaining(idFailureLabel('name-mismatch')),
+          findsOneWidget);
+    });
+
+    testWidgets('detail shows the face comparison when ID and selfie exist', (
+      tester,
+    ) async {
+      await openDetail(tester, FakeVerificationRepository([samplePending()])
+        ..identityDocuments = const [
+          VerificationDocument(
+            label: 'Identity Document',
+            url: 'https://fake.storage/id.jpg',
+            faceBox: FaceBox(
+                left: 0.1, top: 0.1, width: 0.3, height: 0.4, aspect: 1.5),
+          ),
+          VerificationDocument(
+              label: 'Selfie', url: 'https://fake.storage/selfie.jpg'),
+        ]);
+      expect(find.text('Face comparison'), findsOneWidget);
+      expect(find.text('Compare the two faces before approving.'),
+          findsOneWidget);
+      expect(find.text('On ID'), findsOneWidget);
+      expect(find.byType(FaceCrop), findsNWidgets(2));
+    });
+
+    testWidgets('the face comparison fits a 360dp phone without overflow', (
+      tester,
+    ) async {
+      await openDetail(
+        tester,
+        FakeVerificationRepository([samplePending()])
+          ..identityDocuments = const [
+            VerificationDocument(
+              label: 'Identity Document',
+              url: 'https://fake.storage/id.jpg',
+              faceBox: FaceBox(
+                  left: 0.1, top: 0.1, width: 0.3, height: 0.4, aspect: 1.5),
+            ),
+            VerificationDocument(
+                label: 'Selfie', url: 'https://fake.storage/selfie.jpg'),
+          ],
+        size: const Size(360, 800),
+      );
+      expect(find.text('Face comparison'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      final crops = tester.widgetList(find.byType(FaceCrop)).cast<FaceCrop>();
+      expect(crops.map((c) => c.size).toSet().single, lessThan(140));
+    });
+
+    testWidgets('detail hides the face comparison without a selfie', (
+      tester,
+    ) async {
+      await openDetail(tester, FakeVerificationRepository([samplePending()]));
+      expect(find.text('Face comparison'), findsNothing);
+      expect(find.byType(FaceCrop), findsNothing);
+    });
+
     testWidgets('empty queue shows the all-caught-up state', (tester) async {
       final auth = FakeAuthRepository()..seedSignedIn(UserRole.admin);
       await tester.pumpWidget(buildApp(auth));
@@ -5411,6 +6167,11 @@ void main() {
       );
     });
 
+    test('escrow refund ledger type parses from storage', () {
+      expect(LedgerType.fromStorage('refund'), LedgerType.refund);
+      expect(LedgerType.refund.label, 'Escrow refund');
+    });
+
     Dispute sampleDispute({String id = 'disp-1'}) => Dispute(
       id: id,
       jobId: 'job-1',
@@ -5463,10 +6224,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Open own job → the funded (current) milestone step offers the
-      // low-emphasis "Something wrong?" dispute link.
+      // "Raise a dispute" button.
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
-      final disputeBtn = find.widgetWithText(TextButton, 'Something wrong?');
+      final disputeBtn = find.widgetWithText(OutlinedButton, 'Raise a dispute');
       await tester.ensureVisible(disputeBtn);
       await tester.tap(disputeBtn);
       await tester.pumpAndSettle();
@@ -5489,7 +6250,19 @@ void main() {
       expect(dispute.raised, hasLength(1));
       expect(dispute.raised.single.milestoneId, 'ms-1');
       expect(find.text('Disputed, on hold'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Something wrong?'), findsNothing);
+      expect(find.widgetWithText(OutlinedButton, 'Raise a dispute'), findsNothing);
+
+      // The person who raised it can take it back.
+      final withdrawBtn = find.text('Withdraw dispute');
+      await tester.ensureVisible(withdrawBtn);
+      await tester.tap(withdrawBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Withdraw'));
+      await tester.pumpAndSettle();
+
+      expect(dispute.withdrawn, ['ms-1']);
+      expect(find.text('Disputed, on hold'), findsNothing);
+      expect(find.text('Withdraw dispute'), findsNothing);
     });
 
     testWidgets('admin rules a dispute from the Disputes tab', (tester) async {
@@ -5517,11 +6290,11 @@ void main() {
       );
 
       // Release → the ruling note is required before confirming.
-      await tester.tap(find.widgetWithText(FilledButton, 'Release'));
+      await tester.tap(find.text('Pay the provider RM 150.00'));
       await tester.pumpAndSettle();
       final confirm = find.descendant(
         of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Release'),
+        matching: find.widgetWithText(FilledButton, 'Pay provider'),
       );
       expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
       await tester.enterText(
@@ -5674,7 +6447,7 @@ void main() {
       expect(find.text('23'), findsOneWidget); // total users
     });
 
-    testWidgets('stats tab shows bundle award and handover dispute counts', (
+    testWidgets('stats tab shows bundle award counts', (
       tester,
     ) async {
       await tester.binding.setSurfaceSize(const Size(500, 1600));
@@ -5692,7 +6465,6 @@ void main() {
       expect(find.text('Bundles'), findsOneWidget);
       expect(find.text('20'), findsOneWidget); // bundles awarded
       expect(find.text('5 (25%)'), findsOneWidget); // split awards
-      expect(find.text('2'), findsOneWidget); // handover disputes
     });
 
     testWidgets('stats tab can trigger the Trust Score recompute', (
@@ -5763,7 +6535,7 @@ void main() {
     ]);
 
     test(
-      'refunding the last milestone reopens it, job stays in progress',
+      'refunding ends the job instead of reopening the milestone',
       () async {
         final jobs = inProgressJob();
         final milestones = repoWithDisputedLastMilestone(jobs);
@@ -5777,11 +6549,9 @@ void main() {
         );
 
         final m = (await milestones.watchMilestones('job-1').first).single;
-        expect(m.status, MilestoneStatus.pending); // reopened, not terminal
-        expect(m.reworkCount, 1);
-        expect(m.reworkNote, 'Work was not delivered.');
+        expect(m.status, MilestoneStatus.refunded); // can't be funded again
         final job = await jobs.getById('job-1');
-        expect(job!.status, JobStatus.inProgress); // NOT completed
+        expect(job!.status, JobStatus.cancelled);
       },
     );
 
@@ -5987,8 +6757,8 @@ void main() {
       final vm = buildJobDetailVm(job, testUser(role: UserRole.provider), bid);
 
       expect(vm.role, JobViewerRole.bidder);
-      expect(vm.primaryAction?.kind, JobActionKind.yourBid);
-      expect(vm.primaryAction?.label, 'Your bid RM\u00A0150.00');
+      expect(vm.primaryAction?.kind, JobActionKind.editBid);
+      expect(vm.primaryAction?.label, 'Edit bid');
       expect(vm.showBids, isTrue);
     });
 
@@ -6107,7 +6877,7 @@ void main() {
       final vm = buildJobDetailVm(job, testUser(), null);
 
       expect(vm.primaryAction?.kind, JobActionKind.compareBids);
-      expect(vm.primaryAction?.label, 'Compare 1 bid');
+      expect(vm.primaryAction?.label, 'View 1 bid');
       expect(vm.showBids, isTrue);
     });
 
@@ -6147,7 +6917,7 @@ void main() {
 
     test(
       "browser + live bundle task: a bundle bid that doesn't cover this "
-      'task is still a new bidder',
+      'task is still edited, not re-bid',
       () {
         final job = sampleJob(
           requestorId: 'req-9',
@@ -6170,7 +6940,12 @@ void main() {
         );
 
         expect(vm.primaryAction?.kind, JobActionKind.submitBid);
-        expect(vm.primaryAction?.label, 'Bid on this bundle');
+        expect(vm.primaryAction?.label, 'Edit bundle bid');
+        expect(
+          vm.statusHeadline,
+          "Your bundle bid doesn't include this task yet. "
+          'Edit it to add this task.',
+        );
       },
     );
   });
@@ -6368,6 +7143,12 @@ void postJobAndOnboardingTests() {
       final submit = find.widgetWithText(FilledButton, 'Post job');
       await tester.ensureVisible(submit);
       await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      // No photo or video, so it asks first instead of posting.
+      expect(find.text('Post without photos?'), findsOneWidget);
+      expect(find.text('Job posted!'), findsNothing);
+      await tester.tap(find.text('Post anyway'));
       await tester.pumpAndSettle();
 
       expect(find.text('Job posted!'), findsOneWidget);
@@ -6670,7 +7451,8 @@ void postJobAndOnboardingTests() {
       await tester.ensureVisible(priceFields.at(1));
       await tester.enterText(priceFields.at(1), '50.00');
       await tester.pumpAndSettle();
-      await fillField(tester, 'Bundle price (RM)', '100.00');
+      await tapAt(tester, find.text('+ Add a package deal (optional)'));
+      await fillField(tester, 'Price if you win all 2 tasks (RM)', '100.00');
       await fillRest(tester);
       await tapAt(
           tester, find.widgetWithText(PrimaryButton, 'Submit bundle bid'));
@@ -6682,26 +7464,14 @@ void postJobAndOnboardingTests() {
       expect(bundleBids.lastSubmission, isNull);
     });
 
-    testWidgets(
-      "the consolidation banner quotes the bundle's OWN cap, not the live "
-      'platform config',
-      (tester) async {
-        await pumpSheet(
-          tester,
-          bundle: sampleBundle(
-            id: 'b1',
-            taskIds: const ['job-1', 'job-2'],
-            consolidationCapPct: 10,
-            consolidationCapSen: 20000,
-          ),
-        );
+    testWidgets('the sheet opens with a one-line tip', (tester) async {
+      await pumpSheet(tester);
 
-        expect(
-          find.textContaining('no more than 10% (max RM\u00A0200.00) above'),
-          findsOneWidget,
-        );
-      },
-    );
+      expect(
+        find.text('Tip: covering more tasks can win you the whole bundle.'),
+        findsOneWidget,
+      );
+    });
 
     testWidgets(
       'a partial read of the bundle tasks blocks the sheet with a snackbar',
@@ -7118,6 +7888,8 @@ void postJobAndOnboardingTests() {
       await tester.ensureVisible(submit);
       await tester.tap(submit);
       await tester.pumpAndSettle();
+      await tester.tap(find.text('Post anyway'));
+      await tester.pumpAndSettle();
 
       final posted = bundles.lastCreate!;
       final tasks = posted['tasks'] as List<BundleTaskDraft>;
@@ -7132,122 +7904,6 @@ void postJobAndOnboardingTests() {
       expect(posted['description'],
           '2 tasks: Fix the kitchen tap, Replace the ceiling light.');
       expect(find.text('Bundle posted with 2 tasks!'), findsOneWidget);
-    });
-
-    testWidgets("an extra task's hourly switch sends hourly: true", (
-      tester,
-    ) async {
-      final bundles = await openPostJob(tester);
-
-      await pickCategory(tester, 0, 'Plumbing');
-      await fillField(tester, 'Job title', 'Fix the kitchen tap');
-      await fillField(tester, 'Description', 'It drips constantly.');
-      await addTask(tester);
-      await pickCategory(tester, 1, 'Electrical');
-      await fillField(tester, 'Task 2 title', 'Replace the ceiling light');
-      await fillField(tester, 'Task 2 description', 'The fitting is cracked.');
-      await fillField(tester, 'Posting title', 'Kitchen refresh');
-
-      // Task 1's card (with its own budget/hourly switch) renders before
-      // task 2's card, so the last "Hourly rate" switch is task 2's.
-      final hourlySwitch =
-          find.widgetWithText(SwitchListTile, 'Hourly rate').last;
-      await tapAt(tester, hourlySwitch);
-
-      final submit = find.widgetWithText(FilledButton, 'Post bundle');
-      await tester.ensureVisible(submit);
-      await tester.tap(submit);
-      await tester.pumpAndSettle();
-
-      final tasks = bundles.lastCreate!['tasks'] as List<BundleTaskDraft>;
-      expect(tasks[0].budget?.hourly, isNot(true));
-      expect(tasks[1].budget?.hourly, true);
-    });
-
-    testWidgets('a template fills the task cards and links them', (
-      tester,
-    ) async {
-      final bundles = await openPostJob(tester);
-
-      await tapAt(tester, find.text('Start from a template'));
-      await tester.tap(find.text('Bathroom renovation'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Task 1'), findsOneWidget);
-      expect(find.text('Task 2'), findsOneWidget);
-      expect(find.text('Task 3'), findsOneWidget);
-      expect(find.text('Task 4'), findsOneWidget);
-
-      // The read-only dependency notes, exactly as the spec's examples.
-      expect(find.textContaining('Starts after Plumbing rough-in'),
-          findsNWidgets(2));
-      expect(find.textContaining('Starts after Waterproofing, 2 days later'),
-          findsOneWidget);
-      expect(find.textContaining('Linked with Tiling'), findsOneWidget);
-      expect(find.textContaining('Linked with Waterproofing'),
-          findsOneWidget);
-
-      // Template-linked tasks can't be removed on their own.
-      expect(find.byTooltip('Remove task 2'), findsNothing);
-      expect(find.byTooltip('Remove task 3'), findsNothing);
-      expect(find.byTooltip('Remove task 4'), findsNothing);
-
-      await fillField(
-          tester, 'Task 1 description', 'Full strip-out and rebuild.');
-      await fillField(tester, 'Task 2 description', 'Seal the shower floor.');
-      await fillField(tester, 'Task 3 description', 'Tile the shower walls.');
-      await fillField(
-          tester, 'Task 4 description', 'New light and extractor fan.');
-
-      final submit = find.widgetWithText(FilledButton, 'Post bundle');
-      await tester.ensureVisible(submit);
-      await tester.tap(submit);
-      await tester.pumpAndSettle();
-
-      final tasks = bundles.lastCreate!['tasks'] as List<BundleTaskDraft>;
-      expect(tasks.map((t) => t.title), [
-        'Plumbing rough-in',
-        'Waterproofing',
-        'Tiling',
-        'Electrical fittings',
-      ]);
-      expect(tasks.map((t) => t.category),
-          ['Plumbing', 'Home Repair', 'Home Repair', 'Electrical']);
-      expect(tasks[0].lotId, isNull);
-      expect(tasks[1].lotId, 'wet-area');
-      expect(tasks[1].startsAfterIndex, 0);
-      expect(tasks[2].lotId, 'wet-area');
-      expect(tasks[2].startsAfterIndex, 1);
-      expect(tasks[2].gapDays, 2);
-      expect(tasks[3].lotId, isNull);
-      expect(tasks[3].startsAfterIndex, 0);
-      // Left empty for the requestor - a blank posting title falls back to
-      // the template's name.
-      expect(bundles.lastCreate!['title'], 'Bathroom renovation');
-    });
-
-    testWidgets("'Clear template' drops the links but keeps the tasks", (
-      tester,
-    ) async {
-      await openPostJob(tester);
-
-      await tapAt(tester, find.text('Start from a template'));
-      await tester.tap(find.text('Move-in prep'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Task 3'), findsOneWidget);
-      expect(
-          find.textContaining('Starts after Deep clean'), findsOneWidget);
-      expect(find.byTooltip('Remove task 2'), findsNothing);
-      expect(find.byTooltip('Remove task 3'), findsNothing);
-
-      await tapAt(tester, find.text('Clear template'));
-
-      expect(find.textContaining('Starts after Deep clean'), findsNothing);
-      expect(find.byTooltip('Remove task 2'), findsOneWidget);
-      expect(find.byTooltip('Remove task 3'), findsOneWidget);
-      // The tasks themselves - titles, categories - are untouched.
-      expect(find.text('Task 3'), findsOneWidget);
     });
   });
 
@@ -7349,11 +8005,10 @@ void postJobAndOnboardingTests() {
     ) async {
       await pumpBundle(tester);
 
-      // Each task's title shows up more than once now: the task card, the
-      // Bids section's price line and the manual-pick dropdown's label.
-      expect(find.text('Waterproof the floor'), findsWidgets);
-      expect(find.text('Tile the floor'), findsWidgets);
-      expect(find.textContaining('Aida Renovation'), findsWidgets);
+      // The by-task pick rows; the bids open from a button.
+      expect(find.text('Waterproof the floor'), findsOneWidget);
+      expect(find.text('Tile the floor'), findsOneWidget);
+      expect(find.text('View all bids (1)'), findsOneWidget);
       // Options are only fetched when the requestor asks for them.
       expect(find.text('Recommended'), findsNothing);
     });
@@ -7378,6 +8033,51 @@ void postJobAndOnboardingTests() {
       expect(bundles.lastAward?['providerByTaskId'],
           {'job-1': 'prov-1', 'job-2': 'prov-2'});
       expect(bundles.lastAward?['expectedTotalSen'], 87500);
+    });
+
+    testWidgets('a partial award can drop the tasks it leaves out', (
+      tester,
+    ) async {
+      final bundles = await pumpBundle(tester);
+      // Options are fetched on demand, so swapping them after pumping works.
+      bundles.awardOptions = const [
+        BundleAwardOption(
+          key: 'recommended',
+          label: 'Recommended',
+          totalSen: 37500,
+          providerCount: 1,
+          premiumSen: 0,
+          weightedTrust: 751,
+          uncoveredTaskIds: ['job-2'],
+          awards: [
+            BundleAwardItem(
+              providerId: 'prov-1',
+              providerName: 'Aida Renovation',
+              taskAmountsSen: {'job-1': 37500},
+            ),
+          ],
+        ),
+      ];
+
+      await tester.tap(find.widgetWithText(FilledButton,
+          'Show award options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Award this option'));
+      await tester.pumpAndSettle();
+
+      // Posting separately is the default, so the deadline row shows first.
+      expect(find.textContaining('Released back until'), findsOneWidget);
+      await tester.tap(find.text('Drop'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Released back until'), findsNothing);
+      expect(find.text('It will be cancelled.'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Award'));
+      await tester.pumpAndSettle();
+
+      expect(bundles.lastAward?['providerByTaskId'], {'job-1': 'prov-1'});
+      expect(bundles.lastAward?['dropUnawarded'], true);
+      expect(bundles.lastAward?['releasedDeadline'], isNull);
     });
 
     testWidgets('a closed bundle hides the award buttons and explains why', (
@@ -7443,18 +8143,16 @@ void postJobAndOnboardingTests() {
       expect(find.widgetWithText(FilledButton, 'Top up'), findsOneWidget);
     });
 
-    /// Picks the matrix item containing [label] in the [index]-th task's
-    /// dropdown (0 is the first task).
+    /// Opens the task row titled [task] and picks [label] in its sheet.
     Future<void> pickManual(
       WidgetTester tester,
-      int index,
+      String task,
       String label,
     ) async {
-      final dropdown = find.byType(DropdownButtonFormField<String?>).at(index);
-      await tester.ensureVisible(dropdown);
-      await tester.tap(dropdown);
+      await tester.ensureVisible(find.text(task));
+      await tester.tap(find.text(task));
       await tester.pumpAndSettle();
-      await tester.tap(find.textContaining(label).last);
+      await tester.tap(find.text(label).last);
       await tester.pumpAndSettle();
     }
 
@@ -7474,18 +8172,16 @@ void postJobAndOnboardingTests() {
       ],
     );
 
-    testWidgets('picking providers and checking the price shows "Your pick"', (
+    testWidgets('picking providers prices them and shows "Your pick"', (
       tester,
     ) async {
       final bundles = await pumpBundle(tester);
       bundles.manualOption = manualPick;
 
-      await pickManual(tester, 0, 'Aida Renovation');
-      await pickManual(tester, 1, 'Aida Renovation');
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Check price'));
-      await tester.pumpAndSettle();
+      await pickManual(tester, 'Waterproof the floor', 'Aida Renovation');
+      await pickManual(tester, 'Tile the floor', 'Aida Renovation');
 
-      expect(find.text('Your pick'), findsOneWidget);
+      expect(find.textContaining('Your pick: RM'), findsOneWidget);
       expect(bundles.lastManualPicks, {'job-1': 'prov-1', 'job-2': 'prov-1'});
     });
 
@@ -7495,129 +8191,24 @@ void postJobAndOnboardingTests() {
       final bundles = await pumpBundle(tester);
       bundles.manualProblems = const ['Prov-1 already covers job-2 elsewhere.'];
 
-      await pickManual(tester, 0, 'Aida Renovation');
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Check price'));
-      await tester.pumpAndSettle();
+      await pickManual(tester, 'Waterproof the floor', 'Aida Renovation');
 
       expect(find.text('Prov-1 already covers job-2 elsewhere.'),
           findsOneWidget);
-      expect(find.text('Your pick'), findsNothing);
+      final award = tester.widget<FilledButton>(
+          find.widgetWithText(FilledButton, 'Award your pick'));
+      expect(award.onPressed, isNull);
     });
 
-    testWidgets('changing a pick clears the priced result', (tester) async {
+    testWidgets('clearing every pick removes the bar', (tester) async {
       final bundles = await pumpBundle(tester);
       bundles.manualOption = manualPick;
 
-      await pickManual(tester, 0, 'Aida Renovation');
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Check price'));
-      await tester.pumpAndSettle();
-      expect(find.text('Your pick'), findsOneWidget);
+      await pickManual(tester, 'Waterproof the floor', 'Aida Renovation');
+      expect(find.text('Award your pick'), findsOneWidget);
 
-      await pickManual(tester, 0, "Don't award");
-      expect(find.text('Your pick'), findsNothing);
-    });
-  });
-
-  group('Site handover', () {
-    /// A dependent task, already in progress, assigned to the registered
-    /// provider ('uid-1' - see `openRegisterAs`). Posted by someone else -
-    /// `sampleJob`'s own `requestorId` also defaults to 'uid-1', which would
-    /// otherwise resolve the registered user as the owner, not the provider.
-    Job dependentJob() => sampleJob(
-          requestorId: 'req-9',
-          status: JobStatus.inProgress,
-          acceptedProviderId: 'uid-1',
-          acceptedProviderName: 'New User',
-          acceptedBidAmountSen: 15000,
-          startsAfterJobId: 'job-0',
-        );
-
-    /// Registers as a provider and opens their assigned job via My Jobs.
-    Future<void> openAssignedJob(WidgetTester tester) async {
-      await openRegisterAs(tester, 'Work');
-      await tester.tap(
-        find.descendant(
-          of: find.byType(NavigationBar),
-          matching: find.text('My jobs'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Fix leaking sink').first);
-      await tester.pumpAndSettle();
-    }
-
-    testWidgets(
-      'the accepted provider sees the banner, records a handover, then it '
-      'clears and the timeline shows the note',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-
-        final auth = FakeAuthRepository()
-          ..verificationStatus = 'approved'
-          ..baseLat = 3.139
-          ..baseLng = 101.6869;
-        await tester.pumpWidget(buildApp(auth, jobs: [dependentJob()]));
-        await tester.pumpAndSettle();
-        await openAssignedJob(tester);
-
-        expect(find.text('Record the site handover before you start.'),
-            findsOneWidget);
-
-        await tester.tap(find.widgetWithText(TextButton, 'Record handover'));
-        await tester.pumpAndSettle();
-        expect(find.text('Record site handover'), findsOneWidget);
-
-        // Empty note is rejected.
-        await tester.tap(find.widgetWithText(FilledButton, 'Save handover'));
-        await tester.pumpAndSettle();
-        expect(find.text('Describe the handover.'), findsOneWidget);
-
-        await fillField(
-          tester,
-          'Handover note',
-          'Site is clear, previous task finished.',
-        );
-        await tester.tap(find.widgetWithText(FilledButton, 'Save handover'));
-        await tester.pumpAndSettle();
-
-        // The sheet closed and the banner is gone.
-        expect(find.text('Record site handover'), findsNothing);
-        expect(find.text('Record the site handover before you start.'),
-            findsNothing);
-
-        // The timeline shows the recorded note once expanded.
-        await tester.tap(find.text('Activity'));
-        await tester.pumpAndSettle();
-        expect(find.text('Site is clear, previous task finished.'),
-            findsOneWidget);
-      },
-    );
-
-    testWidgets('a job that does not depend on another shows no banner', (
-      tester,
-    ) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      final job = sampleJob(
-        requestorId: 'req-9',
-        status: JobStatus.inProgress,
-        acceptedProviderId: 'uid-1',
-        acceptedProviderName: 'New User',
-        acceptedBidAmountSen: 15000,
-      );
-      final auth = FakeAuthRepository()
-        ..verificationStatus = 'approved'
-        ..baseLat = 3.139
-        ..baseLng = 101.6869;
-      await tester.pumpWidget(buildApp(auth, jobs: [job]));
-      await tester.pumpAndSettle();
-      await openAssignedJob(tester);
-
-      expect(find.text('Record the site handover before you start.'),
-          findsNothing);
-      expect(find.widgetWithText(TextButton, 'Record handover'), findsNothing);
+      await pickManual(tester, 'Waterproof the floor', "Don't award");
+      expect(find.text('Award your pick'), findsNothing);
     });
   });
 
@@ -7762,4 +8353,90 @@ void postJobAndOnboardingTests() {
       expect(find.textContaining('Filled in'), findsOneWidget);
     });
   });
+}
+
+/// Records save/upload order so tests can assert what the server would see.
+class _OrderRepo extends FakeOnboardingRepository {
+  _OrderRepo(super.auth, this.events);
+
+  final List<String> events;
+
+  @override
+  Future<void> save(String uid, OnboardingData data) async =>
+      events.add('save:${data.idDocumentType.name}');
+}
+
+class _OrderStorage extends FakeDocumentStorageRepository {
+  _OrderStorage(this.events);
+
+  final List<String> events;
+
+  @override
+  Future<String> uploadVerificationImage({
+    required String uid,
+    required String purpose,
+    required XFile file,
+  }) async {
+    events.add('upload');
+    return 'https://fake.storage/$uid/$purpose';
+  }
+}
+
+/// Storage whose uploads stay pending until [gate] completes, so a test can
+/// look at the UI mid-upload.
+class _GatedStorage extends FakeDocumentStorageRepository {
+  final gate = Completer<String>();
+  final purposes = <String>[];
+
+  @override
+  Future<String> uploadVerificationImage({
+    required String uid,
+    required String purpose,
+    required XFile file,
+  }) {
+    purposes.add(purpose);
+    return gate.future;
+  }
+
+  @override
+  Future<String> uploadAvatar({required String uid, required XFile file}) {
+    purposes.add('avatar');
+    return gate.future;
+  }
+}
+
+/// Face checker that stays pending until [gate] completes.
+class _GatedFaceChecker implements FaceChecker {
+  final gate = Completer<FaceCheckResult>();
+
+  @override
+  Future<FaceCheckResult> check(String filePath, FaceCheckKind kind) =>
+      gate.future;
+}
+
+class _FakePicker extends ImagePicker {
+  @override
+  Future<XFile?> pickImage({
+    required ImageSource source,
+    double? maxWidth,
+    double? maxHeight,
+    int? imageQuality,
+    CameraDevice preferredCameraDevice = CameraDevice.rear,
+    bool requestFullMetadata = true,
+  }) async => XFile('id.jpg');
+}
+
+/// Face checker for tests: passes by default, or returns the given result.
+/// Records the calls so tests can see whether a photo was checked at all.
+class FakeFaceChecker implements FaceChecker {
+  FakeFaceChecker([this.result = const FaceCheckResult()]);
+
+  FaceCheckResult result;
+  final calls = <FaceCheckKind>[];
+
+  @override
+  Future<FaceCheckResult> check(String filePath, FaceCheckKind kind) async {
+    calls.add(kind);
+    return result;
+  }
 }

@@ -38,8 +38,8 @@ class AppTextField extends StatefulWidget {
   final int maxLines;
   final int? maxLength;
 
-  /// False greys the field out and blocks input - e.g. a bundle price before
-  /// two tasks are picked.
+  /// False greys the field out and blocks input - e.g. while a request is
+  /// in flight.
   final bool enabled;
 
   /// Optional widget on the right of the label row (e.g. a "Forgot?" link).
@@ -180,6 +180,7 @@ class UploadBox extends StatelessWidget {
     this.pickedName,
     this.compact = false,
     this.busy = false,
+    this.busyLabel = 'Uploading…',
   });
 
   final VoidCallback onTap;
@@ -188,6 +189,7 @@ class UploadBox extends StatelessWidget {
   final String? pickedName;
   final bool compact;
   final bool busy;
+  final String busyLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -223,7 +225,7 @@ class UploadBox extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 busy
-                    ? 'Uploading…'
+                    ? busyLabel
                     : (picked ? pickedName! : 'Click to upload'),
                 style: theme.textTheme.labelLarge?.copyWith(color: accent),
                 overflow: TextOverflow.ellipsis,

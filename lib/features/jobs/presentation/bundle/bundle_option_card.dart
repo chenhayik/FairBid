@@ -11,31 +11,23 @@ import 'bundle_buttons.dart';
 import 'bundle_task_section.dart';
 import 'bundle_warning_banner.dart';
 
-/// One or more [BundleAwardOption]s that award the exact same provider ->
-/// task mapping, shown as a single card with their labels combined (e.g.
-/// "Fewest providers · Recommended").
+/// Options that award the same providers to the same tasks, shown as one
+/// card with joined labels (e.g. "Fewest providers · Recommended").
 class MergedBundleOption {
-  MergedBundleOption(this.option, this.labels, [List<String>? warnings])
-      : warnings = warnings ?? option.warnings;
+  MergedBundleOption(this.option, this.labels);
 
   final BundleAwardOption option;
   final List<String> labels;
 
-  /// The union of every merged option's warnings, deduplicated - a plain
-  /// `option.warnings` would silently drop a second option's warnings once
-  /// two options merge into one card.
-  final List<String> warnings;
-
   String get combinedLabel => labels.join(' · ');
 
-  /// Whether the server's own top pick is among the merged labels - the one
-  /// option per screen that gets the filled [PrimaryButton] treatment.
+  /// True if the server's top pick is among the merged labels. Only that
+  /// option gets the filled [PrimaryButton].
   bool get isRecommended => labels.any((l) => l == 'Recommended');
 }
 
-/// Groups options with identical awards under one [MergedBundleOption], so
-/// two options that happen to hire the same providers for the same tasks
-/// don't show up as two near-identical cards.
+/// Merges options with identical awards into one [MergedBundleOption]
+/// so there are no near-duplicate cards.
 List<MergedBundleOption> mergeBundleOptions(List<BundleAwardOption> options) {
   final merged = <MergedBundleOption>[];
   for (final option in options) {
@@ -48,20 +40,15 @@ List<MergedBundleOption> mergeBundleOptions(List<BundleAwardOption> options) {
     }
     if (match != null) {
       match.labels.add(option.label);
-      for (final warning in option.warnings) {
-        if (!match.warnings.contains(warning)) match.warnings.add(warning);
-      }
     } else {
-      merged.add(MergedBundleOption(option, [option.label], [...option.warnings]));
+      merged.add(MergedBundleOption(option, [option.label]));
     }
   }
   return merged;
 }
 
-/// One award option (or several merged into it): what it costs, who it
-/// hires, and an Award action. [primary] makes the Award button the one
-/// filled [PrimaryButton] on the page; every other option gets an outlined
-/// button instead, so only the recommended action competes for the eye.
+/// One award option: cost, providers hired, and an Award button.
+/// [primary] makes the button filled; the others are outlined.
 class BundleOptionCard extends StatelessWidget {
   const BundleOptionCard({
     super.key,
@@ -71,19 +58,22 @@ class BundleOptionCard extends StatelessWidget {
     required this.busy,
     required this.enabled,
     required this.onAward,
+    this.onUse,
   });
 
   final MergedBundleOption merged;
   final List<Job> tasks;
 
-  /// Whether this card's Award button is the page's one filled action.
+  /// True when this card's Award button is the page's one filled button.
   final bool primary;
   final bool busy;
 
-  /// False while the priced option is stale (the bids moved on since it was
-  /// worked out) - the Award button is disabled until a refresh.
+  /// False when the priced option is stale. Award is disabled until refresh.
   final bool enabled;
   final VoidCallback onAward;
+
+  /// Fills the by-task picks from this option; hides the button when null.
+  final VoidCallback? onUse;
 
   String _titleFor(String taskId) {
     for (final task in tasks) {
@@ -96,8 +86,7 @@ class BundleOptionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final option = merged.option;
-    // The cheapest option's own total (totalSen - premiumSen), so the
-    // premium can also be shown as a percentage of it.
+    // The cheapest option's own total, so the premium can show as a %.
     final cheapestSen = option.totalSen - option.premiumSen;
     final premiumPct = option.premiumSen > 0 && cheapestSen > 0
         ? option.premiumSen * 100 / cheapestSen
@@ -108,10 +97,7 @@ class BundleOptionCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // The label and amount each get their own full-width line rather
-            // than sharing a Row - squeezed into half a Row, a merged label
-            // like "Cheapest · Fewest providers" could wrap mid-word at
-            // larger text scales.
+            // Label and amount get full-width lines so labels don't wrap.
             Text(merged.combinedLabel, style: theme.textTheme.titleMedium),
             const SizedBox(height: 2),
             Text(
@@ -126,7 +112,8 @@ class BundleOptionCard extends StatelessWidget {
               '${option.premiumSen > 0 ? '  •  ${formatRm(option.premiumSen)} '
                         '(${premiumPct.toStringAsFixed(1)}%) more than the '
                         'cheapest' : ''}'
-              '  •  Trust ${option.weightedTrust}',
+              '${option.trustVisible ? '  •  Trust '
+                        '${(option.weightedTrust / 10).round()}/100' : ''}',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -138,10 +125,7 @@ class BundleOptionCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Provider + amount on their own row; the task titles
-                    // wrap on a second line beneath instead of sharing one
-                    // ellipsised line, where a long provider name could push
-                    // every task title off screen.
+                    // Provider and amount share a row; titles wrap below.
                     PriceRow(
                       name: award.providerName,
                       amountSen: award.totalSen,
@@ -162,15 +146,11 @@ class BundleOptionCard extends StatelessWidget {
                 child: WarningBanner(
                   'Nobody bid on '
                   '${option.uncoveredTaskIds.map(_titleFor).join(', ')} - '
-                  'awarding releases '
+                  'when you award, you can post '
                   '${option.uncoveredTaskIds.length == 1 ? 'it' : 'them'} '
-                  'back to ordinary bidding.',
+                  'separately or drop '
+                  '${option.uncoveredTaskIds.length == 1 ? 'it' : 'them'}.',
                 ),
-              ),
-            for (final warning in merged.warnings)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: WarningBanner(warning),
               ),
             const SizedBox(height: 12),
             if (primary)
@@ -185,6 +165,10 @@ class BundleOptionCard extends StatelessWidget {
                 busy: busy,
                 onPressed: enabled ? onAward : null,
               ),
+            if (onUse != null) ...[
+              const SizedBox(height: 8),
+              OutlinedBusyButton(label: 'Use this option', onPressed: onUse),
+            ],
           ],
         ),
       ),

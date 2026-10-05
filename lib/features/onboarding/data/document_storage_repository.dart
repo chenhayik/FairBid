@@ -1,10 +1,8 @@
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
-/// Uploads images and returns their public download URLs. Verification docs go
-/// under owner-only `verification/{uid}/...`; job photos and avatars go under
-/// `jobs/{uid}/...` and `avatars/{uid}/...` respectively (both readable by any
-/// signed-in user) - see `storage.rules`.
+/// Uploads images and returns their download URLs. Verification docs are
+/// owner-only; job photos and avatars are readable by signed-in users.
 abstract interface class DocumentStorageRepository {
   /// Uploads a verification image (ID, selfie, certificate, portfolio).
   /// [purpose] becomes part of the file name.
@@ -14,29 +12,22 @@ abstract interface class DocumentStorageRepository {
     required XFile file,
   });
 
-  /// Uploads an SSM registration document. Unlike every other upload here the
-  /// bytes are stored exactly as picked: re-encoding destroys the digital
-  /// signature that makes a certified true copy verifiable.
-  ///
-  /// The `ssm_document_` prefix is what the `extractSsmDocument` Cloud Function
-  /// matches on - renaming it here silently disables extraction.
+  /// Uploads an SSM document exactly as picked (re-encoding breaks its seal).
+  /// Keep the `ssm_document_` prefix; `extractSsmDocument` matches on it.
   Future<String> uploadSsmDocument({
     required String uid,
     required XFile file,
   });
 
-  /// Uploads an optional SSM Business Profile. Read once by the server for the
-  /// owner-name check and the business facts a Certificate does not carry, then
-  /// **deleted** - it is the only document here containing an NRIC, a date of
-  /// birth and a residential address, and no human ever needs to see it.
+  /// Uploads the optional SSM Business Profile. The server reads it once, then
+  /// deletes it because it holds an NRIC, birth date and home address.
   Future<String> uploadSsmProfile({
     required String uid,
     required XFile file,
   });
 
-  /// Uploads a profile photo under `avatars/{uid}/`, world-readable to any
-  /// signed-in user (see `storage.rules`) since it's denormalised onto bids,
-  /// jobs, chats and reviews.
+  /// Uploads a profile photo under `avatars/{uid}/`. Signed-in users can read
+  /// (see `storage.rules`) because it shows on bids, jobs, chats and reviews.
   Future<String> uploadAvatar({
     required String uid,
     required XFile file,
@@ -61,13 +52,6 @@ abstract interface class DocumentStorageRepository {
     required XFile file,
   });
 
-  /// Uploads a site handover photo under `handovers/{jobId}/`, writable
-  /// only by the job's accepted provider (see `storage.rules`).
-  Future<String> uploadHandoverPhoto({
-    required String jobId,
-    required XFile file,
-  });
-
   /// Best-effort delete of a previously uploaded file (failures are non-fatal).
   Future<void> deleteByUrl(String url);
 }
@@ -79,13 +63,11 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
 
   final FirebaseStorage _storage;
 
-  /// Fail (rather than spin forever) if an upload stalls. Uploads that hang
-  /// happen on flaky networks and, notably, on Android emulators whose network
-  /// stack stalls Storage's resumable-upload protocol.
+  /// Fail instead of waiting forever if an upload stalls (flaky networks,
+  /// Android emulators).
   static const _uploadTimeout = Duration(seconds: 60);
 
-  /// Videos are much larger than photos, so they get a longer allowance
-  /// before the upload is given up on.
+  /// Videos are larger, so they get a longer time limit.
   static const _videoUploadTimeout = Duration(seconds: 180);
 
   @override
@@ -162,21 +144,10 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   }
 
   @override
-  Future<String> uploadHandoverPhoto({
-    required String jobId,
-    required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload('handovers/$jobId/$timestamp', file);
-  }
-
-  @override
   Future<void> deleteByUrl(String url) => _storage.refFromURL(url).delete();
 
-  /// Uploads [file] at [pathWithoutExt] (the extension is taken from the file)
-  /// and returns its download URL. [contentType] overrides the file's own
-  /// reported mime type (used for video, whose picked mime type isn't
-  /// trustworthy); [timeout] overrides the default upload allowance.
+  /// Uploads [file] at [pathWithoutExt] and returns its download URL.
+  /// [contentType] overrides the mime type; [timeout] the default time limit.
   Future<String> _upload(
     String pathWithoutExt,
     XFile file, {
@@ -195,11 +166,8 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
     return ref.getDownloadURL().timeout(effectiveTimeout);
   }
 
-  /// Content type, most trusted source first: an explicit override, the file's
-  /// own mime type, then its extension. That last step is not cosmetic - a file
-  /// chosen through `file_picker` reports a null `mimeType` on Android and iOS,
-  /// and the old `?? 'image/jpeg'` default would tag every SSM PDF as a photo,
-  /// which `storage.rules` now rejects.
+  /// Content type: the override, else the file's mime type, else its extension.
+  /// file_picker gives no mimeType on Android/iOS, so the extension matters.
   String _contentTypeFor(String? override, XFile file) {
     if (override != null) return override;
     final mime = file.mimeType;

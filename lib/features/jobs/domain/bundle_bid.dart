@@ -1,7 +1,7 @@
 /// Lifecycle of a provider's package bid on a bundle. Mirrors `BidStatus`
 /// (see `bid.dart`) with one extra state: `awardBundle` may accept some of a
-/// bid's tasks and reject the rest when the bid isn't all-or-nothing, which
-/// a plain accepted/rejected pair can't represent.
+/// bid's tasks and reject the rest, which a plain accepted/rejected pair
+/// can't represent.
 enum BundleBidStatus {
   pending,
   accepted,
@@ -62,7 +62,6 @@ class BundleBid {
     this.providerScoreVisible = true,
     required this.taskPrices,
     this.bundlePriceSen,
-    this.allOrNothing = false,
     required this.estimatedDuration,
     this.message = '',
     this.status = BundleBidStatus.pending,
@@ -97,10 +96,6 @@ class BundleBid {
   /// only if the provider wins every task in this bid. Null when the
   /// provider didn't offer one.
   final int? bundlePriceSen;
-
-  /// When true, the requestor may award all of this bid's tasks or none of
-  /// them - never a subset.
-  final bool allOrNothing;
 
   /// Human label, e.g. 'Less than 1 week'.
   final String estimatedDuration;
@@ -157,7 +152,6 @@ class BundleBid {
       providerScoreVisible: m['providerScoreVisible'] as bool? ?? true,
       taskPrices: taskPrices,
       bundlePriceSen: (m['bundlePriceSen'] as num?)?.toInt(),
-      allOrNothing: m['allOrNothing'] as bool? ?? false,
       estimatedDuration: m['estimatedDuration'] as String? ?? '',
       message: m['message'] as String? ?? '',
       status: BundleBidStatus.fromStorage(m['status'] as String?),

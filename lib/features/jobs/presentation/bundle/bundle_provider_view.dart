@@ -16,10 +16,8 @@ import '../detail/photo_strip.dart';
 import '../widgets/status_colors.dart';
 import 'bundle_header.dart';
 
-/// A provider's (or any non-owner's) read-only view of a bundle: what it is,
-/// every task in it, their own bundle bid if they have one, and one bottom
-/// action to bid. It never reads other providers' bids - rules only let the
-/// owner do that - so there is no bids list, award or cancel here.
+/// A provider's read-only view of a bundle: its tasks, their own bid, and a
+/// bid button. Other providers' bids are never read, so no award or cancel.
 class BundleProviderView extends StatelessWidget {
   const BundleProviderView({
     super.key,
@@ -57,8 +55,7 @@ class BundleProviderView extends StatelessWidget {
                 ],
                 const SizedBox(height: 20),
                 StreamBuilder<List<Job>>(
-                  // Keyed so it isn't remounted (and the one-shot task
-                  // stream re-listened) when the bid card above appears.
+                  // Keyed so it isn't remounted when the bid card shows.
                   key: const ValueKey('tasks'),
                   stream: tasks,
                   builder: (context, taskSnap) {
@@ -72,7 +69,6 @@ class BundleProviderView extends StatelessWidget {
                         for (final task in list) ...[
                           _TaskCard(
                             task: task,
-                            allTasks: list,
                             onTap: () => onOpenTask(task),
                           ),
                           const SizedBox(height: 12),
@@ -127,16 +123,15 @@ class BundleProviderView extends StatelessWidget {
     ];
   }
 
-  /// The one primary action, shown only while bidding is open and only to
-  /// providers - the same choice job detail's bottom bar makes for a task.
+  /// The one primary action, shown only to providers while bidding is open.
   Widget? _bidBar(BuildContext context, BundleBid? mine) {
     if (!bundle.biddingOpen || me.role != UserRole.provider) return null;
     final verified = me.verificationStatus == 'approved';
     final label = !verified
         ? 'Get verified to bid'
-        : mine == null
-        ? 'Bid on this bundle'
-        : 'Edit bundle bid';
+        : mine?.status == BundleBidStatus.pending
+        ? 'Edit bundle bid'
+        : 'Bid on this bundle';
     final theme = Theme.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -189,17 +184,14 @@ class _MyBidCard extends StatelessWidget {
   }
 }
 
-/// One task of the bundle: what it is, how it fits with the others, and a tap
-/// through to its job detail.
+/// One task of the bundle, tapping through to its job detail.
 class _TaskCard extends StatefulWidget {
   const _TaskCard({
     required this.task,
-    required this.allTasks,
     required this.onTap,
   });
 
   final Job task;
-  final List<Job> allTasks;
   final VoidCallback onTap;
 
   @override
@@ -217,14 +209,6 @@ class _TaskCardState extends State<_TaskCard> {
       color: theme.colorScheme.onSurfaceVariant,
     );
     final budgetLabel = task.budget?.label;
-    final startsAfter = widget.allTasks
-        .where((t) => t.id == task.startsAfterJobId)
-        .firstOrNull;
-    final linked = task.lotId == null
-        ? const <Job>[]
-        : widget.allTasks
-              .where((t) => t.lotId == task.lotId && t.id != task.id)
-              .toList();
     final licence = licenceNoticeFor(task.category);
 
     return AppCard(
@@ -251,18 +235,6 @@ class _TaskCardState extends State<_TaskCard> {
             ),
             if (_expanded)
               Text(task.description, style: theme.textTheme.bodySmall),
-          ],
-          if (startsAfter != null) ...[
-            const SizedBox(height: 8),
-            Text('Starts after ${startsAfter.title}', style: muted),
-          ],
-          if (linked.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Linked with ${linked.map((t) => t.title).join(', ')} — '
-              'linked tasks go to the same provider.',
-              style: muted,
-            ),
           ],
           if (licence != null) ...[
             const SizedBox(height: 8),

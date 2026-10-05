@@ -47,8 +47,8 @@ enum JobActionKind {
   /// Deep-links into provider onboarding/verification.
   getVerified,
 
-  /// Scrolls to the viewer's own bid.
-  yourBid,
+  /// Opens the submit-a-bid sheet prefilled with the viewer's own bid.
+  editBid,
 
   /// Opens the propose-a-plan sheet.
   proposeMilestones,
@@ -101,6 +101,7 @@ class JobDetailViewModel {
     required this.showReviewPrompt,
     required this.showCancel,
     this.showCancellationResponse = false,
+    this.showPriceChangeCard = false,
   });
 
   final JobViewerRole role;
@@ -139,6 +140,10 @@ class JobDetailViewModel {
   /// Slot 3: a mid-flight cancellation request is outstanding and needs
   /// this viewer's response.
   final bool showCancellationResponse;
+
+  /// A price change is pending on this in-progress job: the responder gets
+  /// Accept/Decline, the proposer gets Withdraw.
+  final bool showPriceChangeCard;
 }
 
 /// Builds the [JobDetailViewModel] for [me] looking at [job], with [myBid]
@@ -218,7 +223,7 @@ JobDetailViewModel _forOwner(Job job) {
             : 'Waiting for providers to bid on this job.',
         primaryAction: n > 0
             ? NextAction(
-                label: 'Compare $n bid${n == 1 ? '' : 's'}',
+                label: n == 1 ? 'View 1 bid' : 'Compare $n bids',
                 kind: JobActionKind.compareBids,
                 contextLine: job.budget?.label ?? job.location.address,
               )
@@ -236,6 +241,11 @@ JobDetailViewModel _forOwner(Job job) {
         role: JobViewerRole.owner,
         statusHeadline: job.hasPendingCancellation
             ? 'A cancellation request needs your response.'
+            : job.priceChangeRequest?.by == 'provider'
+            ? 'A price change request needs your response.'
+            : job.fundedAtAward
+            ? '$providerName is on the job. Your payment is secured in '
+                  'escrow; release it once the work is done.'
             : '$providerName is on the job. Fund and release each '
                   'milestone as work is approved.',
         primaryAction: const NextAction(
@@ -248,6 +258,7 @@ JobDetailViewModel _forOwner(Job job) {
         showReviewPrompt: false,
         showCancel: true,
         showCancellationResponse: job.hasPendingCancellation,
+        showPriceChangeCard: job.hasPendingPriceChange,
       );
     case JobStatus.completed:
       final providerName = job.acceptedProviderName ?? 'your provider';
@@ -268,7 +279,10 @@ JobDetailViewModel _forOwner(Job job) {
     case JobStatus.cancelled:
       return JobDetailViewModel(
         role: JobViewerRole.owner,
-        statusHeadline: 'This job was cancelled.',
+        statusHeadline: job.cancelledBy == 'dispute'
+            ? 'This job ended after a dispute. The money held was refunded '
+                  'to you.'
+            : 'This job was cancelled.',
         showBids: false,
         showMilestones: false,
         showAddress: showAddress,
@@ -285,6 +299,8 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
         role: JobViewerRole.acceptedProvider,
         statusHeadline: job.hasPendingCancellation
             ? 'A cancellation request needs your response.'
+            : job.priceChangeRequest?.by == 'requestor'
+            ? 'A price change request needs your response.'
             : "You're working on \"${job.title}\" for "
                   '${job.requestorName}.',
         primaryAction: const NextAction(
@@ -297,6 +313,7 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
         showReviewPrompt: false,
         showCancel: true,
         showCancellationResponse: job.hasPendingCancellation,
+        showPriceChangeCard: job.hasPendingPriceChange,
       );
     case JobStatus.completed:
       return JobDetailViewModel(
@@ -315,9 +332,11 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
         showCancel: false,
       );
     case JobStatus.cancelled:
-      return const JobDetailViewModel(
+      return JobDetailViewModel(
         role: JobViewerRole.acceptedProvider,
-        statusHeadline: 'This job was cancelled.',
+        statusHeadline: job.cancelledBy == 'dispute'
+            ? 'This job ended after a dispute. An admin refunded the client.'
+            : 'This job was cancelled.',
         showBids: false,
         showMilestones: false,
         showAddress: true,
@@ -341,16 +360,22 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
 }
 
 JobDetailViewModel _forBidder(Job job, Bid myBid) {
+  final deadlinePassed =
+      job.deadline != null && job.deadline!.isBefore(DateTime.now());
   return JobDetailViewModel(
     role: JobViewerRole.bidder,
     statusHeadline:
         'Your bid of ${formatRm(myBid.amountSen)} is waiting '
         'for ${job.requestorName} to decide.',
-    primaryAction: NextAction(
-      label: 'Your bid ${formatRm(myBid.amountSen)}',
-      kind: JobActionKind.yourBid,
-      contextLine: myBid.estimatedDuration,
-    ),
+    // No edit once the bidding window has closed.
+    primaryAction: deadlinePassed
+        ? null
+        : NextAction(
+            label: 'Edit bid',
+            kind: JobActionKind.editBid,
+            contextLine:
+                '${formatRm(myBid.amountSen)} - ${myBid.estimatedDuration}',
+          ),
     showBids: true,
     showMilestones: false,
     showAddress: false,
@@ -393,6 +418,12 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
     );
   }
 
+  // A pending bundle bid that misses this task is still edited via the sheet.
+  final editsBundleBid = isProvider &&
+      job.isLiveBundleTask &&
+      myBundleBid != null &&
+      myBundleBid.status == BundleBidStatus.pending;
+
   final String headline;
   NextAction? action;
   if (!isProvider) {
@@ -406,9 +437,16 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
   } else if (deadlinePassed) {
     headline = "This job's bidding window has ended.";
   } else {
-    headline = 'Review the job, then submit your bid.';
+    headline = editsBundleBid
+        ? "Your bundle bid doesn't include this task yet. "
+            'Edit it to add this task.'
+        : 'Review the job, then submit your bid.';
     action = NextAction(
-      label: job.isLiveBundleTask ? 'Bid on this bundle' : 'Submit a bid',
+      label: editsBundleBid
+          ? 'Edit bundle bid'
+          : job.isLiveBundleTask
+              ? 'Bid on this bundle'
+              : 'Submit a bid',
       kind: JobActionKind.submitBid,
       contextLine: job.budget?.label ?? job.location.address,
     );

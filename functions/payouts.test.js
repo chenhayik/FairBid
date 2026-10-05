@@ -1,0 +1,150 @@
+const assert = require("node:assert");
+const {
+  fundedSen,
+  checkFundedPriceChange,
+  planIncrease,
+  planDecrease,
+  finishedByDecrease,
+  canCancelFunded,
+  cancellationPlan,
+  disputeRefundPlan,
+} = require("./payouts");
+
+let failed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    console.log(`  ok  ${name}`);
+  } catch (err) {
+    failed++;
+    console.log(`  FAIL  ${name}\n        ${err.message}`);
+  }
+}
+
+const ms = (order, status, amountSen) =>
+  ({id: `m${order}`, order, status, amountSen});
+
+test("fundedSen counts only funded stages", () => {
+  const all = ["proposed", "pending", "funded", "submitted", "disputed",
+    "released", "resolved"].map((s, i) => ms(i, s, 100));
+  assert.strictEqual(fundedSen(all), 100);
+  assert.strictEqual(fundedSen([]), 0);
+});
+
+test("checkFundedPriceChange: decrease limited to funded stages", () => {
+  const stages = [ms(0, "released", 4000), ms(1, "funded", 3000),
+    ms(2, "submitted", 3000)];
+  assert.strictEqual(checkFundedPriceChange(stages, -3000), null);
+  assert.match(checkFundedPriceChange(stages, -3001), /30\.00 still in/);
+  assert.strictEqual(checkFundedPriceChange(stages, 5000), null);
+  assert.match(checkFundedPriceChange([], -1), /0\.00 still in/);
+});
+
+test("planIncrease grows a lone funded stage", () => {
+  assert.deepStrictEqual(planIncrease([ms(0, "funded", 10000)], 2500),
+      {grow: {id: "m0", amountSen: 12500}});
+});
+
+test("planIncrease adds a stage when the lone stage is submitted", () => {
+  assert.deepStrictEqual(planIncrease([ms(0, "submitted", 10000)], 2500),
+      {add: {id: "m1", order: 1, amountSen: 2500}});
+});
+
+test("planIncrease adds a stage after the last when there are several", () => {
+  const stages = [ms(0, "released", 4000), ms(3, "funded", 6000)];
+  assert.deepStrictEqual(planIncrease(stages, 100),
+      {add: {id: "m4", order: 4, amountSen: 100}});
+});
+
+test("planIncrease adds a stage for a lone pending (re-locked) stage", () => {
+  assert.deepStrictEqual(planIncrease([ms(0, "pending", 5000)], 100),
+      {add: {id: "m1", order: 1, amountSen: 100}});
+});
+
+test("planDecrease reduces a lone stage", () => {
+  assert.deepStrictEqual(planDecrease([ms(0, "funded", 10000)], 2500),
+      {updates: [{id: "m0", amountSen: 7500}], deleteIds: []});
+});
+
+test("planDecrease takes the highest order first and deletes emptied", () => {
+  const stages = [ms(0, "funded", 5000), ms(1, "funded", 2000),
+    ms(2, "funded", 1000)];
+  assert.deepStrictEqual(planDecrease(stages, 2500),
+      {updates: [{id: "m1", amountSen: 500}], deleteIds: ["m2"]});
+  assert.deepStrictEqual(planDecrease(stages, 8000),
+      {updates: [], deleteIds: ["m2", "m1", "m0"]});
+});
+
+test("planDecrease skips stages that are not funded", () => {
+  const stages = [ms(0, "funded", 5000), ms(1, "submitted", 2000),
+    ms(2, "released", 1000)];
+  assert.deepStrictEqual(planDecrease(stages, 1000),
+      {updates: [{id: "m0", amountSen: 4000}], deleteIds: []});
+});
+
+test("finishedByDecrease: only when nothing unpaid remains", () => {
+  const stages = [ms(0, "released", 4000), ms(1, "funded", 6000)];
+  assert.strictEqual(finishedByDecrease(stages, ["m1"]), true);
+  assert.strictEqual(finishedByDecrease(stages, []), false);
+});
+
+test("canCancelFunded: blocked by submitted or disputed only", () => {
+  assert.strictEqual(canCancelFunded([ms(0, "funded", 1)]), true);
+  assert.strictEqual(canCancelFunded([ms(0, "released", 1),
+    ms(1, "pending", 1)]), true);
+  assert.strictEqual(canCancelFunded([ms(0, "submitted", 1)]), false);
+  assert.strictEqual(canCancelFunded([ms(0, "funded", 1),
+    ms(1, "disputed", 1)]), false);
+});
+
+test("cancellationPlan refunds funded, keeps paid, unlocks pending", () => {
+  const stages = [ms(0, "released", 4000), ms(1, "funded", 3000),
+    ms(2, "pending", 2000), ms(3, "funded", 500)];
+  assert.deepStrictEqual(cancellationPlan(stages), {
+    refunds: [{id: "m1", amountSen: 3000}, {id: "m3", amountSen: 500}],
+    deleteIds: ["m1", "m3", "m2"],
+    unlockSen: 2000,
+  });
+});
+
+test("cancellationPlan: a lone funded stage is fully refunded", () => {
+  assert.deepStrictEqual(cancellationPlan([ms(0, "funded", 15000)]), {
+    refunds: [{id: "m0", amountSen: 15000}],
+    deleteIds: ["m0"],
+    unlockSen: 0,
+  });
+});
+
+test("cancellationPlan: proposed stages are deleted without unlocking", () => {
+  assert.deepStrictEqual(cancellationPlan([ms(0, "proposed", 900)]),
+      {refunds: [], deleteIds: ["m0"], unlockSen: 0});
+});
+
+test("disputeRefundPlan refunds every held stage and unlocks the rest", () => {
+  const job = {fundedAtAward: true, acceptedBidAmountSen: 9500};
+  const stages = [ms(0, "released", 4000), ms(1, "disputed", 3000),
+    ms(2, "pending", 2000), ms(3, "submitted", 500)];
+  assert.deepStrictEqual(disputeRefundPlan(job, stages), {
+    refunds: [{id: "m1", amountSen: 3000}, {id: "m3", amountSen: 500}],
+    deleteIds: ["m2"],
+    unlockSen: 2000,
+  });
+});
+
+test("disputeRefundPlan: a legacy job unlocks the unfunded remainder", () => {
+  // RM 100 price: RM 30 disputed, RM 20 planned but never funded, RM 50
+  // never planned. Everything but the disputed RM 30 is still locked.
+  const job = {acceptedBidAmountSen: 10000};
+  const stages = [ms(0, "disputed", 3000), ms(1, "pending", 2000)];
+  assert.deepStrictEqual(disputeRefundPlan(job, stages), {
+    refunds: [{id: "m0", amountSen: 3000}],
+    deleteIds: ["m1"],
+    unlockSen: 7000,
+  });
+});
+
+if (failed > 0) {
+  console.log(`\n${failed} payouts test(s) failed.`);
+  process.exit(1);
+}
+console.log("All payouts tests passed.\n");
