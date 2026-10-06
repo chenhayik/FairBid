@@ -220,6 +220,8 @@ class _EvidenceRow extends StatelessWidget {
                       url,
                       width: 72,
                       height: 72,
+                      cacheWidth:
+                          (72 * MediaQuery.devicePixelRatioOf(context)).round(),
                       fit: BoxFit.cover,
                       loadingBuilder: (context, child, loadingProgress) {
                         if (loadingProgress == null) return child;

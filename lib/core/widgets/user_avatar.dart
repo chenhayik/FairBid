@@ -45,7 +45,13 @@ class _UserAvatarState extends State<UserAvatar> {
     return CircleAvatar(
       radius: widget.radius,
       backgroundColor: context.fairbid.subtleBlue,
-      backgroundImage: hasPhoto ? NetworkImage(photo) : null,
+      // Decode at display size, not the photo's full resolution.
+      backgroundImage: hasPhoto
+          ? ResizeImage(NetworkImage(photo),
+              width: ((widget.radius ?? 20) * 2 *
+                      MediaQuery.devicePixelRatioOf(context))
+                  .round())
+          : null,
       onBackgroundImageError: hasPhoto
           ? (_, _) {
               if (mounted) setState(() => _failed = true);

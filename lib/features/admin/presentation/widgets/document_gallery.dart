@@ -61,6 +61,7 @@ class _DocumentTile extends StatelessWidget {
                 document.url,
                 width: 64,
                 height: 64,
+                cacheWidth: (64 * MediaQuery.devicePixelRatioOf(context)).round(),
                 fit: BoxFit.cover,
                 loadingBuilder: (context, child, progress) => progress == null
                     ? child

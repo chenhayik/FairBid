@@ -241,8 +241,11 @@ class _UserCard extends StatelessWidget {
           CircleAvatar(
             radius: 24,
             backgroundColor: context.fairbid.subtleBlue,
-            backgroundImage:
-                user.photoUrl != null ? NetworkImage(user.photoUrl!) : null,
+            backgroundImage: user.photoUrl != null
+                ? ResizeImage(NetworkImage(user.photoUrl!),
+                    width: (48 * MediaQuery.devicePixelRatioOf(context))
+                        .round())
+                : null,
             child: user.photoUrl == null
                 ? Icon(
                     isProvider
