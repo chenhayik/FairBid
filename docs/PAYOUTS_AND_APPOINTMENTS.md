@@ -1,5 +1,7 @@
 # FairBid - One-payment escrow, optional stages and appointments
 
+> Update 2026-10-06: the legacy milestone-plan flow (propose, approve, reject, fund; `proposeMilestonePlan`, `approveMilestonePlan`, `rejectMilestonePlan`, `fundMilestone`, `escrowLockedSen` locking) was removed. Every job is funded at award; old milestone docs still display read-only. Sections below that describe the legacy flow are history.
+
 ## Goal
 
 After a bid is accepted, a normal job should go straight to agreeing a visit time. The whole price is secured in escrow at award, and paid out in one go when the work is done. Staged payments stay available for big jobs, where they protect both sides, but nobody has to plan, approve or fund stages for a RM150 aircon service.
@@ -14,7 +16,7 @@ Happy path after this: award (money moves to escrow) → provider proposes a tim
 - The provider proposes a plan with `proposeMilestonePlan` (1-20 stages, summing exactly to `acceptedBidAmountSen`). The requestor then calls `approveMilestonePlan` (stages become `pending`) or `rejectMilestonePlan`.
 - `fundMilestone` moves each stage's amount from `walletBalanceSen` into escrow and reduces `escrowLockedSen`. The provider marks it `submitted` with a direct client write (`firestore.rules`: funded → submitted, only `status` and `submissionNote`). `releaseMilestone` pays the provider and completes the job once every stage is terminal and the plan covers the price (`completesJob` in `functions/price_change.js`).
 - Disputes are per stage. A refund ruling returns the stage to `pending` for rework and re-locks the amount.
-- Cancellation (mutual consent, or `adminCancelJob`) is refused while any stage is funded, submitted or disputed (`hasHeldEscrow`). `finaliseCancellation` deletes unfunded stages and unlocks the rest of the commitment.
+- Cancellation (mutual consent) is refused while any stage is funded, submitted or disputed (`hasHeldEscrow`). `finaliseCancellation` deletes unfunded stages and unlocks the rest of the commitment.
 - Price change (`requestPriceChange` / `respondToPriceChange`) requires the new price to exceed the funded total. It moves `escrowLockedSen` by the difference and leaves an unplanned remainder that the provider must re-plan.
 - Categories come from `kServiceCategories`. There is no Renovation category: renovation work falls under Home Repair.
 
@@ -39,7 +41,7 @@ Happy path after this: award (money moves to escrow) → provider proposes a tim
   `escrowLockedSen` is no longer touched for these jobs.
 - `awardBundle`: the same, once per awarded task, each stage worth that task's `acceptedBidAmountSen`. The existing whole-sen split of a bundle price already makes these add up exactly to the total. It stays one wallet write and one transaction.
 - Legacy: jobs already in progress without `fundedAtAward` keep today's flow (propose, approve, fund). Keep every existing callable working for them. Don't migrate old jobs.
-- Cancellation for `fundedAtAward` jobs: allowed while no stage is `submitted` or `disputed`. Funded stages that haven't been submitted are refunded to the requestor's `walletBalanceSen` (with a `refund` ledger entry) and deleted. Released stages stay paid. `adminCancelJob` follows the same rule.
+- Cancellation for `fundedAtAward` jobs: allowed while no stage is `submitted` or `disputed`. Funded stages that haven't been submitted are refunded to the requestor's `walletBalanceSen` (with a `refund` ledger entry) and deleted. Released stages stay paid.
 - Price change for `fundedAtAward` jobs:
   - Increase: the difference must be covered by the available balance when the requestor agrees. It moves wallet → escrow. If the job has exactly one stage and it hasn't been submitted, that stage's amount grows. Otherwise a new funded stage "Price change" is added.
   - Decrease: the difference is refunded to the requestor from funded, unsubmitted stages, taking from the last stage first. It can't be more than those stages hold together.

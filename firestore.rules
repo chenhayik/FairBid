@@ -148,9 +148,9 @@ service cloud.firestore {
       match /private/{doc} {
         allow read: if isSignedIn()
                     && (request.auth.uid == userId || isAdmin());
-        // `ssmExtract` and `idExtract` are server results, so users cannot write them.
+        // Server results and the payout method are written by functions only.
         allow write: if isSignedIn() && request.auth.uid == userId
-                     && !(doc in ['ssmExtract', 'idExtract']);
+                     && !(doc in ['ssmExtract', 'idExtract', 'payoutMethod']);
       }
 
       // Only Cloud Functions create notifications. The owner may only change `read`.
@@ -232,7 +232,7 @@ service cloud.firestore {
     }
 
     // Accept fields are server-owned (acceptBid), so the wallet check cannot be skipped.
-    // `fundedAtAward` decides refund rules, so clients must not change it.
+    // `fundedAtAward` is set by acceptBid, so clients must not change it.
     function noAcceptFieldWrites() {
       return !request.resource.data.diff(resource.data).affectedKeys()
           .hasAny(['acceptedProviderId', 'acceptedProviderName',
@@ -298,7 +298,7 @@ service cloud.firestore {
                       && resource.data.status == 'pending';
       }
 
-      // Milestone plans and money moves are written by Cloud Functions.
+      // Milestones and money moves are written by Cloud Functions.
       // Clients may only mark a funded milestone as submitted.
       match /milestones/{milestoneId} {
         allow read: if isSignedIn()

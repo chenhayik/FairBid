@@ -4,7 +4,7 @@
 // price_change.js. [milestones] is an array of `{id, status, amountSen,
 // order}` rows (the milestone doc id plus its data).
 
-// Mirrors isTerminal in index.js; duplicated so this stays a leaf module.
+// A finished milestone status; `resolved` is only kept for old data.
 const isTerminal = (status) =>
   status === "released" || status === "resolved" || status === "refunded";
 
@@ -84,9 +84,7 @@ const canCancelFunded = (milestones) =>
 /**
  * What cancelling refunds and cleans up: every `funded` stage is refunded in
  * full (`refunds`), and every stage that is neither funded nor paid is deleted
- * (`deleteIds`). A `pending` stage (a dispute refund re-locked its amount
- * against the wallet) also releases that amount from `escrowLockedSen`
- * (`unlockSen`). Paid stages stay.
+ * (`deleteIds`). Paid stages stay.
  */
 function cancellationPlan(milestones) {
   const refunds = milestones
@@ -94,33 +92,24 @@ function cancellationPlan(milestones) {
       .map((m) => ({id: m.id, amountSen: m.amountSen}));
   const open = milestones.filter(
       (m) => m.status !== "funded" && !isTerminal(m.status));
-  const unlockSen =
-      sumAmounts(open.filter((m) => m.status === "pending"));
   return {
     refunds,
     deleteIds: [...refunds.map((r) => r.id), ...open.map((m) => m.id)],
-    unlockSen,
   };
 }
 
 /**
  * What a "refund the client and end the job" ruling settles: every stage
- * still holding money is refunded, unfunded ones are deleted and unlocked.
+ * still holding money is refunded and unfunded ones are deleted.
  */
-function disputeRefundPlan(job, milestones) {
+function disputeRefundPlan(milestones) {
   const held = ["funded", "submitted", "disputed"];
   const refunds = milestones
       .filter((m) => held.includes(m.status))
       .map((m) => ({id: m.id, amountSen: m.amountSen}));
   const unfunded = milestones.filter(
       (m) => !held.includes(m.status) && !isTerminal(m.status));
-  // Legacy jobs lock the whole price at award and unlock it stage by stage.
-  const everFunded = sumAmounts(milestones.filter(
-      (m) => held.includes(m.status) || isTerminal(m.status)));
-  const unlockSen = job.fundedAtAward ?
-      sumAmounts(unfunded.filter((m) => m.status === "pending")) :
-      Math.max(0, (job.acceptedBidAmountSen || 0) - everFunded);
-  return {refunds, deleteIds: unfunded.map((m) => m.id), unlockSen};
+  return {refunds, deleteIds: unfunded.map((m) => m.id)};
 }
 
 exports.fundedSen = fundedSen;

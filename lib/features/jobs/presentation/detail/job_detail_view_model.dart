@@ -50,20 +50,11 @@ enum JobActionKind {
   /// Opens the submit-a-bid sheet prefilled with the viewer's own bid.
   editBid,
 
-  /// Opens the propose-a-plan sheet.
-  proposeMilestones,
-
   /// Marks the current milestone delivered (with confirmation).
   markDelivered,
 
-  /// Funds the current milestone (with confirmation).
-  fundMilestone,
-
   /// Releases the current milestone (with confirmation).
   releaseMilestone,
-
-  /// Approves the provider's proposed plan (with confirmation).
-  approvePlan,
 
   /// Opens the bundle's award screen, where a still-open live bundle task's
   /// bids are compared rather than in this job's own (empty) bid list.
@@ -243,11 +234,8 @@ JobDetailViewModel _forOwner(Job job) {
             ? 'A cancellation request needs your response.'
             : job.priceChangeRequest?.by == 'provider'
             ? 'A price change request needs your response.'
-            : job.fundedAtAward
-            ? '$providerName is on the job. Your payment is secured in '
-                  'escrow; release it once the work is done.'
-            : '$providerName is on the job. Fund and release each '
-                  'milestone as work is approved.',
+            : '$providerName is on the job. Your payment is secured in '
+                  'escrow; release it once the work is done.',
         primaryAction: const NextAction(
           label: 'Message provider',
           kind: JobActionKind.message,

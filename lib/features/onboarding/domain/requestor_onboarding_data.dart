@@ -83,8 +83,7 @@ class RequestorOnboardingData {
       };
 
   /// Phone number - stored in the owner+admin-only `users/{uid}/private/payout`
-  /// doc, never in the world-readable user document. Shares that doc with
-  /// [OnboardingData]'s payout bank details (providers' twin of this class).
+  /// doc, never in the world-readable user document.
   Map<String, dynamic> payoutMap() => {'phone': phone};
 
   /// Rebuilds from the top-level fields of a `users/{uid}` document.

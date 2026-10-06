@@ -40,15 +40,8 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
   DocumentReference<Map<String, dynamic>> _privateDoc(String uid) =>
       _doc(uid).collection('private').doc('verification');
 
-  /// Owner+admin-only doc holding the payout bank details (see
-  /// `OnboardingData.payoutMap`), never on the world-readable public doc.
-  DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
-      _doc(uid).collection('private').doc('payout');
-
-  /// Fields whose public home moved to [_payoutDoc]; explicitly deleted from
-  /// the public `onboarding` map on every subsequent save so legacy accounts
-  /// migrate organically. A one-off backfill Cloud Function is still needed
-  /// for providers who never save again - deliberately out of scope here.
+  /// Old public bank fields, removed on every save. Payout details now live
+  /// in `private/payoutMethod`, set up before the first withdrawal.
   static final _legacyPayoutDeletes = {
     'onboarding.bankName': FieldValue.delete(),
     'onboarding.accountHolder': FieldValue.delete(),
@@ -79,18 +72,6 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
         ..ssmNumberNormalized =
             private['ssmNumberNormalized'] as String? ?? '';
     }
-    // Payout bank details live in their own private doc too; merge them back
-    // for resume, falling back to the legacy public onboarding fields (still
-    // parsed by OnboardingData.fromMap above) for accounts that haven't saved
-    // since the migration.
-    final payout = (await _payoutDoc(uid).get()).data();
-    if (payout != null) {
-      data
-        ..bankName = payout['bankName'] as String? ?? data.bankName
-        ..accountHolder =
-            payout['accountHolder'] as String? ?? data.accountHolder
-        ..branchCode = payout['branchCode'] as String? ?? data.branchCode;
-    }
     return data;
   }
 
@@ -113,8 +94,7 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
     final batch = _firestore.batch()
       ..set(_doc(uid), {'onboarding': data.toMap()}, SetOptions(merge: true))
       ..update(_doc(uid), _legacyPayoutDeletes)
-      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))
-      ..set(_payoutDoc(uid), data.payoutMap(), SetOptions(merge: true));
+      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true));
     return batch.commit();
   }
 
@@ -129,8 +109,7 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
         'submittedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true))
       ..update(_doc(uid), _legacyPayoutDeletes)
-      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))
-      ..set(_payoutDoc(uid), data.payoutMap(), SetOptions(merge: true));
+      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true));
     return batch.commit();
   }
 }

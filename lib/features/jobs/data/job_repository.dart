@@ -73,9 +73,6 @@ abstract interface class JobRepository {
   /// The proposer withdraws their pending price change.
   Future<void> withdrawPriceChange(String jobId);
 
-  /// Admin cancels an in-progress job. Still refused while escrow is held.
-  Future<void> adminCancelJob(String jobId, {String? reason});
-
   /// Streams a job's activity timeline (oldest first), written by the server.
   Stream<List<JobEvent>> watchJobEvents(String jobId);
 
@@ -245,14 +242,6 @@ class FirestoreJobRepository implements JobRepository {
     await _functions
         .httpsCallable('withdrawPriceChange')
         .call<void>({'jobId': jobId});
-  }
-
-  @override
-  Future<void> adminCancelJob(String jobId, {String? reason}) async {
-    await _functions.httpsCallable('adminCancelJob').call<void>({
-      'jobId': jobId,
-      if (reason != null && reason.isNotEmpty) 'reason': reason,
-    });
   }
 
   @override

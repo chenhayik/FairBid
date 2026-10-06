@@ -213,8 +213,8 @@ class _SubmitBidFormState extends State<_SubmitBidForm> {
                 if (_escrowAcknowledged) _showEscrowError = false;
               }),
               title: Text(
-                'I understand FairBid uses milestone escrow: the client '
-                'funds each milestone and it\'s released to me when they '
+                'I understand the client pays the full price into escrow '
+                'when they hire me, and FairBid releases it to me when they '
                 'approve the work.',
                 style: theme.textTheme.bodyMedium,
               ),

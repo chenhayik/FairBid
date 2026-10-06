@@ -3,26 +3,11 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/milestone.dart';
 
-/// Reads and writes escrow milestones. Money-free writes (propose, submit)
-/// go straight to Firestore; the money-moving ones (fund, release) call the
-/// Cloud Functions that own `walletBalanceSen` - Firestore rules reject any
-/// client write to it, mirroring how `recomputeTrustScore` protects the Trust
-/// Score. UI/controllers depend on this interface so tests can use a fake.
+/// Reads and writes escrow milestones. The money-free submit goes straight
+/// to Firestore; release calls the Cloud Function that owns
+/// `walletBalanceSen` - Firestore rules reject any client write to it,
+/// mirroring how `recomputeTrustScore` protects the Trust Score. UI/controllers depend on this interface so tests can use a fake.
 abstract interface class MilestoneRepository {
-  /// Provider proposes (or amends) the milestone plan for an in-progress job
-  /// via the `proposeMilestonePlan` Cloud Function, which enforces the amounts
-  /// total the accepted bid and writes each milestone `proposed` - fundable
-  /// only once the requestor approves.
-  Future<void> proposeMilestones(String jobId, List<Milestone> milestones);
-
-  /// Requestor approves the proposed plan (`approveMilestonePlan`), moving
-  /// every proposed milestone to `pending` so funding can begin.
-  Future<void> approveMilestonePlan(String jobId);
-
-  /// Requestor sends the proposed plan back with a note
-  /// (`rejectMilestonePlan`); the provider then re-proposes.
-  Future<void> rejectMilestonePlan(String jobId, {String? note});
-
   /// Streams a job's milestones in their proposed order.
   Stream<List<Milestone>> watchMilestones(String jobId);
 
@@ -34,10 +19,6 @@ abstract interface class MilestoneRepository {
   /// rules enforce funded → submitted only, by the accepted provider.
   Future<void> submitMilestone(String jobId, String milestoneId,
       {String? note});
-
-  /// Debits the requestor's wallet and funds the milestone (the
-  /// `fundMilestone` Cloud Function).
-  Future<void> fundMilestone(String jobId, String milestoneId);
 
   /// Credits the provider's wallet, releases the milestone and - when it was
   /// the job's last unreleased one - completes the job, unlocking reviews
@@ -58,36 +39,6 @@ class FirestoreMilestoneRepository implements MilestoneRepository {
 
   CollectionReference<Map<String, dynamic>> _milestones(String jobId) =>
       _firestore.collection('jobs').doc(jobId).collection('milestones');
-
-  @override
-  Future<void> proposeMilestones(
-      String jobId, List<Milestone> milestones) async {
-    // Ordered by list position; the function derives each milestone's `order`
-    // from its index, so send them in the intended sequence.
-    final ordered = [...milestones]..sort((a, b) => a.order.compareTo(b.order));
-    await _functions.httpsCallable('proposeMilestonePlan').call<void>({
-      'jobId': jobId,
-      'milestones': [
-        for (final m in ordered)
-          {'description': m.description, 'amountSen': m.amountSen},
-      ],
-    });
-  }
-
-  @override
-  Future<void> approveMilestonePlan(String jobId) async {
-    await _functions
-        .httpsCallable('approveMilestonePlan')
-        .call<void>({'jobId': jobId});
-  }
-
-  @override
-  Future<void> rejectMilestonePlan(String jobId, {String? note}) async {
-    await _functions.httpsCallable('rejectMilestonePlan').call<void>({
-      'jobId': jobId,
-      if (note != null && note.isNotEmpty) 'note': note,
-    });
-  }
 
   @override
   Stream<List<Milestone>> watchMilestones(String jobId) {
@@ -117,12 +68,6 @@ class FirestoreMilestoneRepository implements MilestoneRepository {
       'status': MilestoneStatus.submitted.storage,
       if (note != null && note.isNotEmpty) 'submissionNote': note,
     });
-  }
-
-  @override
-  Future<void> fundMilestone(String jobId, String milestoneId) async {
-    await _functions.httpsCallable('fundMilestone').call<void>(
-        {'jobId': jobId, 'milestoneId': milestoneId});
   }
 
   @override

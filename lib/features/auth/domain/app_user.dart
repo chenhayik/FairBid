@@ -36,8 +36,8 @@ class AppUser {
     this.trustBreakdown,
     this.profilePhotoUrl,
     this.providerType,
-    this.payoutBankName,
-    this.payoutAccountLast4,
+    this.category,
+    this.skills = const [],
     this.isPasswordAccount = true,
     this.emailVerified = false,
     this.watchlist = const [],
@@ -58,8 +58,8 @@ class AppUser {
   /// Available wallet balance in sen (1/100 RM). Shown on the Earnings screen.
   final int walletBalanceSen;
 
-  /// Sen committed against accepted-but-not-yet-funded bids (server-owned;
-  /// see `acceptBid` and `fundMilestone`). Not free to spend or withdraw.
+  /// Sen the server holds back from the wallet (server-owned; always 0 now
+  /// that jobs are funded at award). Not free to spend or withdraw.
   final int escrowLockedSen;
 
   /// The wallet balance actually free to accept a new bid or withdraw:
@@ -81,10 +81,10 @@ class AppUser {
   /// the header subtitle. Null for requestors.
   final String? providerType;
 
-  /// A provider's payout bank and masked account tail, for the Earnings screen's
-  /// Payout Method card. Null until onboarding captures them.
-  final String? payoutBankName;
-  final String? payoutAccountLast4;
+  /// A provider's primary service category and skills, from onboarding.
+  /// Editable on Edit Profile. Empty for requestors.
+  final String? category;
+  final List<String> skills;
 
   /// Whether email/password is a linked sign-in provider (vs. Google-only).
   /// Determines whether deleting the account needs a password confirmation
@@ -124,7 +124,7 @@ class AppUser {
   /// Reputation score 0–1000 (see the technical plan): a server-computed
   /// composite of reviews, track record, verification and profile
   /// completeness. Displayed only once [scoreVisible]; until then the UI
-  /// shows a "New User" state instead of a number.
+  /// shows a "New" state instead of a number.
   final int trustScore;
 
   /// Completed jobs (as provider or requestor) and disputes lost, the raw

@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/config/platform_config.dart';
@@ -11,10 +14,14 @@ import '../../../core/widgets/app_widgets.dart';
 import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/reauth_dialog.dart';
+import '../../jobs/data/job_repository.dart';
 import '../../jobs/data/milestone_repository.dart';
+import '../../jobs/domain/job.dart';
 import '../../jobs/domain/milestone.dart';
 import '../../wallet/data/wallet_repository.dart';
 import '../../wallet/domain/ledger_entry.dart';
+import '../../wallet/domain/payout_method.dart';
+import '../../wallet/presentation/payout_method_screen.dart';
 import '../../wallet/presentation/toyyibpay_webview_screen.dart';
 import '../../wallet/presentation/wallet_amount_sheet.dart';
 
@@ -35,6 +42,19 @@ class _EarningsScreenState extends State<EarningsScreen> {
   Stream<List<LedgerEntry>>? _transactions;
   Stream<List<Milestone>>? _milestones;
 
+  /// Where withdrawals go; null until set up.
+  PayoutMethod? _payout;
+
+  /// The client's own jobs, to show how much is held for them.
+  Stream<List<Job>>? _myJobs;
+  StreamSubscription<PayoutMethod?>? _payoutSub;
+
+  @override
+  void dispose() {
+    _payoutSub?.cancel();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -45,7 +65,38 @@ class _EarningsScreenState extends State<EarningsScreen> {
     if (user.role == UserRole.provider) {
       _milestones =
           context.read<MilestoneRepository>().watchProviderMilestones(user.uid);
+    } else if (user.role == UserRole.requestor) {
+      _myJobs = context.read<JobRepository>().watchMyJobs(user.uid);
     }
+    if (user.role != UserRole.admin) {
+      _payoutSub = context
+          .read<WalletRepository>()
+          .watchPayoutMethod(user.uid)
+          .listen((m) => setState(() => _payout = m));
+    }
+  }
+
+  /// Asks for a payout method before the first withdrawal.
+  Future<void> _askForPayoutMethod() async {
+    final add = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Where should we send it?'),
+        content: const Text('Add a DuitNow ID or bank account before your '
+            'first withdrawal.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Add payout method'),
+          ),
+        ],
+      ),
+    );
+    if (add == true && mounted) await PayoutMethodScreen.open(context);
   }
 
   /// Runs after a successful top-up/withdraw so the Available figure (read
@@ -56,6 +107,14 @@ class _EarningsScreenState extends State<EarningsScreen> {
   Future<void> _withdraw(int balanceSen) async {
     final user = context.read<AuthController>().user;
     if (user == null) return;
+    final payout = _payout;
+    if (payout == null) return _askForPayoutMethod();
+    if (payout.onHold()) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('You changed your payout method, so withdrawals '
+              'resume ${DateFormat('d MMM, h:mm a').format(payout.availableAt!)}.')));
+      return;
+    }
 
     // Step up before money leaves the account: a stolen unlocked phone
     // shouldn't be enough to drain a wallet.
@@ -72,7 +131,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final ok = await WalletAmountSheet.show(
       context,
       title: 'Withdraw',
-      subtitle: 'Move money from your FairBid balance to your bank account.',
+      subtitle: 'Sent to ${payout.masked}. Demo: no real transfer is made.',
       actionLabel: 'Withdraw',
       maxSen: balanceSen,
       onSubmit: (sen) async {
@@ -85,7 +144,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
-              '${formatRm(amountSen ?? 0)} withdrawn to your bank account.')));
+              '${formatRm(amountSen ?? 0)} sent to ${payout.masked} (demo).')));
     }
   }
 
@@ -227,7 +286,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
               balanceSen: user.walletBalanceSen,
               actionLabel: isProvider ? 'Withdraw' : 'Top up',
               onAction: isProvider
-                  ? () => _withdraw(user.walletBalanceSen)
+                  ? () => _withdraw(user.availableBalanceSen)
                   : _topUp,
             ),
             if (!isProvider && PlatformConfig.demoTopUpEnabled) ...[
@@ -240,13 +299,28 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 ),
               ),
             ],
+            if (!isProvider) ...[
+              const SizedBox(height: 8),
+              // Refunds land here, so clients can take money back out too.
+              SecondaryButton(
+                label: 'Withdraw',
+                onPressed: () => _withdraw(user.availableBalanceSen),
+              ),
+              const SizedBox(height: 16),
+              _HeldForJobsCard(stream: _myJobs),
+              const SizedBox(height: 16),
+              _PayoutMethodCard(
+                method: _payout,
+                onEdit: () => PayoutMethodScreen.open(context),
+              ),
+            ],
             if (isProvider) ...[
               const SizedBox(height: 16),
               _EscrowStats(stream: _milestones),
               const SizedBox(height: 16),
               _PayoutMethodCard(
-                bankName: user.payoutBankName,
-                accountLast4: user.payoutAccountLast4,
+                method: _payout,
+                onEdit: () => PayoutMethodScreen.open(context),
               ),
             ],
             const SizedBox(height: 16),
@@ -372,55 +446,92 @@ class _EscrowStats extends StatelessWidget {
   }
 }
 
-class _PayoutMethodCard extends StatelessWidget {
-  const _PayoutMethodCard({this.bankName, this.accountLast4});
+/// Money a client has paid into escrow for jobs still in progress.
+class _HeldForJobsCard extends StatelessWidget {
+  const _HeldForJobsCard({required this.stream});
+  final Stream<List<Job>>? stream;
 
-  final String? bankName;
-  final String? accountLast4;
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Job>>(
+      stream: stream,
+      builder: (context, snapshot) {
+        // A job paid in full at award holds its whole price until released.
+        final heldSen = (snapshot.data ?? const <Job>[])
+            .where((j) => j.status == JobStatus.inProgress)
+            .fold<int>(0, (sum, j) => sum + (j.acceptedBidAmountSen ?? 0));
+        return StatCard(
+          label: 'Held in escrow for your jobs',
+          value: snapshot.hasData ? formatRm(heldSen) : '-',
+          icon: Icons.lock_outline,
+        );
+      },
+    );
+  }
+}
+
+class _PayoutMethodCard extends StatelessWidget {
+  const _PayoutMethodCard({required this.method, required this.onEdit});
+
+  final PayoutMethod? method;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasMethod = bankName != null && bankName!.isNotEmpty;
+    final muted = theme.textTheme.bodyMedium
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final m = method;
 
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Payout method', style: theme.textTheme.titleLarge),
-          const SizedBox(height: 16),
-          if (hasMethod)
+          Row(
+            children: [
+              Expanded(
+                child: Text('Payout method', style: theme.textTheme.titleLarge),
+              ),
+              TextButton(
+                onPressed: onEdit,
+                child: Text(m == null ? 'Add' : 'Change'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (m == null)
+            Text('Not set up yet. Add a DuitNow ID or bank account before '
+                'your first withdrawal.', style: muted)
+          else
             Row(
               children: [
                 CircleAvatar(
                   backgroundColor: context.fairbid.subtleBlue,
-                  child: Icon(Icons.account_balance,
-                      color: context.fairbid.verified),
+                  child: Icon(
+                    m.isDuitNow ? Icons.qr_code_2 : Icons.account_balance,
+                    color: context.fairbid.verified,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(bankName!, style: theme.textTheme.bodyLarge),
-                      if (accountLast4 != null)
-                        Text('•••• $accountLast4',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant)),
+                      Text(m.masked, style: theme.textTheme.bodyLarge),
+                      Text(m.holderName, style: muted),
+                      if (m.onHold())
+                        Text(
+                          'Usable from '
+                          '${DateFormat('d MMM, h:mm a').format(m.availableAt!)}'
+                          ' (24-hour safety hold).',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: context.fairbid.warningText),
+                        ),
                     ],
                   ),
                 ),
-                PillBadge(
-                  label: 'Verified',
-                  icon: Icons.verified,
-                  color: context.fairbid.verified,
-                ),
               ],
-            )
-          else
-            Text('Not set',
-                style: theme.textTheme.bodyLarge
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            ),
         ],
       ),
     );

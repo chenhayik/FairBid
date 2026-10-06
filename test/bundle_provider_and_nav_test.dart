@@ -15,7 +15,6 @@ import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_sheet.d
 import 'package:fairbid/features/jobs/presentation/bundle/bundle_detail_screen.dart';
 import 'package:fairbid/features/jobs/presentation/detail/job_detail_screen.dart';
 import 'package:fairbid/features/jobs/presentation/detail/photo_strip.dart';
-import 'package:fairbid/features/jobs/presentation/detail/propose_milestones_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -545,7 +544,7 @@ void main() {
       expect(find.text('Withdraw'), findsNothing);
     });
 
-    testWidgets('a client with no plan yet messages from the bar only', (
+    testWidgets('a client with no stage yet messages from the bar only', (
       tester,
     ) async {
       await openAsOwner(tester, inProgress(), []);
@@ -560,73 +559,12 @@ void main() {
       await openAsOwner(
         tester,
         inProgress(),
-        [milestone(MilestoneStatus.pending)],
+        [milestone(MilestoneStatus.funded)],
       );
 
       expect(find.widgetWithText(FilledButton, 'Message provider'),
           findsNothing);
       expect(find.text('Message Pro Fixer'), findsOneWidget);
-    });
-
-    testWidgets('the provider proposes the plan from the bar', (tester) async {
-      await openAsProvider(tester, inProgress(acceptedId: 'uid-1', requestorId: 'req-9'), []);
-
-      expect(find.widgetWithText(FilledButton, 'Propose milestones'),
-          findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, 'Propose milestones'));
-      await tester.pumpAndSettle();
-      expect(find.byType(ProposeMilestonesSheet), findsOneWidget);
-    });
-
-    testWidgets('the client approves a proposed plan from the bar', (
-      tester,
-    ) async {
-      await openAsOwner(
-        tester,
-        inProgress(),
-        [milestone(MilestoneStatus.proposed)],
-      );
-
-      expect(find.widgetWithText(FilledButton, 'Approve plan'), findsOneWidget);
-      // "Request changes" is a secondary action the bar doesn't offer.
-      expect(find.widgetWithText(OutlinedButton, 'Request changes'),
-          findsOneWidget);
-
-      await tester.tap(find.widgetWithText(FilledButton, 'Approve plan'));
-      await tester.pumpAndSettle();
-      expect(find.text('Approve this plan?'), findsOneWidget);
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Approve'),
-      ));
-      await tester.pumpAndSettle();
-
-      // Approved: the milestone is now waiting to be funded from the bar.
-      expect(find.widgetWithText(FilledButton, 'Fund RM 150.00'),
-          findsOneWidget);
-    });
-
-    testWidgets('the client funds the milestone from the bar only', (
-      tester,
-    ) async {
-      await openAsOwner(
-        tester,
-        inProgress(),
-        [milestone(MilestoneStatus.pending)],
-      );
-
-      expect(find.widgetWithText(FilledButton, 'Fund milestone'), findsNothing);
-      await tester.tap(find.widgetWithText(FilledButton, 'Fund RM 150.00'));
-      await tester.pumpAndSettle();
-      expect(find.text('Fund this milestone?'), findsOneWidget);
-      await tester.tap(find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Fund'),
-      ));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Waiting for the provider to deliver milestone 1.'),
-          findsOneWidget);
     });
 
     testWidgets('the provider delivers from the bar only', (tester) async {

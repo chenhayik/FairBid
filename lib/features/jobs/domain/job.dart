@@ -121,8 +121,6 @@ class Job {
     this.cancellationRequestedAt,
     this.cancelledAt,
     this.cancelledBy,
-    this.planRejectionNote,
-    this.fundedAtAward = false,
     this.bundleId,
     this.bundleOrder,
     this.bundleTaskCount,
@@ -143,7 +141,7 @@ class Job {
   final JobBudget? budget;
   final List<String> photoUrls;
 
-  /// One optional attached video (see `uploadJobVideo`). Null if none.
+  /// A video on older jobs; new jobs can't add one. Null if none.
   final String? videoUrl;
   final JobStatus status;
   final int bidCount;
@@ -179,14 +177,6 @@ class Job {
 
   /// Whether a mid-flight cancellation is awaiting the counterparty's decision.
   bool get hasPendingCancellation => cancellationRequestedBy != null;
-
-  /// The requestor's note when they sent a proposed milestone plan back for
-  /// changes; null once the provider re-proposes.
-  final String? planRejectionNote;
-
-  /// True if the whole price went into escrow at accept time as one funded
-  /// "Full job" stage. Server-owned, never written back in [toMap].
-  final bool fundedAtAward;
 
   final String? bundleId;
 
@@ -259,8 +249,6 @@ class Job {
         cancellationRequestedAt: m['cancellationRequestedAt'] as DateTime?,
         cancelledAt: m['cancelledAt'] as DateTime?,
         cancelledBy: m['cancelledBy'] as String?,
-        planRejectionNote: m['planRejectionNote'] as String?,
-        fundedAtAward: m['fundedAtAward'] as bool? ?? false,
         bundleId: m['bundleId'] as String?,
         bundleOrder: (m['bundleOrder'] as num?)?.toInt(),
         bundleTaskCount: (m['bundleTaskCount'] as num?)?.toInt(),

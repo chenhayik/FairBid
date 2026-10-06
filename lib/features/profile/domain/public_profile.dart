@@ -15,9 +15,7 @@ import '../../auth/domain/user_role.dart';
 ///   `private/payout` subdocument, which this repository never queries.
 /// - `walletBalanceSen`, `escrowLockedSen` - another person's money is
 ///   nobody else's business.
-/// - Payout bank fields (`bankName`, `accountHolder`, `accountLast4`,
-///   `branchCode`) - live in the same owner+admin-only `private/payout`
-///   subdocument as phone.
+/// - The payout method - lives in the server-only `private/payoutMethod` doc.
 /// - `idDocumentUrl`, `selfieUrl` - identity documents live in the
 ///   owner+admin-only `private/verification` subdocument; this repository
 ///   never queries it.
@@ -54,7 +52,6 @@ class PublicProfile {
     this.category,
     this.skills = const [],
     this.coverageArea,
-    this.hourlyRate,
     this.portfolioImageUrls = const [],
     this.portfolioLinks = const [],
     this.certificateCount = 0,
@@ -116,7 +113,6 @@ class PublicProfile {
   final String? category;
   final List<String> skills;
   final String? coverageArea;
-  final String? hourlyRate;
   final List<String> portfolioImageUrls;
   final List<String> portfolioLinks;
 
@@ -157,7 +153,6 @@ class PublicProfile {
       category: onboarding?['category'] as String?,
       skills: strings(onboarding?['skills']),
       coverageArea: onboarding?['coverageArea'] as String?,
-      hourlyRate: onboarding?['hourlyRate'] as String?,
       portfolioImageUrls: strings(onboarding?['portfolioImageUrls']),
       portfolioLinks: strings(onboarding?['portfolioLinks']),
       certificateCount: strings(onboarding?['certificateUrls']).length,

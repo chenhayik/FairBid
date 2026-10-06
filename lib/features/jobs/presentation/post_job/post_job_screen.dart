@@ -26,7 +26,6 @@ import '../../data/job_repository.dart';
 import '../../domain/bundle.dart';
 import '../../domain/job.dart';
 import '../../domain/service_address.dart';
-import '../detail/job_video_player.dart';
 import '../detail/service_address_sheet.dart';
 import 'post_job_controller.dart';
 
@@ -63,7 +62,11 @@ class _PostJobViewState extends State<_PostJobView> {
   final _address = TextEditingController();
   final _budgetMin = TextEditingController();
   final _budgetMax = TextEditingController();
-  DateTime? _deadline;
+  // Bidding closes in 14 days unless changed, so old jobs leave the feed.
+  DateTime? _deadline = () {
+    final d = DateTime.now().add(const Duration(days: 14));
+    return DateTime(d.year, d.month, d.day, 23, 59, 59);
+  }();
 
   /// Task 1's own field keys, so a failed submit can find and scroll to the
   /// first field with an error - mirrors each added task's own keys.
@@ -334,7 +337,7 @@ class _PostJobViewState extends State<_PostJobView> {
     _snack('Some fields need attention');
   }
 
-  /// Soft check before posting with no photo or video: true to post anyway.
+  /// Soft check before posting with no photo: true to post anyway.
   /// "Add a photo" opens the picker instead and cancels this submit.
   Future<bool> _confirmNoMedia() async {
     final postAnyway = await showDialog<bool>(
@@ -342,7 +345,7 @@ class _PostJobViewState extends State<_PostJobView> {
       builder: (context) => AlertDialog(
         title: const Text('Post without photos?'),
         content: const Text(
-          'Photos or a video help providers understand the job and quote '
+          'Photos help providers understand the job and quote '
           'accurately. They are also useful evidence if anything goes wrong '
           'later.',
         ),
@@ -376,9 +379,7 @@ class _PostJobViewState extends State<_PostJobView> {
       _snack('Please pick a location on the map.');
       return;
     }
-    // A bundle never posts its video, so only photos count there.
-    final hasMedia = controller.photoUrls.isNotEmpty ||
-        (!_isBundle && controller.videoUrl != null);
+    final hasMedia = controller.photoUrls.isNotEmpty;
     if (!hasMedia && !await _confirmNoMedia()) return;
     if (!mounted) return;
     final user = auth.user!;
@@ -410,7 +411,6 @@ class _PostJobViewState extends State<_PostJobView> {
         maxSen: parseRmToSen(_budgetMax.text),
       ),
       photoUrls: List.of(controller.photoUrls),
-      videoUrl: controller.videoUrl,
       deadline: _deadline,
     );
     final id = await controller.submit(job);
@@ -520,43 +520,6 @@ class _PostJobViewState extends State<_PostJobView> {
         : 'Filled in ${filled.join(', ')}. Check each one before posting.');
   }
 
-  /// Gemini description helper: expands whatever rough note is in the
-  /// description field into an editable draft. Failures are soft - the form
-  /// works identically without the assist.
-  Future<void> _suggestDescription() async {
-    final controller = context.read<PostJobController>();
-    if (controller.category == null) {
-      _snack('Pick a category first so the suggestion fits.');
-      return;
-    }
-    final rough = _description.text.trim();
-    if (rough.length < 3) {
-      _snack('Type a rough note first, e.g. "leaking pipe under sink".');
-      return;
-    }
-    final suggestion = await controller.suggestDescription(rough);
-    if (!mounted) return;
-    if (suggestion == null) {
-      _snack('Couldn\'t get a suggestion right now.');
-      return;
-    }
-    final previous = _description.text;
-    _description.text = suggestion;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: const Text('Draft written. Edit it to match your situation.'),
-      // persist: false - a SnackBar with an action defaults to persisting
-      // forever, which would queue every later _snack behind it.
-      persist: false,
-      duration: const Duration(seconds: 6),
-      action: SnackBarAction(
-        label: 'Undo',
-        onPressed: () {
-          if (mounted) _description.text = previous;
-        },
-      ),
-    ));
-  }
-
   /// Gemini fair-price guide: fetches an indicative RM range shown beside the
   /// budget fields. Nothing is auto-filled - the user taps "Use this".
   Future<void> _suggestPrice() async {
@@ -616,14 +579,6 @@ class _PostJobViewState extends State<_PostJobView> {
             'specific requirements...',
         maxLines: 8,
         validator: (v) => Validators.required(v, 'Description'),
-      ),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: _AssistButton(
-          label: 'Help me write this',
-          busy: controller.assistingDescription,
-          onPressed: controller.isBusy ? null : _suggestDescription,
-        ),
       ),
     ];
   }
@@ -757,10 +712,9 @@ class _PostJobViewState extends State<_PostJobView> {
                     ),
                   ),
 
-                // ---- Photos & video (optional) ----
+                // ---- Photos (optional) ----
                 const SizedBox(height: 24),
-                _SectionHeader(
-                    _isBundle ? 'Photos (optional)' : 'Photos & video (optional)'),
+                const _SectionHeader('Photos (optional)'),
                 const SizedBox(height: 8),
                 // No optional toggle left to expand - tapping opens the
                 // photo picker directly, same as the "Add photo" box below.
@@ -791,40 +745,14 @@ class _PostJobViewState extends State<_PostJobView> {
                   hint: 'JPEG or PNG',
                   busy: controller.uploadingPhoto,
                 ),
-                // `createBundle` writes no video or service address, so both
-                // are hidden in bundle mode (anything already added says so).
-                if (!_isBundle) ...[
-                  const SizedBox(height: 16),
-                  Text('Video (optional)', style: theme.textTheme.labelLarge),
-                  const SizedBox(height: 8),
-                  if (controller.videoUrl != null)
-                    _VideoThumb(
-                      url: controller.videoUrl!,
-                      onRemove: controller.removeVideo,
-                    )
-                  else
-                    UploadBox(
-                      compact: true,
-                      onTap: () => controller.addVideo(uid),
-                      icon: Icons.videocam_outlined,
-                      hint: 'Up to 60 seconds, under 45 MB',
-                      busy: controller.uploadingVideo,
-                    ),
-                ] else ...[
+                if (_isBundle) ...[
                   const SizedBox(height: 12),
                   Text(
                     "Tap a photo's label to choose which tasks it shows. "
-                    'Untagged photos show on every task. A bundle has no '
-                    'video.',
+                    'Untagged photos show on every task.',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
-                  if (controller.videoUrl != null)
-                    _DroppedField(
-                      message: 'The video you added will not be posted.',
-                      actionLabel: 'Remove it',
-                      onAction: controller.removeVideo,
-                    ),
                 ],
 
                 // ---- Where (location required, label/address optional) ----
@@ -881,7 +809,7 @@ class _PostJobViewState extends State<_PostJobView> {
                 // heading names just that rather than "budget" too.
                 const SizedBox(height: 24),
                 _SectionHeader(
-                  _isBundle ? 'Deadline (shared)' : 'When & price (optional)',
+                  _isBundle ? 'Bidding deadline (shared)' : 'Bidding deadline & price',
                 ),
                 const SizedBox(height: 12),
                 _DeadlineField(
@@ -927,7 +855,7 @@ class _PostJobViewState extends State<_PostJobView> {
                   label: _isBundle ? 'Post bundle' : 'Post job',
                   // Its own spinner reflects submitting only - the screen-wide
                   // overlay already covers that - but stays disabled during a
-                  // photo/video upload too, so the job can't be created before
+                  // photo upload too, so the job can't be created before
                   // an in-flight upload finishes.
                   busy: controller.isSubmitting,
                   onPressed: controller.isBusy ? null : _submit,
@@ -1210,7 +1138,7 @@ class _TaskCard extends StatelessWidget {
 /// is running: a modal barrier (absorbing all input) plus a centred spinner
 /// and label, so submit feedback is immediate no matter where the user has
 /// scrolled on the long form. Distinct from the per-upload spinner on each
-/// UploadBox, which shows instead while a photo or video is uploading.
+/// UploadBox, which shows instead while a photo is uploading.
 class _SubmitOverlay extends StatelessWidget {
   const _SubmitOverlay({required this.isBundle});
 
@@ -1251,7 +1179,7 @@ class _SubmitOverlay extends StatelessWidget {
 }
 
 /// Section header shown above each of the form's four groups ("The basics",
-/// "Photos & video (optional)", "Where", "When & budget (optional)").
+/// "Photos (optional)", "Where", "Bidding deadline & price").
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader(this.label);
   final String label;
@@ -1676,54 +1604,6 @@ class _PhotoThumb extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// The attached video's preview (first frame + play overlay, via
-/// [JobVideoPreview]) with a remove (×) button, mirroring [_PhotoThumb].
-class _VideoThumb extends StatelessWidget {
-  const _VideoThumb({required this.url, required this.onRemove});
-  final String url;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        JobVideoPreview(url: url, height: 140),
-        Positioned(
-          right: 0,
-          top: 0,
-          child: Semantics(
-            button: true,
-            label: 'Remove video',
-            child: InkWell(
-              onTap: onRemove,
-              customBorder: const CircleBorder(),
-              child: const SizedBox(
-                width: 48,
-                height: 48,
-                child: Align(
-                  alignment: Alignment.topRight,
-                  child: Padding(
-                    padding: EdgeInsets.all(4),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                          color: Colors.black54, shape: BoxShape.circle),
-                      child: Padding(
-                        padding: EdgeInsets.all(2),
-                        child:
-                            Icon(Icons.close, size: 16, color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

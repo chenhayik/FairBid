@@ -190,7 +190,7 @@ test("a normal bundle price is accepted", () => {
 test("a bundle price too low to share across every task is refused", () => {
   // Splitting RM 5,000 in proportion to a RM 0.01 task and a RM 10,000 task
   // rounds the small task's share down to 0 - it would be awarded at RM 0
-  // and could never get a milestone plan.
+  // and could never be funded.
   rejects(() => validateBundleBid(bidPayload({
     taskPrices: {task1: 1, task2: 1000000},
     bundlePriceSen: 500000,

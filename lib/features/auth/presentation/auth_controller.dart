@@ -187,15 +187,22 @@ class AuthController extends ChangeNotifier {
     String? phone,
     String? location,
     String? bio,
+    PickedLocation? picked,
+    String? category,
+    List<String>? skills,
   }) async {
-    final uid = _user?.uid;
-    if (uid == null) return;
+    final user = _user;
+    if (user == null) return;
     await _repository.updateProfile(
-      uid: uid,
+      uid: user.uid,
       displayName: displayName,
       phone: phone,
       location: location,
       bio: bio,
+      isProvider: user.role == UserRole.provider,
+      picked: picked,
+      category: category,
+      skills: skills,
     );
     await refreshUser();
   }

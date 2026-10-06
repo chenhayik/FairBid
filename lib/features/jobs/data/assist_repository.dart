@@ -33,15 +33,6 @@ abstract interface class AssistRepository {
     String? photoUrl,
   });
 
-  /// Expands the requestor's rough note into a structured job description,
-  /// or null when no suggestion could be made. [photoUrl], when given, lets
-  /// the model factor in a photo of the job.
-  Future<String?> suggestDescription({
-    required String category,
-    required String roughText,
-    String? photoUrl,
-  });
-
   /// An indicative fair-price range (in sen) for the described job, or null.
   /// [photoUrl], when given, lets the model factor in a photo of the job.
   Future<({int minSen, int maxSen})?> suggestPriceRange({
@@ -100,21 +91,6 @@ class FirebaseAssistRepository implements AssistRepository {
       minSen: (data?['minSen'] as num?)?.toInt(),
       maxSen: (data?['maxSen'] as num?)?.toInt(),
     );
-  }
-
-  @override
-  Future<String?> suggestDescription({
-    required String category,
-    required String roughText,
-    String? photoUrl,
-  }) async {
-    final data = await _call(
-        kind: 'description',
-        category: category,
-        roughText: roughText,
-        photoUrl: photoUrl);
-    final description = data?['description'] as String?;
-    return description == null || description.isEmpty ? null : description;
   }
 
   @override

@@ -192,6 +192,7 @@ exports.bumpJobsAssignedOnAccept = functions.firestore
 // callables (using the admin SDK) move money.
 
 const {ESCROW, appendLedger, writeFundedMilestone} = require("./common");
+const {normaliseMobile} = require("./payout_method");
 
 /** Rejects unauthenticated calls; returns the caller's uid. */
 function callerUid(context) {
@@ -242,21 +243,6 @@ async function assertNotSuspended(tx, db, uid) {
         "a mistake.");
   }
 }
-
-/**
- * Milestone statuses that count as finished; a job completes when all are.
- * `resolved` is only kept for old data.
- */
-const isTerminal = (status) =>
-  status === "released" || status === "resolved" || status === "refunded";
-
-// Max milestones per plan. Keep in sync with PlatformConfig.maxMilestones.
-const MAX_MILESTONES = 20;
-
-/** A milestone whose money is committed and so can't be re-planned. */
-const isLocked = (status) =>
-  status === "funded" || status === "submitted" ||
-  status === "disputed" || isTerminal(status);
 
 const {completesJob} = require("./price_change");
 
@@ -351,267 +337,6 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
       fundedAtAward: true,
     });
   });
-});
-
-/**
- * Provider proposes or changes the milestone plan; each row starts `proposed`.
- * Amounts must add up to the accepted bid, and locked milestones stay.
- */
-exports.proposeMilestonePlan = functions.https.onCall(async (data, context) => {
-  const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const plan = Array.isArray(data.milestones) ? data.milestones : null;
-  if (!plan || plan.length === 0) {
-    throw new functions.https.HttpsError(
-        "invalid-argument", "Propose at least one milestone.");
-  }
-  if (plan.length > MAX_MILESTONES) {
-    throw new functions.https.HttpsError(
-        "invalid-argument", `A plan can have at most ${MAX_MILESTONES} ` +
-        "milestones.");
-  }
-  // Clean each row and number it from 0.
-  const rows = plan.map((m, i) => ({
-    order: i,
-    description: typeof m.description === "string" ? m.description.trim() : "",
-    amountSen: m.amountSen,
-  }));
-  for (const row of rows) {
-    if (row.description === "") {
-      throw new functions.https.HttpsError(
-          "invalid-argument", "Every milestone needs a description.");
-    }
-    checkAmount(row.amountSen);
-  }
-  const total = rows.reduce((sum, r) => sum + r.amountSen, 0);
-
-  const db = admin.firestore();
-  const jobRef = db.doc(`jobs/${jobId}`);
-  const milestonesRef = jobRef.collection("milestones");
-
-  await db.runTransaction(async (tx) => {
-    const [jobSnap, existing] = await Promise.all([
-      tx.get(jobRef),
-      tx.get(milestonesRef),
-    ]);
-    const job = jobSnap.data();
-    if (job?.acceptedProviderId !== uid) {
-      throw new functions.https.HttpsError(
-          "permission-denied",
-          "Only the accepted provider can propose milestones.");
-    }
-    if (job.status !== "in_progress") {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This job is not in progress.");
-    }
-    // Jobs paid at award have no plan to propose. Otherwise a refunded
-    // stage could be stranded as rows nobody can approve.
-    if (job.fundedAtAward === true) {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This job is paid in one payment.");
-    }
-    if (typeof job.acceptedBidAmountSen !== "number") {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This job has no accepted bid amount.");
-    }
-    if (total !== job.acceptedBidAmountSen) {
-      throw new functions.https.HttpsError(
-          "failed-precondition",
-          "Milestone amounts must add up to the accepted bid.");
-    }
-
-    // Locked milestones keep the same order and amount, and can't be dropped.
-    const byId = new Map(existing.docs.map((d) => [d.id, d.data()]));
-    for (const [id, m] of byId) {
-      if (!isLocked(m.status)) continue;
-      const incoming = rows.find((r) => `m${r.order}` === id);
-      if (!incoming || incoming.amountSen !== m.amountSen) {
-        throw new functions.https.HttpsError(
-            "failed-precondition",
-            "Can't change a milestone that is already funded or in progress.");
-      }
-    }
-
-    // Write the plan. Locked rows stay; the rest become `proposed`.
-    for (const row of rows) {
-      const id = `m${row.order}`;
-      const current = byId.get(id);
-      if (current && isLocked(current.status)) continue;
-      tx.set(milestonesRef.doc(id), {
-        providerId: uid,
-        description: row.description,
-        amountSen: row.amountSen,
-        order: row.order,
-        status: "proposed",
-        submissionNote: null,
-        reworkNote: current?.reworkNote ?? null,
-        reworkCount: current?.reworkCount ?? 0,
-        createdAt: current?.createdAt ??
-            admin.firestore.FieldValue.serverTimestamp(),
-      });
-    }
-    // Delete unlocked milestones that the new plan removed.
-    for (const [id, m] of byId) {
-      const stillThere = rows.some((r) => `m${r.order}` === id);
-      if (!stillThere && !isLocked(m.status)) {
-        tx.delete(milestonesRef.doc(id));
-      }
-    }
-    // A new plan clears any earlier rejection note.
-    if (job.planRejectionNote) {
-      tx.update(jobRef, {planRejectionNote: null});
-    }
-    notify(tx, job.requestorId, {
-      type: "milestone",
-      title: "Milestone plan proposed",
-      body: `Review the proposed plan for "${job.title}" and approve it to ` +
-          "start funding.",
-      route: `/jobs/${jobId}`,
-    });
-  });
-});
-
-/** Requestor approves the plan: `proposed` milestones become `pending`. */
-exports.approveMilestonePlan = functions.https.onCall(async (data, context) => {
-  const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const db = admin.firestore();
-  const jobRef = db.doc(`jobs/${jobId}`);
-  const milestonesRef = jobRef.collection("milestones");
-
-  await db.runTransaction(async (tx) => {
-    const [jobSnap, milestones] = await Promise.all([
-      tx.get(jobRef),
-      tx.get(milestonesRef),
-    ]);
-    if (jobSnap.data()?.requestorId !== uid) {
-      throw new functions.https.HttpsError(
-          "permission-denied", "Only the job's requestor can approve the plan.");
-    }
-    if (jobSnap.data().status !== "in_progress") {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This job is not in progress.");
-    }
-    const proposed = milestones.docs.filter(
-        (d) => d.data().status === "proposed");
-    if (proposed.length === 0) {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "There is no proposed plan to approve.");
-    }
-    for (const doc of proposed) {
-      tx.update(doc.ref, {status: "pending"});
-    }
-    notify(tx, jobSnap.data().acceptedProviderId, {
-      type: "milestone",
-      title: "Milestone plan approved",
-      body: `The client approved your plan for ` +
-          `"${jobSnap.data().title}". Milestones can now be funded.`,
-      route: `/jobs/${jobId}`,
-    });
-  });
-});
-
-/** Requestor rejects the plan with a note; proposed milestones are deleted. */
-exports.rejectMilestonePlan = functions.https.onCall(async (data, context) => {
-  const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const note = typeof data.note === "string" ? data.note.trim() : "";
-  const db = admin.firestore();
-  const jobRef = db.doc(`jobs/${jobId}`);
-  const milestonesRef = jobRef.collection("milestones");
-
-  await db.runTransaction(async (tx) => {
-    const [jobSnap, milestones] = await Promise.all([
-      tx.get(jobRef),
-      tx.get(milestonesRef),
-    ]);
-    if (jobSnap.data()?.requestorId !== uid) {
-      throw new functions.https.HttpsError(
-          "permission-denied", "Only the job's requestor can reject the plan.");
-    }
-    const proposed = milestones.docs.filter(
-        (d) => d.data().status === "proposed");
-    if (proposed.length === 0) {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "There is no proposed plan to reject.");
-    }
-    for (const doc of proposed) {
-      tx.delete(doc.ref);
-    }
-    tx.update(jobRef, {planRejectionNote: note || null});
-    notify(tx, jobSnap.data().acceptedProviderId, {
-      type: "milestone",
-      title: "Milestone plan needs changes",
-      body: `The client sent your plan for "${jobSnap.data().title}" back` +
-          `${note ? `: "${note}"` : "."}`,
-      route: `/jobs/${jobId}`,
-    });
-  });
-});
-
-/** Requestor funds a pending milestone: wallet money goes into escrow. */
-exports.fundMilestone = functions.https.onCall(async (data, context) => {
-  const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const milestoneId = checkId(data.milestoneId, "milestoneId");
-  functions.logger.info("fundMilestone requested", {uid, jobId, milestoneId});
-  const db = admin.firestore();
-  const jobRef = db.doc(`jobs/${jobId}`);
-  const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
-  const walletRef = db.doc(`users/${uid}`);
-
-  await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
-    const [jobSnap, milestoneSnap, walletSnap] = await Promise.all(
-        [tx.get(jobRef), tx.get(milestoneRef), tx.get(walletRef)]);
-    if (jobSnap.data()?.requestorId !== uid) {
-      throw new functions.https.HttpsError(
-          "permission-denied", "Only the job's requestor can fund milestones.");
-    }
-    if (jobSnap.data().status !== "in_progress") {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This job is not in progress.");
-    }
-    const milestone = milestoneSnap.data();
-    if (milestone?.status !== "pending") {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This milestone is not awaiting funding.");
-    }
-    const wallet = walletSnap.data() || {};
-    const balance = wallet.walletBalanceSen || 0;
-    if (balance < milestone.amountSen) {
-      functions.logger.error("fundMilestone rejected: insufficient balance",
-          {uid, jobId, milestoneId, amountSen: milestone.amountSen, balance});
-      throw new functions.https.HttpsError(
-          "failed-precondition", "Insufficient wallet balance.");
-    }
-
-    tx.update(walletRef, {
-      walletBalanceSen: balance - milestone.amountSen,
-      // This part of the commitment is now really in escrow, so unlock it.
-      escrowLockedSen:
-          Math.max(0, (wallet.escrowLockedSen || 0) - milestone.amountSen),
-    });
-    tx.update(milestoneRef, {status: "funded"});
-    appendLedger(tx, {
-      fromUid: uid,
-      toUid: ESCROW,
-      amountSen: milestone.amountSen,
-      type: "fund",
-      jobId,
-      jobTitle: jobSnap.data().title || null,
-      milestoneId,
-      participantIds: [uid],
-    });
-    notify(tx, jobSnap.data().acceptedProviderId, {
-      type: "milestone",
-      title: "Milestone funded",
-      body: `${rm(milestone.amountSen)} is in escrow for ` +
-          `"${milestone.description}". You can start work.`,
-      route: `/jobs/${jobId}`,
-    });
-  });
-  functions.logger.info("fundMilestone funded", {uid, jobId, milestoneId});
 });
 
 /**
@@ -759,7 +484,29 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
 
   await db.runTransaction(async (tx) => {
     await assertNotSuspended(tx, db, uid);
-    const walletSnap = await tx.get(walletRef);
+    const [walletSnap, methodSnap, payoutSnap] = await Promise.all([
+      tx.get(walletRef),
+      tx.get(walletRef.collection("private").doc("payoutMethod")),
+      tx.get(walletRef.collection("private").doc("payout")),
+    ]);
+    // Money needs somewhere to go, and new details wait out a 24-hour hold.
+    const method = methodSnap.data();
+    if (!method) {
+      throw new functions.https.HttpsError("failed-precondition",
+          "Add a payout method before your first withdrawal.");
+    }
+    if (method.availableAt && method.availableAt.toMillis() > Date.now()) {
+      throw new functions.https.HttpsError("failed-precondition",
+          "Your payout method was just changed. For your security you can " +
+          "withdraw again 24 hours after the change.");
+    }
+    if (method.proxyType === "mobile" &&
+        normaliseMobile(payoutSnap.data()?.phone ?? walletSnap.data()?.phone) !==
+            method.mobile) {
+      throw new functions.https.HttpsError("failed-precondition",
+          "Your profile phone number changed. Update your DuitNow payout " +
+          "method to match it first.");
+    }
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
     // Use the available balance; money locked for a bid can't be withdrawn.
@@ -782,7 +529,8 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     notify(tx, uid, {
       type: "payment",
       title: "Withdrawal complete",
-      body: `${rm(amountSen)} was withdrawn from your FairBid balance.`,
+      body: `${rm(amountSen)} sent to ${method.masked} (demo: no real ` +
+          "bank transfer is made).",
       route: "/profile/earnings",
     });
   });
@@ -1360,13 +1108,11 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     } else {
       // Refund: every stage still holding money goes back and the job ends,
       // so it can't simply be funded again as if nothing happened.
-      const plan = disputeRefundPlan(job, milestoneRows(allMilestones));
+      const plan = disputeRefundPlan(milestoneRows(allMilestones));
       refundedSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
       const wallet = requestorSnap.data() || {};
       tx.update(requestorRef, {
         walletBalanceSen: (wallet.walletBalanceSen || 0) + refundedSen,
-        escrowLockedSen:
-            Math.max(0, (wallet.escrowLockedSen || 0) - plan.unlockSen),
       });
       for (const refund of plan.refunds) {
         tx.update(milestonesRef.doc(refund.id),
@@ -1481,18 +1227,6 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
 // Job cancellation: one side asks, the other accepts (an admin can override).
 // It never strands escrow: it is blocked, or the money is refunded.
 
-/** True if any milestone still holds committed escrow. */
-function hasHeldEscrow(milestonesSnap) {
-  return milestonesSnap.docs.some((d) => {
-    const s = d.data().status;
-    return s === "funded" || s === "submitted" || s === "disputed";
-  });
-}
-
-const ESCROW_HELD_MESSAGE =
-    "This job still has money in escrow. Release each funded milestone, or " +
-    "resolve any dispute, before cancelling.";
-
 const STAGE_DELIVERED_MESSAGE =
     "A delivered or disputed stage must be released or resolved before " +
     "this job can be cancelled.";
@@ -1505,28 +1239,10 @@ const {
   finishedByDecrease,
 } = require("./payouts");
 
-/**
- * Returns why [job] can't be cancelled now, or null if it can.
- * Funded-at-award jobs only block on delivered or disputed stages.
- */
-function cancellationBlocker(job, milestonesSnap) {
-  if (job.fundedAtAward) {
-    return canCancelFunded(milestoneRows(milestonesSnap)) ?
-        null : STAGE_DELIVERED_MESSAGE;
-  }
-  return hasHeldEscrow(milestonesSnap) ? ESCROW_HELD_MESSAGE : null;
-}
-
-/**
- * The part of the accepted bid still locked: the total minus released
- * milestones. Legacy jobs only.
- */
-function remainingLockedSen(job, milestonesSnap) {
-  const funded = milestonesSnap.docs.reduce((sum, doc) => {
-    const m = doc.data();
-    return isTerminal(m.status) ? sum + (m.amountSen || 0) : sum;
-  }, 0);
-  return Math.max(0, (job.acceptedBidAmountSen || 0) - funded);
+/** Returns why the job can't be cancelled now, or null if it can. */
+function cancellationBlocker(milestonesSnap) {
+  return canCancelFunded(milestoneRows(milestonesSnap)) ?
+    null : STAGE_DELIVERED_MESSAGE;
 }
 
 /**
@@ -1536,41 +1252,27 @@ function remainingLockedSen(job, milestonesSnap) {
 function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy,
     requestorWalletRef, requestorWalletSnap) {
   const wallet = requestorWalletSnap.data() || {};
-  if (job.fundedAtAward) {
-    const plan = cancellationPlan(milestoneRows(milestonesSnap));
-    for (const id of plan.deleteIds) {
-      tx.delete(jobRef.collection("milestones").doc(id));
-    }
-    const refundSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
-    if (refundSen > 0 || plan.unlockSen > 0) {
-      tx.update(requestorWalletRef, {
-        walletBalanceSen: (wallet.walletBalanceSen || 0) + refundSen,
-        escrowLockedSen:
-            Math.max(0, (wallet.escrowLockedSen || 0) - plan.unlockSen),
-      });
-    }
-    for (const refund of plan.refunds) {
-      appendLedger(tx, {
-        fromUid: ESCROW,
-        toUid: job.requestorId,
-        amountSen: refund.amountSen,
-        type: "refund",
-        jobId: jobRef.id,
-        jobTitle: job.title || null,
-        milestoneId: refund.id,
-        participantIds: [job.requestorId],
-      });
-    }
-  } else {
-    for (const doc of milestonesSnap.docs) {
-      if (!isLocked(doc.data().status)) tx.delete(doc.ref);
-    }
-    const remainingSen = remainingLockedSen(job, milestonesSnap);
-    if (remainingSen > 0) {
-      tx.update(requestorWalletRef, {
-        escrowLockedSen: Math.max(0, (wallet.escrowLockedSen || 0) - remainingSen),
-      });
-    }
+  const plan = cancellationPlan(milestoneRows(milestonesSnap));
+  for (const id of plan.deleteIds) {
+    tx.delete(jobRef.collection("milestones").doc(id));
+  }
+  const refundSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
+  if (refundSen > 0) {
+    tx.update(requestorWalletRef, {
+      walletBalanceSen: (wallet.walletBalanceSen || 0) + refundSen,
+    });
+  }
+  for (const refund of plan.refunds) {
+    appendLedger(tx, {
+      fromUid: ESCROW,
+      toUid: job.requestorId,
+      amountSen: refund.amountSen,
+      type: "refund",
+      jobId: jobRef.id,
+      jobTitle: job.title || null,
+      milestoneId: refund.id,
+      participantIds: [job.requestorId],
+    });
   }
   tx.update(jobRef, {
     status: "cancelled",
@@ -1621,7 +1323,7 @@ exports.requestJobCancellation =
         throw new functions.https.HttpsError(
             "failed-precondition", "Resolve the pending price change first.");
       }
-      const blocker = cancellationBlocker(job, milestones);
+      const blocker = cancellationBlocker(milestones);
       if (blocker) {
         throw new functions.https.HttpsError("failed-precondition", blocker);
       }
@@ -1694,7 +1396,7 @@ exports.respondToJobCancellation =
         });
         return;
       }
-      const blocker = cancellationBlocker(job, milestones);
+      const blocker = cancellationBlocker(milestones);
       if (blocker) {
         throw new functions.https.HttpsError("failed-precondition", blocker);
       }
@@ -1711,57 +1413,10 @@ exports.respondToJobCancellation =
     });
   });
 
-/**
- * Admin cancels an in-progress job without agreement.
- * Still blocked while escrow is held; resolve the dispute first.
- */
-exports.adminCancelJob = functions.https.onCall(async (data, context) => {
-  const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const reason = typeof data.reason === "string" ? data.reason.trim() : "";
-  const db = admin.firestore();
-  const jobRef = db.doc(`jobs/${jobId}`);
-  const milestonesRef = jobRef.collection("milestones");
-
-  await db.runTransaction(async (tx) => {
-    await assertAdmin(tx, db, uid);
-    const [jobSnap, milestones] = await Promise.all([
-      tx.get(jobRef),
-      tx.get(milestonesRef),
-    ]);
-    const job = jobSnap.data();
-    if (job?.status !== "in_progress") {
-      throw new functions.https.HttpsError(
-          "failed-precondition", "This job is not in progress.");
-    }
-    const blocker = cancellationBlocker(job, milestones);
-    if (blocker) {
-      throw new functions.https.HttpsError("failed-precondition", blocker);
-    }
-    const requestorWalletRef = db.doc(`users/${job.requestorId}`);
-    const requestorWalletSnap = await tx.get(requestorWalletRef);
-    tx.update(jobRef, {cancellationReason: reason || null});
-    finaliseCancellation(tx, jobRef, job, milestones, "admin",
-        requestorWalletRef, requestorWalletSnap);
-    for (const partyUid of [job.requestorId, job.acceptedProviderId]) {
-      notify(tx, partyUid, {
-        type: "cancellation",
-        title: "Job cancelled by admin",
-        body: `An administrator cancelled "${job.title}"` +
-            `${reason ? `: "${reason}"` : "."}`,
-        route: `/jobs/${jobId}`,
-      });
-    }
-  });
-});
-
 // Price change. Either party proposes a new price; the other accepts or declines.
 // `acceptedBidAmountSen` is the live price; checks are in price_change.js.
 
-const {
-  validatePriceChange,
-  escrowLockDelta,
-} = require("./price_change");
+const {validatePriceChange} = require("./price_change");
 
 /** Which side of [job] [uid] is on, or null. */
 function jobRole(job, uid) {
@@ -1882,7 +1537,7 @@ function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
 
 /**
  * The other party accepts or declines a price change. Accepting re-checks it,
- * moves the money, and (legacy jobs) deletes unfunded milestones to re-plan.
+ * moves the money.
  */
 exports.respondToPriceChange =
   functions.https.onCall(async (data, context) => {
@@ -1941,7 +1596,7 @@ exports.respondToPriceChange =
         throw new functions.https.HttpsError("failed-precondition", problem);
       }
       const wallet = walletSnap.data() || {};
-      const delta = escrowLockDelta(oldSen, newSen);
+      const delta = newSen - oldSen;
       if (delta > 0) {
         const available =
             (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
@@ -1958,27 +1613,16 @@ exports.respondToPriceChange =
       }
 
       // Writes.
-      let completed = false;
-      if (job.fundedAtAward) {
-        completed = repriceFundedStages(tx, {
-          job, jobRef, milestonesRef, rows: milestoneRows(milestones),
-          walletRef, wallet, delta,
-        });
-      } else {
-        tx.update(walletRef, {
-          escrowLockedSen: Math.max(0, (wallet.escrowLockedSen || 0) + delta),
-        });
-        for (const doc of milestones.docs) {
-          if (!isLocked(doc.data().status)) tx.delete(doc.ref);
-        }
-      }
+      const completed = repriceFundedStages(tx, {
+        job, jobRef, milestonesRef, rows: milestoneRows(milestones),
+        walletRef, wallet, delta,
+      });
       const count = (job.priceChangeCount || 0) + 1;
       tx.update(jobRef, {
         acceptedBidAmountSen: newSen,
         originalBidAmountSen: job.originalBidAmountSen ?? oldSen,
         priceChangeCount: count,
         priceChangeRequest: null,
-        planRejectionNote: null,
         ...(completed ? {status: "completed"} : {}),
       });
       tx.set(jobRef.collection("events").doc(`price_change_${count}`), {
@@ -1987,12 +1631,9 @@ exports.respondToPriceChange =
         at: admin.firestore.FieldValue.serverTimestamp(),
       });
       const body = `The price of "${job.title}" is now ${rm(newSen)}. ` +
-          (job.fundedAtAward ?
-              (delta > 0 ?
-                  "The extra amount has been moved into escrow." :
-                  "The difference was refunded to the client.") :
-              "The provider needs to propose a new milestone plan for the " +
-              "unfunded remainder.");
+          (delta > 0 ?
+              "The extra amount has been moved into escrow." :
+              "The difference was refunded to the client.");
       notify(tx, requesterUid, {
         type: "price_change", title: "Price change accepted", body,
         route: `/jobs/${jobId}`,
@@ -2332,10 +1973,7 @@ exports.logJobStatusChange = functions.firestore
       return null;
     });
 
-/**
- * Logs milestone status changes on the timeline. Skips `proposed`/`pending`,
- * except `pending` after `disputed` (a refund reopening it).
- */
+/** Logs milestone status changes on the timeline. */
 exports.logMilestoneStatusChange = functions.firestore
     .document("jobs/{jobId}/milestones/{milestoneId}")
     .onWrite((change, ctx) => {
@@ -2376,10 +2014,6 @@ exports.logMilestoneStatusChange = functions.firestore
           return logJobEvent(jobId, once, "refunded", wasDisputed ?
               `Admin decided for the client: ${rm(amt)} refunded for "${d}"` :
               `Refunded to the client: "${d}" (${rm(amt)})`);
-        case "pending":
-          if (!wasDisputed) return null;
-          return logJobEvent(jobId, once, "refunded",
-              `Refunded to the client: "${d}". The stage is open again.`);
         default:
           return null;
       }
@@ -2393,32 +2027,6 @@ const {GoogleGenAI, Type, ThinkingLevel, MediaResolution} =
 const geminiKey = defineSecret("GEMINI_KEY");
 // Gemini Flash-Lite model id.
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
-
-/** System instruction for the description helper (three short sections). */
-const DESCRIPTION_SYSTEM = "You help customers on FairBid, a Malaysian " +
-    "home-services marketplace, turn a rough note into a job posting a " +
-    "provider can scan in seconds. Use plain, everyday words. No preamble, " +
-    "no greeting, no restating the category, no closing pleasantries, no " +
-    "filler. Aim for about 50 to 80 words total. Use up to three " +
-    "sections, in this order, each starting with its label on its own " +
-    "line: What needs doing, then Access & details, then Expected " +
-    "outcome. Drop a section entirely, rather than padding it, when the " +
-    "note gives no basis for it. Under 'What needs doing', lead with the " +
-    "action or the object: one short sentence or fragment naming the " +
-    "problem or task. Under 'Access & details', list only the practical " +
-    "things a provider should confirm that the note actually supports " +
-    "(for example property type, floor or unit, parking, whether parts " +
-    "or materials are provided, pets, or timing constraints), one short " +
-    "fragment per line, each starting with the bullet character '•'. " +
-    "Under 'Expected outcome', name what a good result looks like in one " +
-    "short sentence or fragment. Put a blank line between sections. " +
-    "Write in plain prose, favouring short sentence fragments over full " +
-    "sentences. Do not use markdown, headings syntax, or bold. Do not " +
-    "use em dashes. Never invent prices, deadlines, brand names, " +
-    "measurements, or commitments the customer did not state; if " +
-    "something is unknown, leave it out rather than guessing. If a photo " +
-    "is provided, use it to make the description more specific and " +
-    "accurate.";
 
 /** System instruction for the fair-price guide. */
 const PRICE_SYSTEM = "You estimate fair market prices for home services " +
@@ -2527,7 +2135,7 @@ async function fetchInlineImage(photoUrl) {
 }
 
 /**
- * Serves the post-a-job assists by `kind` ('description', 'price', 'draft').
+ * Serves the post-a-job assists by `kind` ('price' or 'draft').
  * Returns the suggestion or null; the client treats null as a soft miss.
  */
 exports.suggestJobDetails = functions
@@ -2538,7 +2146,7 @@ exports.suggestJobDetails = functions
       const category = String(data.category || "").slice(0, 60);
       const roughText = String(data.roughText || "").trim().slice(0, 600);
       const photoUrl = data.photoUrl;
-      if (kind !== "description" && kind !== "price" && kind !== "draft") {
+      if (kind !== "price" && kind !== "draft") {
         throw new functions.https.HttpsError(
             "invalid-argument", "Unknown kind.");
       }
@@ -2557,11 +2165,6 @@ exports.suggestJobDetails = functions
           responseMimeType: "application/json",
           responseSchema: DRAFT_SCHEMA,
           thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
-        } : kind === "description" ? {
-          systemInstruction: DESCRIPTION_SYSTEM,
-          temperature: 0.4,
-          maxOutputTokens: 512,
-          thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
         } : {
           systemInstruction: PRICE_SYSTEM,
           temperature: 0.2,
@@ -2573,8 +2176,6 @@ exports.suggestJobDetails = functions
         // A draft has no category yet; the model picks it.
         const text = kind === "draft" ?
             `Customer's note: ${roughText}` :
-            kind === "description" ?
-            `Category: ${category}\nCustomer's note: ${roughText}` :
             `Category: ${category}\nJob description: ${roughText}`;
 
         const img = photoUrl ? await fetchInlineImage(photoUrl) : null;
@@ -2592,10 +2193,6 @@ exports.suggestJobDetails = functions
           config,
         });
         const responseText = response.text;
-        if (kind === "description") {
-          const description = (responseText || "").trim();
-          return description === "" ? null : {description};
-        }
         if (kind === "draft") return parseDraftJson(responseText);
         return parsePriceJson(responseText);
       } catch (err) {
@@ -2618,6 +2215,7 @@ exports.suggestJobDetails = functions
 // finds them.
 
 exports.extractSsmDocument = require("./ssm").extractSsmDocument;
+exports.savePayoutMethod = require("./payout_method").savePayoutMethod;
 exports.extractIdDocument = require("./idcheck").extractIdDocument;
 
 exports.createBundle = require("./bundles").createBundle;

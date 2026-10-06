@@ -325,7 +325,7 @@ void main() {
   });
 
   group('Bundle bid sheet: escrow copy addresses the provider', () {
-    testWidgets('the escrow checkbox explains milestone escrow to a provider,'
+    testWidgets('the escrow checkbox explains escrow to a provider,'
         ' not a client', (tester) async {
       await pumpSheet(
         tester,
@@ -335,8 +335,7 @@ void main() {
 
       expect(
         find.textContaining(
-            'the client funds each milestone and it\'s released to me when '
-            'they approve the work.'),
+            'the client pays the full price into escrow when they hire me'),
         findsOneWidget,
       );
       expect(find.textContaining('Your money is held by FairBid'),

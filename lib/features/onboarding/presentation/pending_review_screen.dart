@@ -80,7 +80,7 @@ class PendingReviewScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   PrimaryButton(
-                    label: 'Go to Dashboard',
+                    label: 'Go to Home',
                     onPressed: () => context.go('/home'),
                   ),
                   const SizedBox(height: 12),

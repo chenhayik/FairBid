@@ -1,9 +1,6 @@
-/// Lifecycle of an escrow milestone. A plan starts at `proposed` (the provider
-/// splits the accepted bid) and only becomes fundable once the requestor
-/// approves it, moving every milestone to `pending`. `resolved` is legacy: a
-/// refunded dispute used to land here, but now returns the milestone to
-/// `pending` for rework (see the `resolveDispute`/`isTerminal` Cloud
-/// Functions); it is kept only so pre-existing documents still decode.
+/// Lifecycle of an escrow milestone. Jobs are funded at award, so new stages
+/// start `funded`. `proposed`, `pending` and `resolved` are legacy statuses of
+/// the removed plan flow, kept only so old documents still decode and display.
 enum MilestoneStatus {
   proposed,
   pending,
@@ -52,8 +49,8 @@ enum MilestoneStatus {
 }
 
 /// One escrow milestone of a job, stored at `jobs/{jobId}/milestones/{id}`.
-/// The accepted provider proposes them; the requestor funds and releases them
-/// (via Cloud Functions - see MilestoneRepository). Framework-agnostic - the
+/// Created funded at award; the provider delivers and the requestor releases
+/// them (via Cloud Functions - see MilestoneRepository). Framework-agnostic - the
 /// repository handles the Firestore ↔ [Milestone] mapping.
 class Milestone {
   const Milestone({
@@ -86,8 +83,8 @@ class Milestone {
   final String description;
   final int amountSen;
 
-  /// Position in the proposed plan (0-based) - milestones in one plan share a
-  /// server timestamp, so this keeps their order stable.
+  /// Position among the job's stages (0-based) - they can share a server
+  /// timestamp, so this keeps their order stable.
   final int order;
 
   final MilestoneStatus status;

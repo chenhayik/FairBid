@@ -29,6 +29,10 @@ class PlatformConfig {
   static const double priceWeight = 0.6;
   static const double trustWeight = 0.4;
 
+  /// The ranking score for a provider whose Trust Score is still hidden
+  /// ("New"): the starting baseline, so hidden scores never decide a rank.
+  static const int neutralTrustScore = 700;
+
   /// Highest bid, or bundle bid total (RM 50,000): no wallet can fund more.
   static const int maxBidSen = maxWalletBalanceSen;
 
@@ -39,10 +43,6 @@ class PlatformConfig {
   /// Cumulative wallet balance cap (RM 50,000), enforced by the
   /// `topUpWallet` Cloud Function (which keeps its own copy in sync).
   static const int maxWalletBalanceSen = 5000000;
-
-  /// Most milestones one plan may hold, enforced by the `proposeMilestonePlan`
-  /// Cloud Function (which keeps its own copy in sync).
-  static const int maxMilestones = 20;
 
   /// The max and min amount of tasks within a bundle, enforced by the
   /// `createBundle` Cloud Function (which keeps its own copy in sync).
@@ -100,7 +100,7 @@ class PlatformConfig {
   /// Verification sub-score while an application awaits admin review.
   static const int verificationPendingScore = 40;
 
-  /// The score stays hidden ("New User") until the user is admin-approved
+  /// The score stays hidden ("New") until the user is admin-approved
   /// AND has this many completed jobs (Upwork/Fiverr-style earned visibility).
   static const int minJobsForVisibleScore = 3;
 

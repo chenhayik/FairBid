@@ -39,13 +39,6 @@ abstract interface class DocumentStorageRepository {
     required XFile file,
   });
 
-  /// Uploads a job's single optional video under `jobs/{uid}/`, tagged
-  /// `video/mp4` regardless of the picked file's reported mime type.
-  Future<String> uploadJobVideo({
-    required String uid,
-    required XFile file,
-  });
-
   /// Uploads dispute photo evidence under owner+admin-only `disputes/{uid}/`.
   Future<String> uploadDisputeEvidence({
     required String uid,
@@ -66,9 +59,6 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   /// Fail instead of waiting forever if an upload stalls (flaky networks,
   /// Android emulators).
   static const _uploadTimeout = Duration(seconds: 60);
-
-  /// Videos are larger, so they get a longer time limit.
-  static const _videoUploadTimeout = Duration(seconds: 180);
 
   @override
   Future<String> uploadVerificationImage({
@@ -118,20 +108,6 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   }) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     return _upload('jobs/$uid/$timestamp', file);
-  }
-
-  @override
-  Future<String> uploadJobVideo({
-    required String uid,
-    required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload(
-      'jobs/$uid/video_$timestamp',
-      file,
-      contentType: 'video/mp4',
-      timeout: _videoUploadTimeout,
-    );
   }
 
   @override

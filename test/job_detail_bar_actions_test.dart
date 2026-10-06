@@ -122,20 +122,6 @@ void main() {
   }
 
   group('bottom bar actions work without scrolling (360x780, 1.3x)', () {
-    testWidgets('owner Approve plan opens the confirm', (tester) async {
-      await open(tester, owner: true, milestone: MilestoneStatus.proposed);
-      await tester.tap(find.widgetWithText(FilledButton, 'Approve plan'));
-      await tester.pumpAndSettle();
-      expect(find.text('Approve this plan?'), findsOneWidget);
-    });
-
-    testWidgets('owner Fund opens the confirm', (tester) async {
-      await open(tester, owner: true, milestone: MilestoneStatus.pending);
-      await tester.tap(find.widgetWithText(FilledButton, 'Fund ${formatRm(15000)}'));
-      await tester.pumpAndSettle();
-      expect(find.text('Fund this milestone?'), findsOneWidget);
-    });
-
     testWidgets('owner Release opens the confirm', (tester) async {
       await open(tester, owner: true, milestone: MilestoneStatus.submitted);
       await tester.tap(find.widgetWithText(FilledButton, 'Release ${formatRm(15000)}'));

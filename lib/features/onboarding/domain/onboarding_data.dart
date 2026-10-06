@@ -88,21 +88,7 @@ class OnboardingData {
   String? town;
   double? lat;
   double? lng;
-  String hourlyRate = '';
   List<String> portfolioImageUrls = [];
-
-  // Stage 6 - payout details. `accountNumber` is held only in memory while the
-  // form is open; only its last 4 digits are ever persisted (see toMap).
-  String bankName = '';
-  String accountHolder = '';
-  String accountNumber = '';
-  String branchCode = '';
-
-  /// The only part of the account number we store - the full number never
-  /// reaches Firestore (the `users` doc is readable by any signed-in user).
-  String get accountLast4 => accountNumber.length >= 4
-      ? accountNumber.substring(accountNumber.length - 4)
-      : '';
 
   /// Sensitive identity photos - stored in the owner+admin-only
   /// `users/{uid}/private/verification` doc, never in the world-readable
@@ -117,17 +103,6 @@ class OnboardingData {
         'idConsentAt': idConsentAt,
         'ssmNumber': ssmNumber,
         'ssmNumberNormalized': ssmNumberNormalized,
-      };
-
-  /// Payout bank details - stored in the owner+admin-only
-  /// `users/{uid}/private/payout` doc, never in the world-readable
-  /// `onboarding` map (the full account number never reaches Firestore at
-  /// all; only its last 4 digits are persisted).
-  Map<String, dynamic> payoutMap() => {
-        'bankName': bankName,
-        'accountHolder': accountHolder,
-        'accountLast4': accountLast4,
-        'branchCode': branchCode,
       };
 
   Map<String, dynamic> toMap() => {
@@ -146,7 +121,6 @@ class OnboardingData {
         'town': town,
         'lat': lat,
         'lng': lng,
-        'hourlyRate': hourlyRate,
         'portfolioImageUrls': portfolioImageUrls,
       };
 
@@ -177,12 +151,7 @@ class OnboardingData {
       ..town = map['town'] as String?
       ..lat = (map['lat'] as num?)?.toDouble()
       ..lng = (map['lng'] as num?)?.toDouble()
-      ..hourlyRate = map['hourlyRate'] as String? ?? ''
-      ..portfolioImageUrls = strings(map['portfolioImageUrls'])
-      ..bankName = map['bankName'] as String? ?? ''
-      ..accountHolder = map['accountHolder'] as String? ?? ''
-      ..accountNumber = map['accountNumber'] as String? ?? ''
-      ..branchCode = map['branchCode'] as String? ?? '';
+      ..portfolioImageUrls = strings(map['portfolioImageUrls']);
     return data;
   }
 }

@@ -66,40 +66,51 @@ void main() {
   }
 
   Future<void> openMenu(WidgetTester tester) async {
-    await tester.tap(find.byType(PopupMenuButton<String>));
+    final button = find.text('Problem with this job?');
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
     await tester.pumpAndSettle();
   }
 
-  group('overflow menu', () {
+  /// Whether the "Change the price" option can be tapped.
+  bool priceChangeEnabled(WidgetTester tester) => tester
+      .widget<ListTile>(find.widgetWithText(ListTile, 'Change the price'))
+      .enabled;
+
+  group('problem sheet', () {
     for (final owner in [true, false]) {
       testWidgets(
-        'offers Request price change to the ${owner ? 'requestor' : 'provider'}',
+        'offers Change the price to the ${owner ? 'requestor' : 'provider'}',
         (tester) async {
           await open(tester, (o) => _job(owner: o), owner: owner);
           await openMenu(tester);
-          expect(find.text('Request price change'), findsOneWidget);
+          expect(priceChangeEnabled(tester), isTrue);
         },
       );
     }
 
-    testWidgets('hides it for a bundle task', (tester) async {
+    testWidgets('explains it is off for a bundle task', (tester) async {
       await open(
         tester,
         (o) => _job(owner: o, bundleId: 'b1'),
         owner: true,
       );
       await openMenu(tester);
-      expect(find.text('Request price change'), findsNothing);
+      expect(priceChangeEnabled(tester), isFalse);
+      expect(find.text('Not available for bundle tasks.'), findsOneWidget);
     });
 
-    testWidgets('hides it once 3 changes have been accepted', (tester) async {
+    testWidgets('explains it is off after 3 accepted changes', (tester) async {
       await open(
         tester,
         (o) => _job(owner: o, priceChangeCount: 3),
         owner: true,
       );
       await openMenu(tester);
-      expect(find.text('Request price change'), findsNothing);
+      expect(priceChangeEnabled(tester), isFalse);
+      expect(find.text('The price has already been changed 3 times.'),
+          findsOneWidget);
     });
   });
 
@@ -142,7 +153,7 @@ void main() {
       expect(jobs.priceChangeCalls, ['withdraw:job-1']);
     });
 
-    testWidgets('menu entry is hidden while a request is pending', (
+    testWidgets('Change the price is off while a request is pending', (
       tester,
     ) async {
       await open(
@@ -150,9 +161,10 @@ void main() {
         (o) => _job(owner: o, request: request),
         owner: false,
       );
-      expect(find.byType(PopupMenuButton<String>), findsOneWidget);
       await openMenu(tester);
-      expect(find.text('Request price change'), findsNothing);
+      expect(priceChangeEnabled(tester), isFalse);
+      expect(find.text('A price change is already waiting for an answer.'),
+          findsOneWidget);
     });
   });
 

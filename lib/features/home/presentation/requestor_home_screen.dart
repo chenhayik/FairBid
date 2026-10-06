@@ -63,7 +63,9 @@ class RequestorHomeScreen extends StatelessWidget {
                     );
                   }
                   final jobs = (snapshot.data ?? [])
-                      .where((j) => j.status != JobStatus.completed)
+                      .where((j) =>
+                          j.status != JobStatus.completed &&
+                          j.status != JobStatus.cancelled)
                       .toList();
                   if (jobs.isEmpty) {
                     return const AppCard(

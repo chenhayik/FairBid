@@ -297,11 +297,11 @@ class _FilterBar extends StatelessWidget {
           const SizedBox(width: 8),
           _FilterChip<int?>(
             label: maxBudgetSen == null
-                ? 'Budget'
+                ? 'Likely price'
                 : '≤ ${formatRm(maxBudgetSen!)}',
             value: maxBudgetSen,
             items: const {
-              'Any budget': null,
+              'Any price': null,
               'Up to RM 100': 10000,
               'Up to RM 500': 50000,
               'Up to RM 1,000': 100000,

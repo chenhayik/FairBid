@@ -8,6 +8,9 @@ const {callerUid, bad, docId, bundleBiddingOpen, splitBundlePrice} =
     require("./bundles");
 const {notifyUser, writeFundedMilestone} = require("./common");
 
+// Must match PlatformConfig.neutralTrustScore.
+const NEUTRAL_TRUST = 700;
+
 /** Every set of tasks a bid would accept, with what each set costs. */
 // Any non-empty subset of the bid's tasks is an offer.
 function offersFor(bid, taskIndex) {
@@ -320,7 +323,10 @@ function bidFromSnap(doc) {
   return {
     providerId: doc.id,
     providerName: doc.data().providerName || "Provider",
-    trustScore: doc.data().providerTrustScore || 0,
+    // A hidden ("New") score counts as the neutral baseline when ranking.
+    trustScore: doc.data().providerScoreVisible === true ?
+        doc.data().providerTrustScore || 0 :
+        NEUTRAL_TRUST,
     scoreVisible: doc.data().providerScoreVisible === true,
     taskPrices: doc.data().taskPrices || {},
     bundlePriceSen: doc.data().bundlePriceSen == null ?

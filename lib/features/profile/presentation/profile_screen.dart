@@ -245,7 +245,7 @@ class _AdminAccessCard extends StatelessWidget {
       icon: Icons.admin_panel_settings_outlined,
       title: 'Administrator Access',
       body: 'You can review verification submissions and manage marketplace '
-          'participants from the Dashboard.',
+          'participants from the Home tab.',
       leftAccent: true,
     );
   }
@@ -302,7 +302,7 @@ class _TrustScoreCard extends StatelessWidget {
                         ?.copyWith(color: context.fairbid.verified))
               else
                 PillBadge(
-                  label: 'New User',
+                  label: 'New',
                   icon: Icons.auto_awesome,
                   color: context.fairbid.verified,
                 ),
@@ -347,8 +347,14 @@ class _TrustScoreCard extends StatelessWidget {
             hint: switch (user.verificationStatus) {
               'approved' => null,
               'pending' => 'Awaiting admin review.',
-              _ => 'Submit your documents to get verified.',
+              'rejected' => 'Not approved. Tap to send your documents again.',
+              _ => 'Tap to send your documents and get verified.',
             },
+            // Skipped or rejected users can always start verification again.
+            onTap: user.verificationStatus == 'approved' ||
+                    user.verificationStatus == 'pending'
+                ? null
+                : () => context.push('/onboarding'),
           ),
           TrustScoreBar(
             label: 'Profile',
@@ -405,7 +411,7 @@ class _EarningsNavCard extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                       isProvider
-                          ? 'Manage your income and bank details'
+                          ? 'Manage your income and payout method'
                           : 'Top up and track your job payments',
                       style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant)),

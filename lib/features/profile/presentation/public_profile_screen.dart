@@ -89,8 +89,7 @@ class _ProfileBody extends StatelessWidget {
 
   bool get _hasServices =>
       profile.skills.isNotEmpty ||
-      (profile.coverageArea ?? '').isNotEmpty ||
-      (profile.hourlyRate ?? '').isNotEmpty;
+      (profile.coverageArea ?? '').isNotEmpty;
 
   bool get _hasPortfolio =>
       profile.portfolioImageUrls.isNotEmpty ||
@@ -399,7 +398,7 @@ class _AboutCard extends StatelessWidget {
   }
 }
 
-/// Provider-only: skills as chips, coverage area and an hourly-rate line.
+/// Provider-only: skills as chips and the coverage area.
 class _ServicesCard extends StatelessWidget {
   const _ServicesCard({required this.profile});
   final PublicProfile profile;
@@ -407,9 +406,6 @@ class _ServicesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final rate = (profile.hourlyRate ?? '').isEmpty
-        ? null
-        : 'From RM ${profile.hourlyRate}/hr';
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -432,10 +428,6 @@ class _ServicesCard extends StatelessWidget {
               icon: Icons.map_outlined,
               text: profile.coverageArea!,
             ),
-          ],
-          if (rate != null) ...[
-            const SizedBox(height: 8),
-            _IconLine(icon: Icons.payments_outlined, text: rate),
           ],
         ],
       ),

@@ -77,7 +77,7 @@ class ProviderHomeScreen extends StatelessWidget {
                     child: StatCard(
                       label: 'Trust Score',
                       // Hidden until earned (verified + enough completed jobs).
-                      value: scoreVisible ? '$trustPercent%' : 'New',
+                      value: scoreVisible ? '$trustPercent/100' : 'New',
                       icon: Icons.shield_outlined,
                     ),
                   ),

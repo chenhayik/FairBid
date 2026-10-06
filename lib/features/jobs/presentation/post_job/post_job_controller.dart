@@ -47,28 +47,14 @@ class PostJobController extends ChangeNotifier {
     return null;
   }
 
-  /// The job's single optional attached video, or null. Replacing it (via
-  /// [addVideo]) uploads the new one first, then best-effort deletes the old.
-  String? videoUrl;
-
-  // Three separate busy flags - rather than one shared `_busy` - so a photo
-  // upload, a video upload and the overall submit are never indistinguishable
-  // to the UI: the submit overlay must show only for [isSubmitting], and each
-  // UploadBox's in-place spinner only for its own upload.
+  // Separate flags so the submit overlay and the photo spinner never mix.
   bool _isSubmitting = false;
   bool _uploadingPhoto = false;
-  bool _uploadingVideo = false;
   String? _errorMessage;
-
-  /// A picked video's file size must stay under this cap. `maxDuration` on
-  /// the image_picker call isn't reliably enforced on gallery picks, so this
-  /// is a second guardrail, checked after picking.
-  static const _maxVideoBytes = 45 * 1024 * 1024; // 45 MB
 
   // Assist state. Separate busy flags so a pending suggestion never blocks
   // the Post Job button, and vice versa. Failures never touch
   // [_errorMessage] - a missing suggestion is not a form error.
-  bool assistingDescription = false;
   bool assistingPrice = false;
   bool assistingDraft = false;
 
@@ -89,15 +75,11 @@ class PostJobController extends ChangeNotifier {
   /// spinner on the photo UploadBox only.
   bool get uploadingPhoto => _uploadingPhoto;
 
-  /// True while the video is being picked/uploaded - drives the in-place
-  /// spinner on the video UploadBox only.
-  bool get uploadingVideo => _uploadingVideo;
-
   /// Any of the above in flight. Used to gate actions - like the AI assists -
   /// that shouldn't run concurrently with a submit or an upload; the submit
   /// button and each UploadBox use their own specific flag above instead.
   bool get isBusy =>
-      _isSubmitting || _uploadingPhoto || _uploadingVideo || assistingDraft;
+      _isSubmitting || _uploadingPhoto || assistingDraft;
 
   String? get errorMessage => _errorMessage;
 
@@ -118,24 +100,6 @@ class PostJobController extends ChangeNotifier {
           photoUrl: _assistPhoto);
     } finally {
       assistingDraft = false;
-      _notify();
-    }
-  }
-
-  /// Expands [roughText] into a structured description, or null when no
-  /// suggestion is available. The screen decides what to do with the result.
-  Future<String?> suggestDescription(String roughText) async {
-    final selectedCategory = category;
-    if (selectedCategory == null) return null;
-    assistingDescription = true;
-    _notify();
-    try {
-      return await _assist.suggestDescription(
-          category: selectedCategory,
-          roughText: roughText,
-          photoUrl: _assistPhoto);
-    } finally {
-      assistingDescription = false;
       _notify();
     }
   }
@@ -215,51 +179,6 @@ class PostJobController extends ChangeNotifier {
     _storage.deleteByUrl(url).catchError((_) {});
   }
 
-  /// Picks, validates and uploads one optional job video, replacing any
-  /// video already attached. A 60-second gallery cap is requested, but
-  /// isn't reliably enforced by the platform picker, so a 45 MB file-size
-  /// cap is re-checked here - an oversized pick is rejected without ever
-  /// starting the upload.
-  Future<void> addVideo(String uid) async {
-    final XFile? file;
-    try {
-      file = await _picker.pickVideo(
-        source: ImageSource.gallery,
-        maxDuration: const Duration(seconds: 60),
-      );
-    } catch (_) {
-      _fail('Could not open the video picker.');
-      return;
-    }
-    if (file == null) return;
-
-    final size = await file.length();
-    if (size > _maxVideoBytes) {
-      _fail('Video must be 60 seconds or shorter and under 45 MB.');
-      return;
-    }
-
-    _setUploadingVideo(true);
-    try {
-      final newUrl = await _storage.uploadJobVideo(uid: uid, file: file);
-      final oldUrl = videoUrl;
-      videoUrl = newUrl;
-      if (oldUrl != null) _storage.deleteByUrl(oldUrl).catchError((_) {});
-    } catch (_) {
-      _errorMessage = 'Could not upload the video. Please try again.';
-    } finally {
-      _setUploadingVideo(false);
-    }
-  }
-
-  void removeVideo() {
-    final url = videoUrl;
-    if (url == null) return;
-    videoUrl = null;
-    notifyListeners();
-    _storage.deleteByUrl(url).catchError((_) {});
-  }
-
   /// Creates the job and returns its new id, or null on failure. When an
   /// optional [pendingAddress] was set, best-effort attaches it after the
   /// job is created - a failed address write never loses the created job.
@@ -296,8 +215,8 @@ class PostJobController extends ChangeNotifier {
   }
 
   /// Posts several related tasks as ONE bundled posting via `createBundle`,
-  /// returning the new bundle's id (null on failure). Video and the precise
-  /// service address have no bundle equivalent, so the form hides both.
+  /// returning the new bundle's id (null on failure). The precise service
+  /// address has no bundle equivalent, so the form hides it.
   Future<String?> submitBundle({
     required String title,
     required String description,
@@ -334,11 +253,6 @@ class PostJobController extends ChangeNotifier {
 
   void _setUploadingPhoto(bool value) {
     _uploadingPhoto = value;
-    _notify();
-  }
-
-  void _setUploadingVideo(bool value) {
-    _uploadingVideo = value;
     _notify();
   }
 

@@ -9,7 +9,6 @@ import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../admin/domain/pending_verification.dart';
 import '../../admin/presentation/widgets/document_gallery.dart';
-import '../../jobs/data/job_repository.dart';
 import '../../messages/data/chat_repository.dart';
 import '../../messages/domain/message.dart';
 import '../data/dispute_repository.dart';
@@ -68,77 +67,11 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
     }
   }
 
-  /// Admin override: cancels the whole job. Refused server-side while any
-  /// milestone still holds escrow - so in practice the admin rules on (and
-  /// thereby settles) the open disputes first, then cancels an otherwise
-  /// unworkable job. The clear server message is surfaced when it's blocked.
-  Future<void> _cancelJob() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cancel the entire job?'),
-        content: const Text(
-            'This ends the job for both parties. It only works once no '
-            'milestone holds escrow. Settle any funded milestone or open '
-            'dispute first.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Back'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: context.fairbid.danger),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Cancel Job'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busy = true);
-    try {
-      await context.read<JobRepository>().adminCancelJob(d.jobId);
-      if (!mounted) return;
-      context.pop();
-      messenger.showSnackBar(
-          const SnackBar(content: Text('Job cancelled.')));
-    } on FirebaseFunctionsException catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      messenger.showSnackBar(SnackBar(
-          content: Text(
-              e.message ?? 'Could not cancel the job. Please try again.')));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not cancel the job. Please try again.')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Dispute Review'),
-        actions: [
-          PopupMenuButton<String>(
-            enabled: !_busy,
-            onSelected: (v) {
-              if (v == 'cancel_job') _cancelJob();
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'cancel_job',
-                child: Text('Cancel entire job'),
-              ),
-            ],
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Dispute Review')),
       body: SafeArea(
         child: Column(
           children: [

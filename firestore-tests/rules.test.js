@@ -983,6 +983,16 @@ describe("Server-owned SSM extract doc", () => {
         await assertFails(getDoc(doc(dbAs(OTHER), path)));
       });
 
+  it("denies the owner writing their payout method, but lets them read it",
+      async () => {
+        const path = `users/${OWNER}/private/payoutMethod`;
+        await assertFails(setDoc(doc(dbAs(OWNER), path),
+            {method: "bank", masked: "Maybank •••• 1234"}));
+        await seed([[path, {method: "duitnow", masked: "DuitNow 012-•••• 678"}]]);
+        await assertSucceeds(getDoc(doc(dbAs(OWNER), path)));
+        await assertFails(getDoc(doc(dbAs(OTHER), path)));
+      });
+
   it("denies every client access to idRegistry", async () => {
     const path = "idRegistry/abc";
     await seed([[path, {uid: OWNER}]]);
@@ -1286,8 +1296,8 @@ describe("Price change fields", () => {
 });
 
 // ---------------------------------------------------------------------------
-// fundedAtAward - jobs/{jobId}. Set only by acceptBid / awardBundle; it picks
-// the cancellation and price-change rules, so a client must not write it.
+// fundedAtAward - jobs/{jobId}. Set only by acceptBid / awardBundle, so a
+// client must not write it.
 // ---------------------------------------------------------------------------
 describe("fundedAtAward field", () => {
   const REQUESTOR = "requestor1";

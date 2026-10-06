@@ -97,13 +97,12 @@ test("canCancelFunded: blocked by submitted or disputed only", () => {
     ms(1, "disputed", 1)]), false);
 });
 
-test("cancellationPlan refunds funded, keeps paid, unlocks pending", () => {
+test("cancellationPlan refunds funded, keeps paid, deletes unfunded", () => {
   const stages = [ms(0, "released", 4000), ms(1, "funded", 3000),
     ms(2, "pending", 2000), ms(3, "funded", 500)];
   assert.deepStrictEqual(cancellationPlan(stages), {
     refunds: [{id: "m1", amountSen: 3000}, {id: "m3", amountSen: 500}],
     deleteIds: ["m1", "m3", "m2"],
-    unlockSen: 2000,
   });
 });
 
@@ -111,35 +110,20 @@ test("cancellationPlan: a lone funded stage is fully refunded", () => {
   assert.deepStrictEqual(cancellationPlan([ms(0, "funded", 15000)]), {
     refunds: [{id: "m0", amountSen: 15000}],
     deleteIds: ["m0"],
-    unlockSen: 0,
   });
 });
 
-test("cancellationPlan: proposed stages are deleted without unlocking", () => {
+test("cancellationPlan: proposed stages are deleted", () => {
   assert.deepStrictEqual(cancellationPlan([ms(0, "proposed", 900)]),
-      {refunds: [], deleteIds: ["m0"], unlockSen: 0});
+      {refunds: [], deleteIds: ["m0"]});
 });
 
-test("disputeRefundPlan refunds every held stage and unlocks the rest", () => {
-  const job = {fundedAtAward: true, acceptedBidAmountSen: 9500};
+test("disputeRefundPlan refunds every held stage and deletes the rest", () => {
   const stages = [ms(0, "released", 4000), ms(1, "disputed", 3000),
     ms(2, "pending", 2000), ms(3, "submitted", 500)];
-  assert.deepStrictEqual(disputeRefundPlan(job, stages), {
+  assert.deepStrictEqual(disputeRefundPlan(stages), {
     refunds: [{id: "m1", amountSen: 3000}, {id: "m3", amountSen: 500}],
     deleteIds: ["m2"],
-    unlockSen: 2000,
-  });
-});
-
-test("disputeRefundPlan: a legacy job unlocks the unfunded remainder", () => {
-  // RM 100 price: RM 30 disputed, RM 20 planned but never funded, RM 50
-  // never planned. Everything but the disputed RM 30 is still locked.
-  const job = {acceptedBidAmountSen: 10000};
-  const stages = [ms(0, "disputed", 3000), ms(1, "pending", 2000)];
-  assert.deepStrictEqual(disputeRefundPlan(job, stages), {
-    refunds: [{id: "m0", amountSen: 3000}],
-    deleteIds: ["m1"],
-    unlockSen: 7000,
   });
 });
 

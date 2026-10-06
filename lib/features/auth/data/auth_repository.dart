@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../../core/config/platform_config.dart';
+import '../../../core/location/region.dart';
 import '../domain/app_user.dart';
 import '../domain/mfa.dart';
 import '../domain/user_role.dart';
@@ -88,12 +89,20 @@ abstract interface class AuthRepository {
 
   /// Saves the editable profile fields (Edit Profile screen). Only the passed
   /// fields are written; balances, role and Trust Score are never touched here.
+  ///
+  /// A [picked] map location also updates the point used for distances: a
+  /// provider's base location and coverage fields, or a requestor's default
+  /// location. A provider's [category] and [skills] go into `onboarding`.
   Future<void> updateProfile({
     required String uid,
     required String displayName,
     required String? phone,
     required String? location,
     required String? bio,
+    bool isProvider = false,
+    PickedLocation? picked,
+    String? category,
+    List<String>? skills,
   });
 
   /// Saves the signed-in user's avatar URL (Edit Profile screen's photo
@@ -143,9 +152,8 @@ class FirebaseAuthRepository implements AuthRepository {
   CollectionReference<Map<String, dynamic>> get _users =>
       _firestore.collection('users');
 
-  /// Owner+admin-only doc holding payout bank details and the phone number -
-  /// see `firestore.rules`' `private/{doc}` block. Shared by both onboarding
-  /// flows and [updateProfile].
+  /// Owner+admin-only doc holding the phone number - see `firestore.rules`.
+  /// Shared by both onboarding flows and [updateProfile].
   DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
       _users.doc(uid).collection('private').doc('payout');
 
@@ -187,7 +195,7 @@ class FirebaseAuthRepository implements AuthRepository {
           // Live-watch the profile doc; fall back to a minimal user if it
           // can't be read so the app never gets stuck on the splash screen.
           // Each emission also re-reads the owner-only private payout doc
-          // (asyncMap) so phone/bank details stay live too, without a second
+          // (asyncMap) so the phone stays live too, without a second
           // top-level stream to combine.
           profileSub = _users
               .doc(user.uid)
@@ -477,6 +485,10 @@ class FirebaseAuthRepository implements AuthRepository {
     required String? phone,
     required String? location,
     required String? bio,
+    bool isProvider = false,
+    PickedLocation? picked,
+    String? category,
+    List<String>? skills,
   }) {
     // Phone moved to the owner+admin-only private/payout doc (it used to sit
     // on the world-readable public profile); write it there and explicitly
@@ -489,6 +501,33 @@ class FirebaseAuthRepository implements AuthRepository {
         'location': location?.trim(),
         'bio': bio?.trim(),
         'phone': FieldValue.delete(),
+        if (picked != null && !isProvider) ...{
+          'lat': picked.lat,
+          'lng': picked.lng,
+          'districtCode': picked.region.districtCode,
+          'town': picked.region.town,
+        },
+        if (picked != null && isProvider) ...{
+          'baseLat': picked.lat,
+          'baseLng': picked.lng,
+          'baseAddress': picked.address,
+          'baseDistrictCode': picked.region.districtCode,
+          'baseTown': picked.region.town,
+        },
+        // Merged into the existing onboarding map, not replacing it.
+        if (isProvider &&
+            (picked != null || category != null || skills != null))
+          'onboarding': {
+            if (picked != null) ...{
+              'coverageArea': picked.address,
+              'districtCode': picked.region.districtCode,
+              'town': picked.region.town,
+              'lat': picked.lat,
+              'lng': picked.lng,
+            },
+            'category': ?category,
+            'skills': ?skills,
+          },
       }, SetOptions(merge: true))
       ..set(_payoutDoc(uid), {
         'phone': phone?.trim(),
@@ -649,12 +688,7 @@ class FirebaseAuthRepository implements AuthRepository {
     Map<String, dynamic>? payoutData,
   ) {
     final onboarding = data?['onboarding'] as Map<String, dynamic>?;
-    // Payout bank details and phone moved to the private/payout doc; legacy
-    // accounts that haven't saved since the migration still carry them on the
-    // public doc, so fall back to those locations until the user's next save
-    // scrubs them (see updateProfile and the onboarding repositories).
-    final accountLast4 = (payoutData?['accountLast4'] ??
-        onboarding?['accountLast4']) as String?;
+    // The phone lives in private/payout; legacy accounts still have it public.
     return AppUser(
       uid: user.uid,
       email: user.email,
@@ -689,10 +723,9 @@ class FirebaseAuthRepository implements AuthRepository {
           : TrustBreakdown.fromMap(data!['trust'] as Map<String, dynamic>),
       profilePhotoUrl: data?['profilePhotoUrl'] as String?,
       providerType: onboarding?['providerType'] as String?,
-      payoutBankName:
-          (payoutData?['bankName'] ?? onboarding?['bankName']) as String?,
-      payoutAccountLast4:
-          accountLast4 == null || accountLast4.isEmpty ? null : accountLast4,
+      category: onboarding?['category'] as String?,
+      skills: (onboarding?['skills'] as List?)?.whereType<String>().toList() ??
+          const [],
       isPasswordAccount: _isPasswordAccount(user),
       emailVerified: user.emailVerified,
       watchlist:

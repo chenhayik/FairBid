@@ -43,7 +43,6 @@ import 'job_detail_view_model.dart';
 import 'job_video_player.dart';
 import 'milestone_section.dart';
 import 'photo_strip.dart';
-import 'propose_milestones_sheet.dart';
 
 /// Job detail screen. Sections keep a fixed order; only which ones show varies.
 /// A pinned bottom bar holds the main action; rare ones go in the menu.
@@ -308,11 +307,6 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         if (me != null) {
           SubmitBidSheet.show(context, job: job, bidder: me, existing: myBid);
         }
-      case JobActionKind.proposeMilestones:
-        ProposeMilestonesSheet.show(context, job: job);
-      case JobActionKind.approvePlan:
-        _milestonesKey.currentState?.approvePlan();
-      case JobActionKind.fundMilestone:
       case JobActionKind.releaseMilestone:
       case JobActionKind.markDelivered:
         _milestonesKey.currentState?.runCurrentAction();
@@ -416,14 +410,10 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              job.fundedAtAward
-                  ? 'The other party must agree before the job is '
-                        'cancelled. Money in escrow for work not yet '
-                        'delivered is refunded to the client. A delivered or '
-                        'disputed stage must be released or resolved first.'
-                  : 'The other party must agree before the job is '
-                        'cancelled. Funded milestones must be released or '
-                        'disputed first.',
+              'The other party must agree before the job is cancelled. '
+              'Money in escrow for work not yet delivered is refunded to the '
+              'client. A delivered or disputed milestone must be released or '
+              'resolved first.',
             ),
             const SizedBox(height: 12),
             TextField(
@@ -519,12 +509,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
                       : null,
                 ),
                 Text(
-                  job.fundedAtAward
-                      ? 'The other party must agree. An increase moves the '
-                            'extra into escrow; a decrease is refunded to the '
-                            'client from work not yet delivered.'
-                      : 'The other party must agree. Unfunded milestones '
-                            'are cleared and the provider re-proposes a plan.',
+                  'The other party must agree. An increase moves the extra '
+                  'into escrow; a decrease is refunded to the client from '
+                  'work not yet delivered.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -562,24 +549,112 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
   }
 
-  /// Whether the overflow menu offers "Request price change" for [job].
-  bool _canRequestPriceChange(Job job) =>
-      job.status == JobStatus.inProgress &&
-      !job.isBundleTask &&
-      !job.hasPendingPriceChange &&
-      !job.hasPendingCancellation &&
-      job.priceChangeCount < 3;
+  /// Why the price can't be changed now, or null when it can.
+  String? _priceChangeBlocker(Job job) {
+    if (job.isBundleTask) return 'Not available for bundle tasks.';
+    if (_milestonesKey.currentState?.hasOpenDispute == true) {
+      return 'Wait until the dispute is decided.';
+    }
+    if (job.hasPendingPriceChange) {
+      return 'A price change is already waiting for an answer.';
+    }
+    if (job.hasPendingCancellation) return 'Answer the cancellation first.';
+    if (job.priceChangeCount >= 3) {
+      return 'The price has already been changed 3 times.';
+    }
+    return null;
+  }
 
-  /// The menu's cancel entry, or null if none applies (e.g. a request is
-  /// already pending, which is answered in the response card).
-  (String value, String label)? _cancelMenuEntry(
+  /// Whether the "Problem with this job?" button applies to this viewer.
+  bool _showProblemButton(Job job, JobDetailViewModel vm) {
+    final isParty = vm.role == JobViewerRole.owner ||
+        vm.role == JobViewerRole.acceptedProvider;
+    return isParty &&
+        (job.status == JobStatus.inProgress ||
+            (job.status == JobStatus.open && vm.showCancel));
+  }
+
+  /// One place for every way out of a job, each saying why if it's blocked.
+  Future<void> _openProblemSheet(
+    BuildContext context,
     Job job,
     JobDetailViewModel vm,
-  ) {
-    if (!vm.showCancel) return null;
-    if (job.status == JobStatus.open) return ('cancel', 'Cancel job');
-    if (job.hasPendingCancellation) return null;
-    return ('request', 'Request cancellation');
+  ) async {
+    final inProgress = job.status == JobStatus.inProgress;
+    final milestones = _milestonesKey.currentState;
+    final options = <(String, IconData, String?, VoidCallback)>[
+      if (inProgress)
+        (
+          'Change the price',
+          Icons.price_change_outlined,
+          _priceChangeBlocker(job),
+          () => _requestPriceChange(context, job),
+        ),
+      if (inProgress)
+        (
+          'Raise a dispute',
+          Icons.gavel_rounded,
+          milestones?.hasOpenDispute == true
+              ? 'A dispute is already open.'
+              : milestones?.disputableMilestone == null
+              ? 'Only once payment is held in escrow.'
+              : null,
+          () => milestones?.raiseDispute(),
+        ),
+      if (job.status == JobStatus.open)
+        ('Cancel job', Icons.cancel_outlined, null,
+            () => _cancelJob(context, job))
+      else
+        (
+          'Ask to cancel the job',
+          Icons.cancel_outlined,
+          !vm.showCancel
+              ? 'Not available for this job.'
+              : job.hasPendingCancellation
+              ? 'A cancellation request is already open.'
+              : job.hasPendingPriceChange
+              ? 'Answer the price change first.'
+              : null,
+          () => _requestCancellation(context, job),
+        ),
+    ];
+    final picked = await showModalBottomSheet<VoidCallback>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) {
+        final theme = Theme.of(context);
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Problem with this job?',
+                  style: theme.textTheme.titleLarge),
+              const SizedBox(height: 4),
+              Text(
+                'If you can, talk to the other person in chat first.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final (label, icon, blocker, action) in options)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  enabled: blocker == null,
+                  leading: Icon(icon),
+                  title: Text(label),
+                  subtitle: blocker == null ? null : Text(blocker),
+                  onTap: () => Navigator.of(context).pop(action),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!context.mounted) return;
+    picked?.call();
   }
 
   @override
@@ -640,11 +715,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         myBid,
         myBundleBid,
         vm,
-        _resolveMilestoneBar(
-          vm,
-          snapshot.data,
-          fundedAtAward: job.fundedAtAward,
-        ),
+        _resolveMilestoneBar(vm, snapshot.data),
       ),
     );
   }
@@ -658,44 +729,12 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     JobDetailViewModel vm,
     _ResolvedBar bar,
   ) {
-    final cancelEntry = _cancelMenuEntry(job, vm);
-    final canPriceChange =
-        (vm.role == JobViewerRole.owner ||
-            vm.role == JobViewerRole.acceptedProvider) &&
-        _canRequestPriceChange(job);
-
     return Scaffold(
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
             pinned: true,
             title: const Text('Job details'),
-            actions: [
-              if (cancelEntry != null || canPriceChange)
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'cancel') {
-                      _cancelJob(context, job);
-                    } else if (value == 'price') {
-                      _requestPriceChange(context, job);
-                    } else {
-                      _requestCancellation(context, job);
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    if (canPriceChange)
-                      const PopupMenuItem(
-                        value: 'price',
-                        child: Text('Request price change'),
-                      ),
-                    if (cancelEntry != null)
-                      PopupMenuItem(
-                        value: cancelEntry.$1,
-                        child: Text(cancelEntry.$2),
-                      ),
-                  ],
-                ),
-            ],
           ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
@@ -837,6 +876,15 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
               revieweeName: isOwner
                   ? job.acceptedProviderName ?? 'Provider'
                   : job.requestorName,
+            )
+          : null,
+    );
+    add(
+      _showProblemButton(job, vm)
+          ? OutlinedButton.icon(
+              onPressed: () => _openProblemSheet(context, job, vm),
+              icon: const Icon(Icons.help_outline),
+              label: const Text('Problem with this job?'),
             )
           : null,
     );
@@ -1431,13 +1479,16 @@ class _JobDescription extends StatelessWidget {
 }
 
 /// Bid sort order. `bestValue` blends price and Trust Score.
-enum _BidSort { bestValue, price, trustScore }
+enum _BidSort { bestValue, price }
 
 /// Best Value score for [bid]: cheaper and more trusted scores higher.
-/// [lowestSen] is the cheapest bid, computed once by the caller.
+/// A "New" provider counts as the neutral baseline, not their hidden score.
 double _compositeScore(Bid bid, int lowestSen) {
   final priceScore = lowestSen / bid.amountSen;
-  final trust = bid.providerTrustScore / 1000;
+  final trust = (bid.providerScoreVisible
+          ? bid.providerTrustScore
+          : PlatformConfig.neutralTrustScore) /
+      1000;
   return PlatformConfig.priceWeight * priceScore +
       PlatformConfig.trustWeight * trust;
 }
@@ -1652,9 +1703,6 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
         final lowestSen = bids.map((b) => b.amountSen).reduce(min);
         bids.sort(switch (_sort) {
           _BidSort.price => (a, b) => a.amountSen.compareTo(b.amountSen),
-          _BidSort.trustScore => (a, b) => b.providerTrustScore.compareTo(
-            a.providerTrustScore,
-          ),
           _BidSort.bestValue => (a, b) => _compositeScore(
             b,
             lowestSen,
@@ -1683,10 +1731,6 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
                 segments: const [
                   ButtonSegment(value: _BidSort.bestValue, label: Text('Best')),
                   ButtonSegment(value: _BidSort.price, label: Text('Price')),
-                  ButtonSegment(
-                    value: _BidSort.trustScore,
-                    label: Text('Trust'),
-                  ),
                 ],
                 selected: {_sort},
                 onSelectionChanged: (s) => setState(() => _sort = s.first),
@@ -2213,51 +2257,20 @@ class _ResolvedBar {
   final String? waitingLine;
 }
 
-/// Whether the bar takes its action from the milestone plan.
+/// Whether the bar takes its action from the job's stages.
 bool _milestoneAware(JobDetailViewModel vm, Job job) =>
     (vm.role == JobViewerRole.owner ||
         vm.role == JobViewerRole.acceptedProvider) &&
     job.status == JobStatus.inProgress;
 
-/// [fundedAtAward] jobs have no plan to propose, approve or fund; the price
-/// is already in escrow. (A `pending` stage only follows a dispute refund.)
 _ResolvedBar _resolveMilestoneBar(
   JobDetailViewModel vm,
-  List<Milestone>? milestones, {
-  bool fundedAtAward = false,
-}) {
+  List<Milestone>? milestones,
+) {
   final isOwner = vm.role == JobViewerRole.owner;
 
-  if (milestones == null) {
+  if (milestones == null || milestones.isEmpty) {
     return _ResolvedBar(action: vm.primaryAction, waitingLine: vm.waitingLine);
-  }
-  if (milestones.isEmpty) {
-    if (!isOwner && !fundedAtAward) {
-      return const _ResolvedBar(
-        action: NextAction(
-          label: 'Propose milestones',
-          kind: JobActionKind.proposeMilestones,
-        ),
-      );
-    }
-    return _ResolvedBar(action: vm.primaryAction, waitingLine: vm.waitingLine);
-  }
-
-  final planApproved = !milestones.any(
-    (m) => m.status == MilestoneStatus.proposed,
-  );
-  if (!planApproved && !fundedAtAward) {
-    if (isOwner) {
-      return const _ResolvedBar(
-        action: NextAction(
-          label: 'Approve plan',
-          kind: JobActionKind.approvePlan,
-        ),
-      );
-    }
-    return const _ResolvedBar(
-      waitingLine: 'Waiting for the client to approve the plan.',
-    );
   }
 
   final current = milestones.cast<Milestone?>().firstWhere(
@@ -2271,19 +2284,6 @@ _ResolvedBar _resolveMilestoneBar(
   final amount = formatRm(current.amountSen);
 
   switch (current.status) {
-    case MilestoneStatus.pending:
-      if (isOwner) {
-        return _ResolvedBar(
-          action: NextAction(
-            label: 'Fund $amount',
-            kind: JobActionKind.fundMilestone,
-            contextLine: current.description,
-          ),
-        );
-      }
-      return _ResolvedBar(
-        waitingLine: 'Waiting for the client to fund milestone $index.',
-      );
     case MilestoneStatus.funded:
       if (!isOwner) {
         return _ResolvedBar(
@@ -2295,7 +2295,7 @@ _ResolvedBar _resolveMilestoneBar(
         );
       }
       return _ResolvedBar(
-        waitingLine: fundedAtAward && milestones.length == 1
+        waitingLine: milestones.length == 1
             ? '$amount is secured in escrow. Waiting for the provider to '
                   'deliver.'
             : 'Waiting for the provider to deliver milestone $index.',
@@ -2311,7 +2311,7 @@ _ResolvedBar _resolveMilestoneBar(
         );
       }
       return _ResolvedBar(
-        waitingLine: fundedAtAward && milestones.length == 1
+        waitingLine: milestones.length == 1
             ? 'Marked as delivered. Waiting for the client to review the '
                   'work and release $amount.'
             : 'Marked as delivered. Waiting for the client to review '

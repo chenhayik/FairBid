@@ -3,6 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../../../core/util/payment_log.dart';
 import '../domain/ledger_entry.dart';
+import '../domain/payout_method.dart';
 
 /// Moves money in and out of the simulated wallet and reads the transaction
 /// ledger. Both movements call Cloud Functions - Firestore rules reject any
@@ -32,6 +33,18 @@ abstract interface class WalletRepository {
 
   /// Streams the user's ledger entries, newest first.
   Stream<List<LedgerEntry>> watchMyTransactions(String uid);
+
+  /// Streams where [uid]'s withdrawals go; null until one is set up.
+  Stream<PayoutMethod?> watchPayoutMethod(String uid);
+
+  /// Saves a payout method (the `savePayoutMethod` function). DuitNow IDs
+  /// come from the verified profile, so only [proxyType] is sent for them.
+  Future<void> savePayoutMethod({
+    required String method,
+    String? proxyType,
+    String? bankSwift,
+    String? accountNumber,
+  });
 }
 
 /// Firebase-backed [WalletRepository]. Ledger entries live in the top-level
@@ -141,5 +154,34 @@ class FirebaseWalletRepository implements WalletRepository {
     final data = Map<String, dynamic>.of(doc.data() ?? {});
     data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
     return LedgerEntry.fromMap(doc.id, data);
+  }
+
+  @override
+  Stream<PayoutMethod?> watchPayoutMethod(String uid) {
+    return _firestore
+        .doc('users/$uid/private/payoutMethod')
+        .snapshots()
+        .map((snap) {
+      final data = snap.data();
+      if (data == null) return null;
+      final m = Map<String, dynamic>.of(data);
+      m['availableAt'] = (m['availableAt'] as Timestamp?)?.toDate();
+      return PayoutMethod.fromMap(m);
+    });
+  }
+
+  @override
+  Future<void> savePayoutMethod({
+    required String method,
+    String? proxyType,
+    String? bankSwift,
+    String? accountNumber,
+  }) async {
+    await _functions.httpsCallable('savePayoutMethod').call<void>({
+      'method': method,
+      'proxyType': ?proxyType,
+      'bankSwift': ?bankSwift,
+      'accountNumber': ?accountNumber,
+    });
   }
 }

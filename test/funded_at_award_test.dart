@@ -1,5 +1,5 @@
-// A job funded at award has one funded "Full job" stage from the start, so
-// nobody is ever asked to propose, approve, fund or amend a plan.
+// A job is funded at award with one funded "Full job" stage, so nobody is
+// ever asked to fund it.
 import 'package:fairbid/core/util/money.dart';
 import 'package:fairbid/features/auth/domain/user_role.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
@@ -10,7 +10,7 @@ import 'package:go_router/go_router.dart';
 
 import 'widget_test.dart';
 
-Job _job({required bool owner, bool funded = true}) => Job(
+Job _job({required bool owner}) => Job(
   id: 'job-1',
   requestorId: owner ? 'uid-1' : 'req-9',
   requestorName: 'Rita Client',
@@ -23,7 +23,6 @@ Job _job({required bool owner, bool funded = true}) => Job(
   acceptedProviderId: owner ? 'prov-1' : 'uid-1',
   acceptedProviderName: 'Pro Fixer',
   acceptedBidAmountSen: 15000,
-  fundedAtAward: funded,
 );
 
 Milestone _fullJob({
@@ -44,9 +43,7 @@ void main() {
   Future<void> open(
     WidgetTester tester, {
     required bool owner,
-    bool funded = true,
     bool withMilestone = true,
-    MilestoneStatus stageStatus = MilestoneStatus.funded,
   }) async {
     tester.view.physicalSize = const Size(360, 1200) * 2;
     tester.view.devicePixelRatio = 2;
@@ -54,13 +51,13 @@ void main() {
     final auth = FakeAuthRepository()
       ..verificationStatus = 'approved'
       ..seedSignedIn(owner ? UserRole.requestor : UserRole.provider);
-    final jobs = FakeJobRepository([_job(owner: owner, funded: funded)]);
+    final jobs = FakeJobRepository([_job(owner: owner)]);
     await tester.pumpWidget(
       buildApp(
         auth,
         jobRepository: jobs,
         milestoneRepository: FakeMilestoneRepository(jobs, [
-          if (withMilestone) _fullJob(owner: owner, status: stageStatus),
+          if (withMilestone) _fullJob(owner: owner),
         ]),
       ),
     );
@@ -101,41 +98,10 @@ void main() {
     expectNoPlanUi();
   });
 
-  testWidgets('a dispute-refunded stage can still be funded again', (
-    tester,
-  ) async {
-    // A refund ruling returns the stage to `pending` and re-locks the money,
-    // so the owner must still get the legacy Fund step back.
-    await open(tester, owner: true, stageStatus: MilestoneStatus.pending);
-    expect(
-      find.widgetWithText(FilledButton, 'Fund ${formatRm(15000)}'),
-      findsOneWidget,
-    );
-  });
-
   testWidgets('provider is not asked to propose when no stage has loaded', (
     tester,
   ) async {
     await open(tester, owner: false, withMilestone: false);
     expect(find.text('Propose milestones'), findsNothing);
-  });
-
-  testWidgets('a legacy job with no stages still asks for a plan', (
-    tester,
-  ) async {
-    await open(tester, owner: false, funded: false, withMilestone: false);
-    expect(
-      find.widgetWithText(FilledButton, 'Propose milestones'),
-      findsOneWidget,
-    );
-  });
-
-  test('Job.fromMap reads fundedAtAward and defaults it to false', () {
-    final base = {'requestorId': 'u', 'title': 't'};
-    expect(Job.fromMap('a', base).fundedAtAward, isFalse);
-    expect(
-      Job.fromMap('a', {...base, 'fundedAtAward': true}).fundedAtAward,
-      isTrue,
-    );
   });
 }

@@ -471,14 +471,10 @@ class _DetailsCard extends StatelessWidget {
         ('Service', item.category!),
       if (item.coverageArea != null && item.coverageArea!.isNotEmpty)
         ('Coverage', item.coverageArea!),
-      if (item.hourlyRate != null && item.hourlyRate!.isNotEmpty)
-        ('Hourly Rate', 'RM ${item.hourlyRate}'),
       if (item.companyName != null && item.companyName!.isNotEmpty)
         ('Company', item.companyName!),
       if (item.ssmNumber != null && item.ssmNumber!.isNotEmpty)
         ('SSM No.', item.ssmNumber!),
-      if (item.bankName != null && item.bankName!.isNotEmpty)
-        ('Payout Bank', item.bankName!),
     ];
 
     return AppCard(

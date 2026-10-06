@@ -72,7 +72,7 @@ class BundleAwardItem {
   final String providerName;
 
   /// Job id to amount in sen. It becomes the task's accepted bid amount,
-  /// so a milestone plan must add up to it exactly.
+  /// so the funded stage must equal it exactly.
   final Map<String, int> taskAmountsSen;
 
   int get totalSen =>

@@ -27,6 +27,7 @@ import '../../features/profile/presentation/edit_profile_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
 import '../../features/profile/presentation/public_profile_screen.dart';
 import '../../features/profile/presentation/user_reviews_screen.dart';
+import '../../features/wallet/presentation/payout_method_screen.dart';
 import '../navigation/app_shell.dart';
 
 /// Builds the app router. It listens to [auth] so that signing in/out or
@@ -138,6 +139,9 @@ GoRouter buildRouter(AuthController auth) {
       GoRoute(
           path: '/profile/earnings',
           builder: (_, _) => const EarningsScreen()),
+      GoRoute(
+          path: '/profile/payout-method',
+          builder: (_, _) => const PayoutMethodScreen()),
       GoRoute(
           path: '/profile/security',
           builder: (_, _) => const SecurityScreen()),

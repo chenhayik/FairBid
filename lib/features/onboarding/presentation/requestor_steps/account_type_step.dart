@@ -25,7 +25,7 @@ class AccountTypeStep extends StatelessWidget {
             style: theme.textTheme.headlineMedium),
         const SizedBox(height: 8),
         Text(
-          'Tell us who is posting jobs so we can tailor invoices and '
+          'Tell us who is posting jobs so we can set up the right '
           'verification.',
           textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium

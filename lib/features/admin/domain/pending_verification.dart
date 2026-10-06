@@ -38,14 +38,9 @@ class PendingVerification {
     this.bio,
     this.category,
     this.coverageArea,
-    this.hourlyRate,
     this.companyName,
     this.ssmNumber,
     this.skills = const [],
-    this.bankName,
-    this.accountHolder,
-    this.accountLast4,
-    this.branchCode,
     this.documents = const [],
   });
 
@@ -64,14 +59,9 @@ class PendingVerification {
   final String? bio;
   final String? category;
   final String? coverageArea;
-  final String? hourlyRate;
   final String? companyName;
   final String? ssmNumber;
   final List<String> skills;
-  final String? bankName;
-  final String? accountHolder;
-  final String? accountLast4;
-  final String? branchCode;
 
   /// Every uploaded image/document, labelled for the review gallery.
   final List<VerificationDocument> documents;
@@ -91,8 +81,8 @@ class PendingVerification {
 
   /// Builds a snapshot from a raw `users/{uid}` document map, or null when the
   /// document is missing. [payoutData] is the applicant's owner+admin-only
-  /// `private/payout` doc (phone and payout bank details, which moved off
-  /// this public doc - see firestore.rules); `VerificationRepository.
+  /// `private/payout` doc (the phone, which moved off this public doc - see
+  /// firestore.rules); `VerificationRepository.
   /// watchPending` loads it per applicant and passes it in here, mirroring
   /// `AuthRepository._mapUser`'s merge. Null (missing/unreadable doc) falls
   /// back to the legacy public-doc locations below, so applicants who
@@ -153,7 +143,6 @@ class PendingVerification {
           : (data['bio'] as String?),
       category: onboarding?['category'] as String?,
       coverageArea: onboarding?['coverageArea'] as String?,
-      hourlyRate: onboarding?['hourlyRate'] as String?,
       // Requestors keep the company name at the top level; providers nest it
       // in the onboarding map, mirroring how `bio` is handled above.
       companyName: (data['companyName'] ??
@@ -164,13 +153,6 @@ class PendingVerification {
       ssmNumber: (verificationData?['ssmNumber'] ??
           data['ssmNumber']) as String?,
       skills: strings(onboarding?['skills']),
-      bankName: (payoutData?['bankName'] ?? onboarding?['bankName']) as String?,
-      accountHolder: (payoutData?['accountHolder'] ??
-          onboarding?['accountHolder']) as String?,
-      accountLast4: (payoutData?['accountLast4'] ??
-          onboarding?['accountLast4']) as String?,
-      branchCode:
-          (payoutData?['branchCode'] ?? onboarding?['branchCode']) as String?,
       documents: docs,
     );
   }
