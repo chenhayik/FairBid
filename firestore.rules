@@ -246,6 +246,24 @@ service cloud.firestore {
                    'priceChangeCount']);
     }
 
+    // Appointment fields are server-owned, so a visit time needs both parties' consent.
+    function scheduleFields() {
+      return ['schedulingRequired', 'appointment', 'appointmentProposal',
+              'appointmentChanges', 'lateRescheduleBy',
+              'onTheWayAt', 'etaMinutes', 'arrivedAt'];
+    }
+    function noScheduleFieldWrites() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(scheduleFields());
+    }
+
+    // A job that needs a visit time can only be delivered once it is confirmed.
+    function jobScheduleReady(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return !job.get('schedulingRequired', false)
+          || job.get('appointment', {}).get('confirmedAt', null) != null;
+    }
+
     // Jobs: signed-in users read. Only a requestor creates their own job, and only
     // the owner edits it. Anyone may change `bidCount` (the bid counter).
     match /jobs/{jobId} {
@@ -255,13 +273,15 @@ service cloud.firestore {
                     && request.resource.data.requestorId == request.auth.uid
                     && roleOf(request.auth.uid) == 'requestor'
                     && !request.resource.data.keys().hasAny(bundleFields())
-                    && !('fundedAtAward' in request.resource.data);
+                    && !('fundedAtAward' in request.resource.data)
+                    && !request.resource.data.keys().hasAny(scheduleFields());
       allow update: if isSignedIn()
                     && ((resource.data.requestorId == request.auth.uid
                          && jobStatusWriteOk()
                          && noCancelFieldWrites()
                          && noAcceptFieldWrites()
                          && noPriceChangeFieldWrites()
+                         && noScheduleFieldWrites()
                          && noBundleFieldWrites()
                          && bundleTaskStatusWriteOk())
                         || request.resource.data.diff(resource.data)
@@ -299,13 +319,15 @@ service cloud.firestore {
       }
 
       // Milestones and money moves are written by Cloud Functions.
-      // Clients may only mark a funded milestone as submitted.
+      // Clients may only mark a funded milestone as submitted, once any
+      // required visit time is confirmed.
       match /milestones/{milestoneId} {
         allow read: if isSignedIn()
                     && (ownsJob(jobId) || isAcceptedProvider(jobId));
         allow create: if false;
         allow update: if isSignedIn() && !isSuspended()
                       && isAcceptedProvider(jobId)
+                      && jobScheduleReady(jobId)
                       && resource.data.status == 'funded'
                       && request.resource.data.status == 'submitted'
                       && request.resource.data.diff(resource.data)

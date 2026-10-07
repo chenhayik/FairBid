@@ -1336,3 +1336,79 @@ describe("fundedAtAward field", () => {
         doc(dbAs(REQUESTOR), "jobs/funded1"), {title: "Renamed"}));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Appointment fields - jobs/{jobId}. Written only by the scheduling callables.
+// Delivering is blocked until a required visit time is confirmed.
+// ---------------------------------------------------------------------------
+describe("Appointment scheduling", () => {
+  const REQUESTOR = "requestor1";
+  const PROVIDER = "provider1";
+  const job = (extra) => ({
+    requestorId: REQUESTOR,
+    acceptedProviderId: PROVIDER,
+    status: "in_progress",
+    ...extra,
+  });
+
+  beforeEach(async () => {
+    await seed([
+      [`users/${REQUESTOR}`, {role: "requestor"}],
+      [`users/${PROVIDER}`, {role: "provider"}],
+      ["jobs/job1", job()],
+      ["jobs/required1", job({schedulingRequired: true})],
+      ["jobs/pending1", job({
+        schedulingRequired: true,
+        appointmentProposal: {options: [Timestamp.now()], by: PROVIDER},
+      })],
+      ["jobs/confirmed1", job({
+        schedulingRequired: true,
+        appointment: {startAt: Timestamp.now(), confirmedAt: Timestamp.now()},
+      })],
+      ...["job1", "required1", "pending1", "confirmed1"].map((id) => [
+        `jobs/${id}/milestones/m0`,
+        {providerId: PROVIDER, status: "funded", amountSen: 1000},
+      ]),
+    ]);
+  });
+
+  const forged = {
+    schedulingRequired: true,
+    appointment: {startAt: Timestamp.now(), confirmedAt: Timestamp.now()},
+    appointmentProposal: {options: [Timestamp.now()], by: REQUESTOR},
+    appointmentChanges: 0,
+    lateRescheduleBy: [REQUESTOR],
+    onTheWayAt: Timestamp.now(),
+    etaMinutes: 30,
+    arrivedAt: Timestamp.now(),
+  };
+  for (const [field, value] of Object.entries(forged)) {
+    it(`denies a requestor writing ${field}`, async () => {
+      await assertFails(updateDoc(
+          doc(dbAs(REQUESTOR), "jobs/job1"), {[field]: value}));
+    });
+  }
+
+  it("denies creating a job that carries appointment fields", async () => {
+    await assertFails(setDoc(doc(dbAs(REQUESTOR), "jobs/new1"), {
+      requestorId: REQUESTOR, status: "open", appointment: {},
+    }));
+  });
+
+  const deliver = (jobId) => updateDoc(
+      doc(dbAs(PROVIDER), `jobs/${jobId}/milestones/m0`),
+      {status: "submitted", submissionNote: "done"});
+
+  it("denies delivering while a required visit time is unconfirmed", async () => {
+    await assertFails(deliver("required1"));
+    await assertFails(deliver("pending1"));
+  });
+
+  it("allows delivering once the visit time is confirmed", async () => {
+    await assertSucceeds(deliver("confirmed1"));
+  });
+
+  it("allows delivering when scheduling was never required", async () => {
+    await assertSucceeds(deliver("job1"));
+  });
+});

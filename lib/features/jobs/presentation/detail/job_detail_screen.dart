@@ -13,6 +13,7 @@ import '../../../../core/util/money.dart';
 import '../../../../core/util/motion.dart';
 import '../../../../core/util/service_categories.dart';
 import '../../../../core/util/time_ago.dart';
+import '../../../../core/util/visit_time.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/user_chip.dart';
@@ -38,11 +39,13 @@ import '../bid/open_bid_sheet.dart';
 import '../bid/submit_bid_sheet.dart';
 import '../widgets/bid_card.dart';
 import '../widgets/insufficient_balance_dialog.dart';
+import 'appointment_card.dart';
 import 'job_address_card.dart';
 import 'job_detail_view_model.dart';
 import 'job_video_player.dart';
 import 'milestone_section.dart';
 import 'photo_strip.dart';
+import 'propose_time_sheet.dart';
 
 /// Job detail screen. Sections keep a fixed order; only which ones show varies.
 /// A pinned bottom bar holds the main action; rare ones go in the menu.
@@ -201,6 +204,11 @@ IconData _timelineIcon(String type) => switch (type) {
   'completed' => Icons.check_circle_outline,
   'cancelled' => Icons.cancel_outlined,
   'price_changed' => Icons.price_change_outlined,
+  'appointment_proposed' => Icons.event_outlined,
+  'appointment_confirmed' => Icons.event_available_outlined,
+  'appointment_withdrawn' => Icons.event_busy_outlined,
+  'on_the_way' => Icons.directions_car_outlined,
+  'arrived' => Icons.place_outlined,
   _ => Icons.circle,
 };
 
@@ -208,7 +216,9 @@ IconData _timelineIcon(String type) => switch (type) {
 Color _timelineColor(BuildContext context, String type) => switch (type) {
   'cancelled' || 'disputed' => context.fairbid.danger,
   'refunded' => context.fairbid.warningText,
-  'released' || 'completed' => context.fairbid.successText,
+  'released' || 'completed' || 'appointment_confirmed' || 'arrived' =>
+    context.fairbid.successText,
+  'appointment_withdrawn' => context.fairbid.warningText,
   _ => context.fairbid.verified,
 };
 
@@ -233,6 +243,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   // Typed so the bottom bar can trigger actions in those sections.
   final _milestonesKey = GlobalKey<MilestoneSectionState>();
   final _reviewKey = GlobalKey<_LeaveReviewCardState>();
+  final _appointmentKey = GlobalKey<AppointmentCardState>();
 
   /// True while a milestone action runs; drives the bottom bar's busy state.
   final _actionBusy = ValueNotifier<bool>(false);
@@ -310,6 +321,10 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
       case JobActionKind.releaseMilestone:
       case JobActionKind.markDelivered:
         _milestonesKey.currentState?.runCurrentAction();
+      case JobActionKind.proposeTime:
+        ProposeTimeSheet.show(context, job);
+      case JobActionKind.confirmTime:
+        _appointmentKey.currentState?.confirm();
       case JobActionKind.message:
         _openJobChat(context, job);
       case JobActionKind.leaveReview:
@@ -574,6 +589,23 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
             (job.status == JobStatus.open && vm.showCancel));
   }
 
+  /// Why "Provider didn't show up" is unavailable, or null when it applies.
+  String? _noShowBlocker(Job job, MilestoneSectionState? milestones) {
+    final start = job.appointment?.startAt;
+    if (start == null) return 'Only once a visit time is confirmed.';
+    if (!DateTime.now().isAfter(start.add(const Duration(minutes: 30)))) {
+      return 'Only 30 minutes after the visit time.';
+    }
+    if (job.arrivedAt != null) return 'The provider marked themselves arrived.';
+    if (milestones?.hasOpenDispute == true) return 'A dispute is already open.';
+    final milestone = milestones?.disputableMilestone;
+    if (milestone == null) return 'Only once payment is held in escrow.';
+    if (milestone.status == MilestoneStatus.submitted) {
+      return 'The provider already marked the work delivered.';
+    }
+    return null;
+  }
+
   /// One place for every way out of a job, each saying why if it's blocked.
   Future<void> _openProblemSheet(
     BuildContext context,
@@ -600,6 +632,16 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
               ? 'Only once payment is held in escrow.'
               : null,
           () => milestones?.raiseDispute(),
+        ),
+      if (inProgress && vm.role == JobViewerRole.owner)
+        (
+          "Provider didn't show up",
+          Icons.person_off_outlined,
+          _noShowBlocker(job, milestones),
+          () => milestones?.raiseDispute(
+            initialStatement: "The provider didn't show up for the visit on "
+                '${formatVisitTime(job.appointment!.startAt)}.',
+          ),
         ),
       if (job.status == JobStatus.open)
         ('Cancel job', Icons.cancel_outlined, null,
@@ -715,7 +757,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         myBid,
         myBundleBid,
         vm,
-        _resolveMilestoneBar(vm, snapshot.data),
+        _resolveMilestoneBar(vm, job, snapshot.data),
       ),
     );
   }
@@ -786,6 +828,11 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
     add(
       vm.showPriceChangeCard ? _PriceChangeCard(job: job, role: vm.role) : null,
+    );
+    add(
+      _milestoneAware(vm, job) && job.schedulingRequired
+          ? AppointmentCard(key: _appointmentKey, job: job, isOwner: isOwner)
+          : null,
     );
     // A never-awarded bundle task (e.g. bundle cancelled) shows nothing here;
     // the owner's "View bundle" is in the bar, a provider's in the banner.
@@ -1986,6 +2033,27 @@ class _WorkingDetails extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         JobAddressCard(job: job, isOwner: isOwner),
+        if (job.status == JobStatus.completed && job.appointment != null) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(
+                Icons.event_available_outlined,
+                size: 16,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Visited on ${formatVisitTime(job.appointment!.startAt)}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
         if (showMessage) ...[
           const SizedBox(height: 16),
           AppCard(
@@ -2265,6 +2333,7 @@ bool _milestoneAware(JobDetailViewModel vm, Job job) =>
 
 _ResolvedBar _resolveMilestoneBar(
   JobDetailViewModel vm,
+  Job job,
   List<Milestone>? milestones,
 ) {
   final isOwner = vm.role == JobViewerRole.owner;
@@ -2285,6 +2354,7 @@ _ResolvedBar _resolveMilestoneBar(
 
   switch (current.status) {
     case MilestoneStatus.funded:
+      if (job.needsAppointment) return _visitTimeBar(vm, job);
       if (!isOwner) {
         return _ResolvedBar(
           action: NextAction(
@@ -2327,6 +2397,45 @@ _ResolvedBar _resolveMilestoneBar(
         waitingLine: vm.waitingLine,
       );
   }
+}
+
+/// What:   Bottom bar while a visit time is still to be agreed.
+/// Input:  [vm] and [job] from _scaffold().
+/// Output: Confirm (a proposal awaits), a waiting line, or Propose a time (provider).
+_ResolvedBar _visitTimeBar(JobDetailViewModel vm, Job job) {
+  final isOwner = vm.role == JobViewerRole.owner;
+  final myUid = isOwner ? job.requestorId : job.acceptedProviderId;
+  final otherName = isOwner
+      ? job.acceptedProviderName ?? 'the provider'
+      : job.requestorName;
+  final proposal = job.appointmentProposal;
+  if (proposal != null) {
+    if (proposal.by == myUid) {
+      return _ResolvedBar(
+        waitingLine: 'Waiting for $otherName to confirm a visit time.',
+      );
+    }
+    return _ResolvedBar(
+      action: NextAction(
+        label: proposal.options.length == 1
+            ? 'Confirm visit time'
+            : 'Choose a visit time',
+        kind: JobActionKind.confirmTime,
+      ),
+    );
+  }
+  if (isOwner) {
+    return _ResolvedBar(
+      waitingLine: 'Waiting for $otherName to propose a visit time.',
+    );
+  }
+  return const _ResolvedBar(
+    action: NextAction(
+      label: 'Propose a time',
+      kind: JobActionKind.proposeTime,
+      contextLine: 'Agree a visit time before you deliver.',
+    ),
+  );
 }
 
 /// The pinned bottom bar; hidden when the viewer has no action or waiting

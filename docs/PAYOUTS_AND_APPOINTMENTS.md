@@ -51,16 +51,23 @@ Happy path after this: award (money moves to escrow) → provider proposes a tim
 
 ## Phase 2 - appointments
 
-- Posting: an optional preferred date and time window (morning, afternoon or evening) on the job. It is shown to bidders and pre-fills the provider's first proposal. It is optional so posting stays quick.
-- Appointment on the job: `appointment: {startAt, endAt?, status: "proposed" | "confirmed", proposedBy, proposedAt, confirmedAt}`, plus `appointmentChanges` (a count). `endAt` is an optional finish date for multi-day work. Use the same step for remote categories (Tutoring, IT, Design), labelled "Start time".
-- `proposeAppointment` callable: either party on an in-progress job proposes a start (and optional finish). It must be in the future, and at most 90 days out. It replaces any pending proposal. On a confirmed appointment it counts as a reschedule.
-- `confirmAppointment` callable: only the other party can confirm. Confirming copies nothing else and notifies the proposer.
-- Reschedule: either party proposes a new time, and the other confirms. The confirmed appointment stays in force until the new one is confirmed. A proposal made less than 24 h before a confirmed start is recorded as late (`lateRescheduleBy: uid`). v1 only records it; see Open decisions.
-- Required: `firestore.rules` rejects the funded → submitted write unless `get(job).data.appointment.status == "confirmed"`. Legacy jobs without `fundedAtAward` are exempt.
-- Bundles: each awarded task has its own appointment. A provider with several tasks in one bundle can "Use this time for my other tasks", which sends one proposal per task.
-- Reminders: a scheduled function every 15 minutes notifies both parties 24 h and 2 h before a confirmed start. Flags on the appointment (`reminded24h`, `reminded2h`) prevent repeats.
-- Timeline: events for proposed, confirmed and rescheduled appointments, logged by the existing job-event trigger pattern.
-- Bottom bar order after award: provider "Propose a time" → requestor "Confirm time" (or "Suggest another") → provider "Mark as done" → requestor "Release payment".
+Phase 2 core and reminders are built. `sendVisitReminders` runs every 15 minutes and notifies both parties 24h and 2h before a confirmed visit, once each (flags on `appointment`); a visit confirmed inside 24h only gets the 2h one. The posting-time preferred window is a later phase.
+
+P3 (location and visit day) is built: the accepted provider gets Google Maps / Waze buttons on the address card, `markOnTheWay` (ETA 15/30/45/60) and `markArrived` callables with timeline events and notifications (cleared on a confirmed reschedule), and the requestor gets a "Provider didn't show up" option in "Problem with this job?" that opens the dispute sheet pre-filled, 30 minutes after the start with no arrival.
+
+P4 is built: "Add to calendar" on a confirmed visit (`add_2_calendar`, no permission); the propose sheet can share one set of times with the same provider's other tasks of a bundle (`alsoJobIds`, one proposal group, one confirm/withdraw, one notification); and the provider home lists "Upcoming visits" with a "Close to another visit" chip.
+
+- Gate: `acceptBid` and `awardBundle` set `schedulingRequired: true` on each awarded job. Jobs already in progress without it are not gated.
+- Agreed time: `appointment: {startAt, endAt?, confirmedAt, confirmedBy}`, absent until confirmed. `endAt` is an optional finish date for multi-day work.
+- Pending proposal: `appointmentProposal: {options: [1-3 timestamps], endAt?, by: uid, at, note?, late}`, absent when none.
+- Counters: `appointmentChanges` counts confirmed changes after the first confirmation. `lateRescheduleBy: [uid]` (arrayUnion) records late reschedules; v1 records only, no penalties.
+- `proposeAppointment({jobId, options: [ms], endAt?, note?})`: requestor or accepted provider, job in progress, no pending cancellation. Options are unique, at least 30 minutes ahead and within 90 days; `endAt` is after the latest option and within 90 days of it; the note is at most 300 characters. It replaces any pending proposal. `late` is true when a confirmed start is under 24 h away. It notifies the other party and logs a timeline event.
+- `respondToAppointment({jobId, optionIndex})`: only the party who did not propose. Copies the chosen option into `appointment` and increments `appointmentChanges` if one already existed. To refuse, the other party suggests new times instead. The proposer is notified and a timeline event is logged ("Visit confirmed: Mon 12 Oct, 10:00 am", Asia/Kuala_Lumpur time).
+- `withdrawAppointmentProposal({jobId})`: only the proposer; logged on the timeline.
+- Rules: clients can't write `schedulingRequired`, `appointment`, `appointmentProposal`, `appointmentChanges` or `lateRescheduleBy`. The funded -> submitted milestone write is denied when `schedulingRequired` is set and `appointment.confirmedAt` is missing.
+- App: `AppointmentCard` (in progress, both parties) with Propose a time, option chips with Confirm and Suggest other times, Waiting plus Withdraw, or the confirmed time with Reschedule. `ProposeTimeSheet` validates the same rules as the server and warns when rescheduling under 24 h before the start. Until confirmed, the provider's bar action is "Propose a time" instead of "Mark as delivered" (hint "Agree a visit time first"). Delivering before the start asks "The visit time hasn't come yet. Mark as delivered anyway?". Completed jobs show "Visited on ...".
+- Bundles: each awarded task has its own appointment; the propose sheet can share the times with the provider's other tasks of the bundle (P4).
+- Bottom bar order after award: provider "Propose a time" -> requestor "Confirm visit time" (or "Suggest other times") -> provider "Mark as delivered" -> requestor "Release payment".
 
 ## Phase 3 - auto-release
 

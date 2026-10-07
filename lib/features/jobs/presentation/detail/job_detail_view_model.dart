@@ -56,6 +56,12 @@ enum JobActionKind {
   /// Releases the current milestone (with confirmation).
   releaseMilestone,
 
+  /// Opens the sheet to propose visit times.
+  proposeTime,
+
+  /// Confirms the other party's proposed visit time.
+  confirmTime,
+
   /// Opens the bundle's award screen, where a still-open live bundle task's
   /// bids are compared rather than in this job's own (empty) bid list.
   viewBundle,
@@ -234,6 +240,8 @@ JobDetailViewModel _forOwner(Job job) {
             ? 'A cancellation request needs your response.'
             : job.priceChangeRequest?.by == 'provider'
             ? 'A price change request needs your response.'
+            : job.needsAppointment
+            ? 'Agree a visit time with $providerName.'
             : '$providerName is on the job. Your payment is secured in '
                   'escrow; release it once the work is done.',
         primaryAction: const NextAction(
@@ -289,6 +297,8 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
             ? 'A cancellation request needs your response.'
             : job.priceChangeRequest?.by == 'requestor'
             ? 'A price change request needs your response.'
+            : job.needsAppointment
+            ? 'Agree a visit time with ${job.requestorName}.'
             : "You're working on \"${job.title}\" for "
                   '${job.requestorName}.',
         primaryAction: const NextAction(

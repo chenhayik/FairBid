@@ -16,18 +16,26 @@ import '../data/dispute_repository.dart';
 /// [milestone]: a statement of the problem plus optional photo evidence.
 /// Submitting freezes the milestone and opens the dispute for admin review.
 class RaiseDisputeSheet extends StatefulWidget {
-  const RaiseDisputeSheet({super.key, required this.milestone});
+  const RaiseDisputeSheet({
+    super.key,
+    required this.milestone,
+    this.initialStatement,
+  });
 
   final Milestone milestone;
 
+  /// Pre-fills the statement field (e.g. for a no-show).
+  final String? initialStatement;
+
   /// Opens the sheet. Resolves to `true` when a dispute was raised.
   static Future<bool?> show(BuildContext context,
-      {required Milestone milestone}) {
+      {required Milestone milestone, String? initialStatement}) {
     return showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => RaiseDisputeSheet(milestone: milestone),
+      builder: (_) => RaiseDisputeSheet(
+          milestone: milestone, initialStatement: initialStatement),
     );
   }
 
@@ -38,7 +46,8 @@ class RaiseDisputeSheet extends StatefulWidget {
 class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
   static const _maxPhotos = 3;
 
-  final _statement = TextEditingController();
+  late final _statement =
+      TextEditingController(text: widget.initialStatement);
   final _picker = ImagePicker();
   final _evidenceUrls = <String>[];
   bool _uploading = false;

@@ -1,4 +1,5 @@
-// Leaf module: helpers shared by bundles.js and bundle_award.js.
+// Leaf module: helpers shared by index.js, bundles.js, bundle_award.js and
+// scheduling.js.
 // Requires only firebase-admin, never those two, to avoid a require cycle.
 
 const admin = require("firebase-admin");
@@ -18,6 +19,19 @@ function notifyUser(tx, uid, {type, title, body, route = null}) {
     read: false,
     createdAt: FieldValue.serverTimestamp(),
   });
+}
+
+/**
+ * What:   Writes one job timeline entry at `jobs/{jobId}/events/{eventId}`.
+ * Input:  [jobId], [eventId] (null = fresh id), [type], [title], optional [tx].
+ * Output: The write; inside [tx] when given.
+ * Notes:  A fixed [eventId] makes trigger retries overwrite, not duplicate.
+ */
+function logJobEvent(jobId, eventId, type, title, tx = null) {
+  const events = admin.firestore().collection(`jobs/${jobId}/events`);
+  const ref = eventId ? events.doc(eventId) : events.doc();
+  const entry = {type, title, at: FieldValue.serverTimestamp()};
+  return tx ? tx.set(ref, entry) : ref.set(entry);
 }
 
 /** `fromUid`/`toUid` sentinel for the escrow leg of a fund/release entry. */
@@ -61,6 +75,7 @@ function writeFundedMilestone(tx, {jobRef, title, requestorId, providerId,
 }
 
 exports.notifyUser = notifyUser;
+exports.logJobEvent = logJobEvent;
 exports.ESCROW = ESCROW;
 exports.appendLedger = appendLedger;
 exports.writeFundedMilestone = writeFundedMilestone;

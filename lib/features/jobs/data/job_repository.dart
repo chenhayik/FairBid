@@ -73,6 +73,36 @@ abstract interface class JobRepository {
   /// The proposer withdraws their pending price change.
   Future<void> withdrawPriceChange(String jobId);
 
+  /// What:   Proposes 1-3 visit times; the other party confirms one.
+  /// Input:  Callable `proposeAppointment` (functions/scheduling.js).
+  /// Output: Replaces any pending proposal; [endAt] is the finish time.
+  ///         [alsoJobIds] are sibling bundle tasks that get the same times.
+  Future<void> proposeAppointment(String jobId,
+      {required List<DateTime> options,
+      DateTime? endAt,
+      String? note,
+      List<String> alsoJobIds = const []});
+
+  /// What:   Confirms the proposed time at [optionIndex].
+  /// Input:  Callable `respondToAppointment` (functions/scheduling.js).
+  /// Output: Sets the job's appointment and clears the proposal.
+  Future<void> respondToAppointment(String jobId, int optionIndex);
+
+  /// What:   Takes back the caller's pending visit proposal.
+  /// Input:  Callable `withdrawAppointmentProposal` (functions/scheduling.js).
+  /// Output: Clears the proposal.
+  Future<void> withdrawAppointmentProposal(String jobId);
+
+  /// What:   Tells the requestor the provider is heading to the visit.
+  /// Input:  Callable `markOnTheWay` (functions/scheduling.js); [etaMinutes] is 15/30/45/60.
+  /// Output: Sets onTheWayAt and etaMinutes; callable again to update the ETA.
+  Future<void> markOnTheWay(String jobId, int etaMinutes);
+
+  /// What:   Tells the requestor the provider has arrived.
+  /// Input:  Callable `markArrived` (functions/scheduling.js).
+  /// Output: Sets arrivedAt.
+  Future<void> markArrived(String jobId);
+
   /// Streams a job's activity timeline (oldest first), written by the server.
   Stream<List<JobEvent>> watchJobEvents(String jobId);
 
@@ -245,6 +275,48 @@ class FirestoreJobRepository implements JobRepository {
   }
 
   @override
+  Future<void> proposeAppointment(String jobId,
+      {required List<DateTime> options,
+      DateTime? endAt,
+      String? note,
+      List<String> alsoJobIds = const []}) async {
+    await _functions.httpsCallable('proposeAppointment').call<void>({
+      'jobId': jobId,
+      'options': [for (final o in options) o.millisecondsSinceEpoch],
+      if (endAt != null) 'endAt': endAt.millisecondsSinceEpoch,
+      if (note != null && note.isNotEmpty) 'note': note,
+      if (alsoJobIds.isNotEmpty) 'alsoJobIds': alsoJobIds,
+    });
+  }
+
+  @override
+  Future<void> respondToAppointment(String jobId, int optionIndex) async {
+    await _functions.httpsCallable('respondToAppointment').call<void>({
+      'jobId': jobId,
+      'optionIndex': optionIndex,
+    });
+  }
+
+  @override
+  Future<void> withdrawAppointmentProposal(String jobId) async {
+    await _functions
+        .httpsCallable('withdrawAppointmentProposal')
+        .call<void>({'jobId': jobId});
+  }
+
+  @override
+  Future<void> markOnTheWay(String jobId, int etaMinutes) async {
+    await _functions
+        .httpsCallable('markOnTheWay')
+        .call<void>({'jobId': jobId, 'etaMinutes': etaMinutes});
+  }
+
+  @override
+  Future<void> markArrived(String jobId) async {
+    await _functions.httpsCallable('markArrived').call<void>({'jobId': jobId});
+  }
+
+  @override
   Stream<List<JobEvent>> watchJobEvents(String jobId) {
     // Newest first, bounded. Descending order makes the limit keep the
     // recent events, so the caller doesn't reverse.
@@ -361,8 +433,24 @@ class FirestoreJobRepository implements JobRepository {
         'requestedAt': (pcr['requestedAt'] as Timestamp?)?.toDate(),
       };
     }
+    data['appointment'] = _toDates(data['appointment']);
+    data['appointmentProposal'] = _toDates(data['appointmentProposal']);
+    data['onTheWayAt'] = (data['onTheWayAt'] as Timestamp?)?.toDate();
+    data['arrivedAt'] = (data['arrivedAt'] as Timestamp?)?.toDate();
     data['cancelledAt'] = (data['cancelledAt'] as Timestamp?)?.toDate();
     data['releasedAt'] = (data['releasedAt'] as Timestamp?)?.toDate();
     return Job.fromMap(doc.id, data);
   }
+
+  /// What:   Converts every Timestamp inside [value] (maps and lists too).
+  /// Input:  A Firestore field value.
+  /// Output: The same shape with DateTimes.
+  Object? _toDates(Object? value) => switch (value) {
+        Timestamp t => t.toDate(),
+        Map m => {
+            for (final e in m.entries) e.key as String: _toDates(e.value),
+          },
+        List l => [for (final v in l) _toDates(v)],
+        _ => value,
+      };
 }

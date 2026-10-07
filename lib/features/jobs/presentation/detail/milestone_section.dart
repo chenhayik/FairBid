@@ -80,6 +80,15 @@ class MilestoneSectionState extends State<MilestoneSection> {
 
   Future<void> _deliver(Milestone milestone) async {
     final repo = context.read<MilestoneRepository>();
+    final visit = widget.job.appointment?.startAt;
+    if (visit != null && visit.isAfter(DateTime.now())) {
+      final early = await _confirm(
+        title: 'Visit time not reached',
+        body: "The visit time hasn't come yet. Mark as delivered anyway?",
+        actionLabel: 'Continue',
+      );
+      if (early != true || !mounted) return;
+    }
     final note = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -158,14 +167,15 @@ class MilestoneSectionState extends State<MilestoneSection> {
   bool get hasOpenDispute =>
       _latest.any((m) => m.status == MilestoneStatus.disputed);
 
-  /// Opens the dispute sheet for [disputableMilestone].
-  Future<void> raiseDispute() async {
+  /// Opens the dispute sheet for [disputableMilestone], optionally pre-filled.
+  Future<void> raiseDispute({String? initialStatement}) async {
     final m = disputableMilestone;
-    if (m != null) await _dispute(m);
+    if (m != null) await _dispute(m, initialStatement);
   }
 
-  Future<void> _dispute(Milestone milestone) async {
-    final raised = await RaiseDisputeSheet.show(context, milestone: milestone);
+  Future<void> _dispute(Milestone milestone, [String? initialStatement]) async {
+    final raised = await RaiseDisputeSheet.show(context,
+        milestone: milestone, initialStatement: initialStatement);
     if (raised == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -307,7 +317,9 @@ class MilestoneSectionState extends State<MilestoneSection> {
     required bool isProvider,
   }) {
     return switch (milestone.status) {
-      MilestoneStatus.funded when isProvider => (
+      // Delivery waits until a visit time is agreed.
+      MilestoneStatus.funded
+          when isProvider && !widget.job.needsAppointment => (
         'Mark as delivered',
         () => _deliver(milestone),
       ),
@@ -707,6 +719,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     final amount = formatRm(m.amountSen);
     final provider = job.acceptedProviderName ?? 'the provider';
     return switch (m.status) {
+      MilestoneStatus.funded when job.needsAppointment =>
+        '$amount secured in escrow. Agree a visit time first.',
       MilestoneStatus.funded =>
         '$amount secured in escrow, $provider is working.',
       MilestoneStatus.submitted => 'Delivered, review and release $amount.',

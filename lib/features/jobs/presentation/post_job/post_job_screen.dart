@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../../../../core/config/platform_config.dart';
 import '../../../../core/util/service_categories.dart';
 import '../../../../core/location/address_hint.dart';
+import '../../../../core/location/geo.dart';
 import '../../../../core/location/region.dart';
 import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -116,8 +117,9 @@ class _PostJobViewState extends State<_PostJobView> {
     );
     final controller = context.read<PostJobController>();
     controller.seedLocation(PickedLocation(
-      lat: user.defaultLat!,
-      lng: user.defaultLng!,
+      // Profiles saved before rounding may hold exact coordinates.
+      lat: coarseCoord(user.defaultLat!),
+      lng: coarseCoord(user.defaultLng!),
       address: region.label,
       region: region,
     ));

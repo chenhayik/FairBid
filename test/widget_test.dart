@@ -42,6 +42,7 @@ import 'package:fairbid/features/jobs/data/bundle_bid_repository.dart';
 import 'package:fairbid/features/jobs/data/bundle_repository.dart';
 import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/data/milestone_repository.dart';
+import 'package:fairbid/features/jobs/domain/appointment.dart';
 import 'package:fairbid/features/jobs/domain/bid.dart';
 import 'package:fairbid/features/jobs/domain/bundle.dart';
 import 'package:fairbid/features/jobs/domain/bundle_award.dart';
@@ -689,6 +690,87 @@ class FakeJobRepository implements JobRepository {
     priceChangeCalls.add('withdraw:$jobId');
   }
 
+  /// Appointment calls made against this fake, as `'kind:jobId[:arg]'`
+  /// (`propose:j1:2`, `accept:j1:0`, `withdraw:j1`, `onTheWay:j1:30`, `arrived:j1`).
+  final appointmentCalls = <String>[];
+
+  /// The `alsoJobIds` of each [proposeAppointment] call, in order.
+  final proposedAlso = <List<String>>[];
+
+  /// The uid recorded as proposer or confirmer (the signed-in test user).
+  String appointmentUid = 'uid-1';
+
+  void _updateJob(String jobId, Job Function(Job) change) {
+    final i = _jobs.indexWhere((j) => j.id == jobId);
+    if (i == -1) return;
+    _jobs[i] = change(_jobs[i]);
+    _notify();
+  }
+
+  @override
+  Future<void> proposeAppointment(
+    String jobId, {
+    required List<DateTime> options,
+    DateTime? endAt,
+    String? note,
+    List<String> alsoJobIds = const [],
+  }) async {
+    appointmentCalls.add('propose:$jobId:${options.length}');
+    proposedAlso.add(alsoJobIds);
+    _updateJob(
+      jobId,
+      (j) => _rebuild(
+        j,
+        appointmentProposal: AppointmentProposal(
+          options: options,
+          by: appointmentUid,
+          endAt: endAt,
+          note: note,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Future<void> respondToAppointment(String jobId, int optionIndex) async {
+    appointmentCalls.add('accept:$jobId:$optionIndex');
+    _updateJob(jobId, (j) {
+      final proposal = j.appointmentProposal;
+      if (proposal == null) {
+        return _rebuild(j, clearAppointmentProposal: true);
+      }
+      return _rebuild(
+        j,
+        appointment: Appointment(
+          startAt: proposal.options[optionIndex],
+          endAt: proposal.endAt,
+        ),
+        clearAppointmentProposal: true,
+      );
+    });
+  }
+
+  @override
+  Future<void> withdrawAppointmentProposal(String jobId) async {
+    appointmentCalls.add('withdraw:$jobId');
+    _updateJob(jobId, (j) => _rebuild(j, clearAppointmentProposal: true));
+  }
+
+  @override
+  Future<void> markOnTheWay(String jobId, int etaMinutes) async {
+    appointmentCalls.add('onTheWay:$jobId:$etaMinutes');
+    _updateJob(
+      jobId,
+      (j) => _rebuild(j, onTheWayAt: DateTime.now(), etaMinutes: etaMinutes),
+    );
+  }
+
+  @override
+  Future<void> markArrived(String jobId) async {
+    appointmentCalls.add('arrived:$jobId');
+    _updateJob(jobId, (j) => _rebuild(j, arrivedAt: DateTime.now()));
+  }
+
 
   /// Yields the timeline seeded in the constructor (or added by
   /// [recordHandover]), re-emitting on every job/event change.
@@ -770,6 +852,12 @@ class FakeJobRepository implements JobRepository {
     String? cancellationRequestedBy,
     String? cancellationReason,
     bool clearCancellationRequest = false,
+    Appointment? appointment,
+    AppointmentProposal? appointmentProposal,
+    bool clearAppointmentProposal = false,
+    DateTime? onTheWayAt,
+    int? etaMinutes,
+    DateTime? arrivedAt,
   }) => Job(
     id: j.id,
     requestorId: j.requestorId,
@@ -797,6 +885,14 @@ class FakeJobRepository implements JobRepository {
     bundleOrder: j.bundleOrder,
     bundleTaskCount: j.bundleTaskCount,
     releasedAt: j.releasedAt,
+    schedulingRequired: j.schedulingRequired,
+    appointment: appointment ?? j.appointment,
+    appointmentProposal: clearAppointmentProposal
+        ? null
+        : (appointmentProposal ?? j.appointmentProposal),
+    onTheWayAt: onTheWayAt ?? j.onTheWayAt,
+    etaMinutes: etaMinutes ?? j.etaMinutes,
+    arrivedAt: arrivedAt ?? j.arrivedAt,
   );
 }
 

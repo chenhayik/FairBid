@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import 'address_hint.dart';
+import 'geo.dart';
 import 'penang.dart';
 import 'penang_districts.dart';
 import 'region.dart';
@@ -170,8 +171,9 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     );
     Navigator.of(context).pop(
       PickedLocation(
-        lat: _center.latitude,
-        lng: _center.longitude,
+        // Stored where any signed-in user can read it, so keep it street-level.
+        lat: coarseCoord(_center.latitude),
+        lng: coarseCoord(_center.longitude),
         address: region.label,
         region: region,
         addressHint: hint,

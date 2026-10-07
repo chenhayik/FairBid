@@ -335,6 +335,7 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
       acceptedBidAmountSen: amount,
       originalBidAmountSen: amount,
       fundedAtAward: true,
+      schedulingRequired: true,
     });
   });
 });
@@ -1937,12 +1938,7 @@ exports.onReviewCreated = functions.firestore
 // Job timeline: server-written events at `jobs/{jobId}/events/{eventId}`.
 // Fixed event ids make trigger retries safe (overwrite, not duplicate).
 
-/** Writes (or, on a retried trigger, overwrites) one timeline entry. */
-function logJobEvent(jobId, eventId, type, title) {
-  return admin.firestore()
-      .doc(`jobs/${jobId}/events/${eventId}`)
-      .set({type, title, at: admin.firestore.FieldValue.serverTimestamp()});
-}
+const {logJobEvent} = require("./common");
 
 /** A job posting starts its timeline. */
 exports.logJobPosted = functions.firestore.document("jobs/{jobId}")
@@ -2225,3 +2221,11 @@ exports.cancelBundle = require("./bundles").cancelBundle;
 exports.previewBundleAward = require("./bundle_award").previewBundleAward;
 exports.awardBundle = require("./bundle_award").awardBundle;
 exports.closeExpiredBundles = require("./bundles").closeExpiredBundles;
+
+exports.proposeAppointment = require("./scheduling").proposeAppointment;
+exports.respondToAppointment = require("./scheduling").respondToAppointment;
+exports.withdrawAppointmentProposal =
+    require("./scheduling").withdrawAppointmentProposal;
+exports.markOnTheWay = require("./scheduling").markOnTheWay;
+exports.markArrived = require("./scheduling").markArrived;
+exports.sendVisitReminders = require("./scheduling").sendVisitReminders;

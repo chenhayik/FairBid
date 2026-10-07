@@ -10,7 +10,8 @@ enum NotificationType {
   dispute,
   payment,
   review,
-  cancellation;
+  cancellation,
+  appointment;
 
   IconData get icon => switch (this) {
         NotificationType.bidReceived => Icons.gavel_rounded,
@@ -22,6 +23,7 @@ enum NotificationType {
         NotificationType.payment => Icons.account_balance_wallet_outlined,
         NotificationType.review => Icons.star_outline,
         NotificationType.cancellation => Icons.cancel_outlined,
+        NotificationType.appointment => Icons.event_outlined,
       };
 
   static NotificationType fromStorage(String? value) => switch (value) {
@@ -33,6 +35,7 @@ enum NotificationType {
         'payment' => NotificationType.payment,
         'review' => NotificationType.review,
         'cancellation' => NotificationType.cancellation,
+        'appointment' => NotificationType.appointment,
         _ => NotificationType.message,
       };
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/location/address_hint.dart';
 import '../../../../core/widgets/app_widgets.dart';
@@ -104,7 +105,7 @@ class _JobAddressCardState extends State<JobAddressCard> {
                 _OwnerContent(
                     job: widget.job, address: address, onEdit: _editAddress)
               else
-                _ProviderContent(address: address),
+                _ProviderContent(job: widget.job, address: address),
             ],
           ),
         );
@@ -185,30 +186,79 @@ class _OwnerContent extends StatelessWidget {
   }
 }
 
+/// What:   The provider's read-only address, with turn-by-turn buttons.
+/// Input:  [address] from JobRepository.watchJobAddress(); [job] for the map pin.
+/// Output: Address text, plus Google Maps and Waze buttons that open the app.
+/// How:    Navigates to the address text, else to the pin; none if neither exists.
 class _ProviderContent extends StatelessWidget {
-  const _ProviderContent({required this.address});
+  const _ProviderContent({required this.job, required this.address});
+  final Job job;
   final ServiceAddress? address;
+
+  Future<void> _open(BuildContext context, Uri uri) async {
+    final messenger = ScaffoldMessenger.of(context);
+    var opened = false;
+    try {
+      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    if (!opened) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Could not open the map app. Please try again.')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    if (address == null) {
-      return Text(
-        "The requestor hasn't shared the address yet.",
-        style: theme.textTheme.bodyMedium
-            ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-      );
-    }
+    final pin = job.location;
+    final hasPin = pin.lat != 0 || pin.lng != 0;
+    final destination = address != null
+        ? address!.formatted.replaceAll('\n', ', ')
+        : '${pin.lat},${pin.lng}';
+    final waze = address != null ? {'q': destination} : {'ll': destination};
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(address!.formatted, style: theme.textTheme.bodyMedium),
-        if (address!.accessNote != null && address!.accessNote!.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text('Access notes', style: theme.textTheme.labelMedium),
-          Text(address!.accessNote!,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        if (address == null)
+          Text(
+            "The requestor hasn't shared the address yet.",
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          )
+        else ...[
+          Text(address!.formatted, style: theme.textTheme.bodyMedium),
+          if (address!.accessNote != null &&
+              address!.accessNote!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Access notes', style: theme.textTheme.labelMedium),
+            Text(address!.accessNote!,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          ],
+        ],
+        if (address != null || hasPin) ...[
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => _open(
+                    context,
+                    Uri.https('www.google.com', '/maps/dir/',
+                        {'api': '1', 'destination': destination})),
+                icon: const Icon(Icons.directions_outlined, size: 18),
+                label: const Text('Google Maps'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _open(
+                    context,
+                    Uri.https(
+                        'waze.com', '/ul', {...waze, 'navigate': 'yes'})),
+                icon: const Icon(Icons.navigation_outlined, size: 18),
+                label: const Text('Waze'),
+              ),
+            ],
+          ),
         ],
       ],
     );

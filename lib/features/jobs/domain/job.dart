@@ -1,4 +1,5 @@
 import '../../../core/util/money.dart';
+import 'appointment.dart';
 import 'price_change_request.dart';
 
 /// Lifecycle of a job.
@@ -125,6 +126,12 @@ class Job {
     this.bundleOrder,
     this.bundleTaskCount,
     this.releasedAt,
+    this.schedulingRequired = false,
+    this.appointment,
+    this.appointmentProposal,
+    this.onTheWayAt,
+    this.etaMinutes,
+    this.arrivedAt,
   });
 
   final String id;
@@ -191,6 +198,27 @@ class Job {
   /// ordinary per-job bids. Server-owned, never written back in [toMap].
   final DateTime? releasedAt;
 
+  /// Set at award: the provider can't deliver until a visit time is agreed.
+  /// Server-owned, never written back in [toMap]; absent on older jobs.
+  final bool schedulingRequired;
+
+  /// The agreed visit time, or null until both sides confirm one.
+  final Appointment? appointment;
+
+  /// A pending proposal of visit times, or null.
+  final AppointmentProposal? appointmentProposal;
+
+  /// Visit day, set by the provider: when they said they were on the way, the
+  /// ETA they gave (15/30/45/60), and when they arrived. Server-owned.
+  final DateTime? onTheWayAt;
+  final int? etaMinutes;
+  final DateTime? arrivedAt;
+
+  /// What:   Whether delivery is waiting on an agreed visit time.
+  /// Input:  [schedulingRequired] and [appointment].
+  /// Output: True until the visit time is confirmed.
+  bool get needsAppointment => schedulingRequired && appointment == null;
+
   bool get isBundleTask => bundleId != null;
 
   /// Whether this task still bids as part of its bundle's package (not yet
@@ -253,5 +281,13 @@ class Job {
         bundleOrder: (m['bundleOrder'] as num?)?.toInt(),
         bundleTaskCount: (m['bundleTaskCount'] as num?)?.toInt(),
         releasedAt: m['releasedAt'] as DateTime?,
+        schedulingRequired: m['schedulingRequired'] as bool? ?? false,
+        appointment:
+            Appointment.fromMap(m['appointment'] as Map<String, dynamic>?),
+        appointmentProposal: AppointmentProposal.fromMap(
+            m['appointmentProposal'] as Map<String, dynamic>?),
+        onTheWayAt: m['onTheWayAt'] as DateTime?,
+        etaMinutes: (m['etaMinutes'] as num?)?.toInt(),
+        arrivedAt: m['arrivedAt'] as DateTime?,
       );
 }

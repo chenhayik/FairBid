@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../../core/location/geo.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
+import '../../../core/util/visit_time.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
@@ -99,6 +100,7 @@ class ProviderHomeScreen extends StatelessWidget {
                 ],
               ),
             ),
+            _UpcomingVisits(uid: user?.uid),
             const SizedBox(height: 32),
             Row(
               children: [
@@ -143,6 +145,82 @@ class _ActiveJobsStat extends StatelessWidget {
             .where((j) => j.status == JobStatus.inProgress)
             .length;
         return StatCard(label: 'Active jobs', value: '$active');
+      },
+    );
+  }
+}
+
+/// What:   Provider home list of confirmed visits that have not started 2h ago.
+/// Input:  [uid]; JobRepository.watchAssignedJobs() (job_repository.dart).
+/// Output: One tappable card per in-progress job with an appointment, by startAt:
+///         time, title and town, plus a "Close to another visit" chip on clashes.
+///         Renders nothing when there are none.
+/// How:    A clash is another visit starting less than 2 hours before or after.
+class _UpcomingVisits extends StatelessWidget {
+  const _UpcomingVisits({required this.uid});
+  final String? uid;
+
+  static const _window = Duration(hours: 2);
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null) return const SizedBox.shrink();
+    return KeyedStreamBuilder<List<Job>>(
+      cacheKey: uid,
+      create: () => context.read<JobRepository>().watchAssignedJobs(uid!),
+      builder: (context, snapshot) {
+        final cutoff = DateTime.now().subtract(_window);
+        final visits = [
+          for (final j in snapshot.data ?? <Job>[])
+            if (j.status == JobStatus.inProgress &&
+                j.appointment != null &&
+                j.appointment!.startAt.isAfter(cutoff))
+              j,
+        ]..sort((a, b) =>
+            a.appointment!.startAt.compareTo(b.appointment!.startAt));
+        if (visits.isEmpty) return const SizedBox.shrink();
+        bool clashes(Job j) => visits.any((o) =>
+            o != j &&
+            o.appointment!.startAt
+                    .difference(j.appointment!.startAt)
+                    .abs() <
+                _window);
+        return Padding(
+          padding: const EdgeInsets.only(top: 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Upcoming visits',
+                  style: Theme.of(context).textTheme.titleLarge),
+              for (final job in visits)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: AppCard(
+                    onTap: () => context.push('/jobs/${job.id}'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(formatVisitTime(job.appointment!.startAt),
+                            style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 4),
+                        Text(job.title),
+                        Text(job.location.town ?? job.location.address,
+                            style: Theme.of(context).textTheme.bodyMedium),
+                        if (clashes(job)) ...[
+                          const SizedBox(height: 8),
+                          PillBadge(
+                            label: 'Close to another visit',
+                            icon: Icons.warning_amber_rounded,
+                            color: context.fairbid.warningText,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
       },
     );
   }

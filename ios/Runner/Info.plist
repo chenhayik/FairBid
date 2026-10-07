@@ -22,6 +22,10 @@
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>FairBid adds your confirmed visit to your calendar when you ask.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>The calendar screen may suggest contacts for the visit.</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>

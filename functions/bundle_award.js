@@ -554,6 +554,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           acceptedProviderName: bid.providerName,
           acceptedBidAmountSen: amountSen,
           fundedAtAward: true,
+          schedulingRequired: true,
         });
         writeFundedMilestone(tx, {
           jobRef: taskRef,
