@@ -5,12 +5,10 @@ import '../domain/app_user.dart';
 import 'auth_controller.dart';
 import 'mfa_code_sheet.dart';
 
-/// Asks the user to prove who they are again, immediately before a sensitive
-/// action (withdrawing money, deleting the account).
-///
-/// Password accounts type their password; Google accounts are sent back
-/// through the Google sheet, so they see no field - just a confirm button.
-/// [show] resolves true only once Firebase accepted the credentials.
+/// What:   Dialog re-proving identity before a sensitive action (withdraw, delete account).
+/// Input:  [user] (password field only for password accounts), [message], [actionLabel].
+/// Output: [show] resolves true only once Firebase accepted the credentials; dismissing is false.
+/// Notes:  Google accounts see just a confirm button and go through the Google sheet.
 class ReauthDialog extends StatefulWidget {
   const ReauthDialog({
     super.key,
@@ -23,8 +21,6 @@ class ReauthDialog extends StatefulWidget {
   final String message;
   final String actionLabel;
 
-  /// Shows the dialog and returns whether identity was confirmed. Dismissing
-  /// it counts as a no.
   static Future<bool> show(
     BuildContext context, {
     required AppUser user,
@@ -73,10 +69,10 @@ class _ReauthDialogState extends State<ReauthDialog> {
       return;
     }
 
-    // An enrolled user must also pass their second factor here.
+    // An enrolled user must also pass the second factor.
     final challenge = auth.takePendingChallenge();
     if (challenge != null) {
-      // Stop the spinner while the code sheet (a separate modal) is up top.
+      // Stop the spinner while the code sheet is on top.
       setState(() => _busy = false);
       final verified = await MfaCodeSheet.show(context, challenge: challenge);
       if (!mounted) return;

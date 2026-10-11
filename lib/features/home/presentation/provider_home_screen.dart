@@ -22,8 +22,9 @@ import '../../jobs/domain/milestone.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
 import 'home_app_bar.dart';
 
-/// Provider Home: verification status, key stat cards, and the "jobs near you"
-/// section.
+/// What:   Provider Home: verification status, stat cards, upcoming visits and nearby jobs.
+/// Input:  [AuthController] user; job, bid and milestone repositories.
+/// Output: Dashboard list.
 class ProviderHomeScreen extends StatelessWidget {
   const ProviderHomeScreen({super.key});
 
@@ -69,7 +70,7 @@ class ProviderHomeScreen extends StatelessWidget {
                     'approves your documents.',
               ),
             const SizedBox(height: 16),
-            // IntrinsicHeight + stretch keeps both cards in a row equally tall.
+            // IntrinsicHeight + stretch keeps a row's cards equally tall.
             IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -77,7 +78,7 @@ class ProviderHomeScreen extends StatelessWidget {
                   Expanded(
                     child: StatCard(
                       label: 'Trust Score',
-                      // Hidden until earned (verified + enough completed jobs).
+                      // Hidden until earned.
                       value: scoreVisible ? '$trustPercent/100' : 'New',
                       icon: Icons.shield_outlined,
                     ),
@@ -123,7 +124,7 @@ class ProviderHomeScreen extends StatelessWidget {
   }
 }
 
-/// Live count of the provider's jobs currently in progress.
+/// Count of the provider's in-progress jobs.
 class _ActiveJobsStat extends StatelessWidget {
   const _ActiveJobsStat({required this.uid});
   final String? uid;
@@ -150,12 +151,9 @@ class _ActiveJobsStat extends StatelessWidget {
   }
 }
 
-/// What:   Provider home list of confirmed visits that have not started 2h ago.
+/// What:   Confirmed visits that started less than 2h ago or are upcoming.
 /// Input:  [uid]; JobRepository.watchAssignedJobs() (job_repository.dart).
-/// Output: One tappable card per in-progress job with an appointment, by startAt:
-///         time, title and town, plus a "Close to another visit" chip on clashes.
-///         Renders nothing when there are none.
-/// How:    A clash is another visit starting less than 2 hours before or after.
+/// Output: A card per in-progress job with an appointment, by start time; a clash chip when another visit is within 2h. Nothing when empty.
 class _UpcomingVisits extends StatelessWidget {
   const _UpcomingVisits({required this.uid});
   final String? uid;
@@ -226,8 +224,7 @@ class _UpcomingVisits extends StatelessWidget {
   }
 }
 
-/// Live count of the provider's still-pending bids - ordinary per-job bids
-/// plus package bids on a bundle.
+/// Count of the provider's pending per-job and bundle bids.
 class _PendingBidsStat extends StatelessWidget {
   const _PendingBidsStat({required this.uid});
   final String? uid;
@@ -269,8 +266,7 @@ class _PendingBidsStat extends StatelessWidget {
   }
 }
 
-/// Live total of the provider's released milestone payments across every job
-/// (relabelled from "Earnings (MTD)": month-to-date filtering isn't tracked).
+/// Total of the provider's released milestone payments across every job.
 class _TotalEarningsStat extends StatelessWidget {
   const _TotalEarningsStat({required this.uid});
   final String? uid;
@@ -300,8 +296,7 @@ class _TotalEarningsStat extends StatelessWidget {
   }
 }
 
-/// The nearest few open jobs for the provider home - or, with no location
-/// saved yet, the newest few plus a prompt to set one.
+/// The three nearest open jobs, or the newest three plus a prompt when no location is saved.
 class _NearbyJobs extends StatelessWidget {
   const _NearbyJobs();
 
@@ -314,16 +309,9 @@ class _NearbyJobs extends StatelessWidget {
         : null;
 
     return KeyedStreamBuilder<List<Job>>(
-      // Only the three nearest are shown, but "nearest" is ranked in Dart, so
-      // the window has to be wide enough that a close-but-older job is not
-      // cut off by recency first. A wider bound than the feed's is the
-      // pragmatic middle ground; a proper fix needs geo-queries (geohash),
-      // which is a much larger change.
+      // Distance is ranked in Dart, so fetch a wide window or a close-but-older job is cut off.
       create: () => repo.watchOpenJobs(limit: 100),
       builder: (context, snapshot) {
-        // Loading and error both used to fall through to "No jobs yet", so a
-        // provider was told there was no work near them while the query was
-        // still running, or whenever it failed.
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const AppCard(
             child: Padding(
@@ -351,8 +339,7 @@ class _NearbyJobs extends StatelessWidget {
             ),
           );
         }
-        // Newest first (the query's order) until a location makes distance
-        // meaningful.
+        // Newest first (the query's order) until a location exists.
         final ranked = [
           for (final job in jobs)
             (

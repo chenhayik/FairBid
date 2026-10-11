@@ -11,20 +11,10 @@ import 'penang.dart';
 import 'penang_districts.dart';
 import 'region.dart';
 
-/// Penang-bounded location picker: a District dropdown (required), an
-/// optional Town dropdown, and a map - all kept in two-way sync. Replaces the
-/// old free-text location fields across the app. Push it with
-/// [RegionPickerScreen.show].
-///
-/// - Dragging the map re-classifies the centre pin's district via offline
-///   point-in-polygon ([PenangDistricts]) - the arbiter of record.
-/// - Picking a District recentres the map to that district's seat.
-/// - Picking a Town best-effort forward-geocodes it to recentre precisely,
-///   falling back to the district seat if that fails or lands outside Penang.
-/// - "Use this location" is disabled whenever the centre isn't inside any of
-///   Penang's 5 districts; the District dropdown itself stays editable as a
-///   near-border escape hatch (picking one always recentres to a point that's
-///   in-bounds).
+/// What:   Penang-bounded location picker: District dropdown, optional Town dropdown and a map, kept in sync.
+/// Input:  [initialCenter], optional [initialRegion]; open with [RegionPickerScreen.show].
+/// Output: Pops a [PickedLocation]. Dragging re-classifies the district (PenangDistricts); picking a district recentres on its seat;
+///         picking a town geocodes it (falling back to the seat); "Use this location" is disabled outside Penang.
 class RegionPickerScreen extends StatefulWidget {
   const RegionPickerScreen({
     super.key,
@@ -34,8 +24,7 @@ class RegionPickerScreen extends StatefulWidget {
 
   final LatLng initialCenter;
 
-  /// Pre-fills the district/town when re-opening the picker to edit an
-  /// existing pick.
+  /// Pre-fills the district and town when editing an existing pick.
   final Region? initialRegion;
 
   static Future<PickedLocation?> show(
@@ -66,10 +55,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
   String? _town;
   bool _resolving = false;
 
-  /// True once the classifier's GeoJSON has finished loading. Guards
-  /// [_syncDistrictForCenter] so a map move that fires before the asset
-  /// finishes loading (e.g. the recentre right after picking a district)
-  /// can't clobber that pick with a premature "not yet classified" null.
+  /// True once the GeoJSON has loaded; stops an early map move from clobbering a picked district with null.
   bool _ready = false;
 
   @override
@@ -95,9 +81,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     super.dispose();
   }
 
-  /// Re-classifies [_districtCode] from the current [_center] via
-  /// point-in-polygon (the arbiter of record), clearing [_town] if it no
-  /// longer belongs to the (possibly new) district.
+  /// Re-classifies the district from [_center], clearing [_town] if it no longer belongs.
   void _syncDistrictForCenter() {
     _districtCode = _districts.districtCodeAt(_center);
     final towns = kPenangTowns[_districtCode];
@@ -107,9 +91,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
   void _onPositionChanged(MapCamera camera, bool hasGesture) {
     setState(() {
       _center = camera.center;
-      // Before the classifier has loaded, isInPenang(_center) already reads
-      // false everywhere else, so there's nothing useful to sync yet - and
-      // doing so would wipe out an explicit district pick (see [_ready]).
+      // Skipped before load: syncing would wipe an explicit district pick (see [_ready]).
       if (_ready) _syncDistrictForCenter();
     });
   }
@@ -137,9 +119,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     if (target != null) _mapController.move(target, 15);
   }
 
-  /// Best-effort forward geocode; returns `null` on any failure (no matches,
-  /// no geocoder available, etc.) so the caller can fall back to the district
-  /// seat. Convenience only - never the source of district truth.
+  /// Best-effort forward geocode; null on failure so the caller falls back to the district seat.
   Future<LatLng?> _forwardGeocode(String address) async {
     try {
       final results = await Geocoding().locationFromAddress(address);
@@ -154,15 +134,10 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     final code = _districtCode;
     if (code == null || !_districts.isInPenang(_center)) return;
     setState(() => _resolving = true);
-    // One reverse geocode serves two purposes: suggesting a town label when
-    // the user didn't pick one, and carrying a street-level hint back for the
-    // private service-address form. Null on any failure - both uses are
-    // optional, so nothing here can block the pick.
+    // One reverse geocode suggests a town and carries a hint for the service-address form; failure blocks nothing.
     final hint = await reverseGeocode(_center);
     if (!mounted) return;
-    // The suggested town is only accepted when it matches one of
-    // [kPenangTowns], so the stored town is always one of the fixed, known
-    // options rather than raw geocoder output.
+    // Only a town from [kPenangTowns] is accepted, never raw geocoder output.
     final town = _town ?? hint?.matchTown(kPenangTowns[code] ?? const []);
     final region = Region(
       districtCode: code,
@@ -171,7 +146,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     );
     Navigator.of(context).pop(
       PickedLocation(
-        // Stored where any signed-in user can read it, so keep it street-level.
+        // Any signed-in user can read this, so round it.
         lat: coarseCoord(_center.latitude),
         lng: coarseCoord(_center.longitude),
         address: region.label,
@@ -257,7 +232,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
                       ),
                     ],
                   ),
-                  // Fixed centre pin (nudged up so its tip marks the centre).
+                  // Centre pin, nudged up so its tip marks the centre.
                   Padding(
                     padding: const EdgeInsets.only(bottom: 36),
                     child: Icon(

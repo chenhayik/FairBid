@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -8,26 +9,22 @@ import '../domain/job_event.dart';
 import '../domain/service_address.dart';
 import 'bid_repository.dart' show InsufficientBalanceException;
 
-/// Firestore's cap on the number of values in a `whereIn` filter.
 const int kWhereInLimit = 30;
 
-/// Splits [ids] into consecutive chunks of at most [limit], keeping order.
-/// Needed because Firestore rejects `whereIn` with over [kWhereInLimit] values.
-List<List<String>> chunkForWhereIn(List<String> ids, {int limit = kWhereInLimit}) {
-  assert(limit > 0, 'limit must be positive');
-  return [
-    for (var i = 0; i < ids.length; i += limit)
-      ids.sublist(i, i + limit > ids.length ? ids.length : i + limit),
-  ];
-}
+/// Splits [ids] into ordered chunks of at most [kWhereInLimit], Firestore's `whereIn` cap.
+List<List<String>> chunkForWhereIn(List<String> ids) => [
+      for (var i = 0; i < ids.length; i += kWhereInLimit)
+        ids.sublist(i, min(i + kWhereInLimit, ids.length)),
+    ];
 
-/// How many open jobs the feed loads at a time. The feed grows this window
-/// so the list stays live and the query stays bounded.
+/// Open jobs the feed loads per page; the feed grows the window.
 const int kOpenJobsPageSize = 30;
 
-/// Reads and writes jobs. The UI uses this interface so tests can fake it.
+/// What:   Job reads and writes, behind an interface so tests can fake it.
+/// Input:  Firestore `jobs` plus callables, via FirestoreJobRepository.
+/// Output: Job streams/reads, cancellations, price changes, visit scheduling, private address.
 abstract interface class JobRepository {
-  /// Creates a new open job and returns its id.
+  /// Creates an open job; returns its id.
   Future<String> create(Job job);
 
   /// Open jobs, newest first, up to [limit]. [category] filters on the server,
@@ -43,19 +40,16 @@ abstract interface class JobRepository {
   Stream<List<Job>> watchBundleTasks(String bundleId);
 
   /// One-shot read of [bundleId]'s tasks, ordered like [watchBundleTasks].
-  /// Used where a live query might miss tasks, e.g. the bid sheet.
   Future<List<Job>> getBundleTasks(String bundleId);
 
-  Future<Job?> getById(String id);
-
-  /// Streams one job, emitting on every change; null when it doesn't exist.
+  /// Streams one job; null when it doesn't exist.
   Stream<Job?> watchJob(String id);
 
   /// Cancels a still-open job. Rules only allow open to cancelled directly;
   /// later cancellations use the callables below.
   Future<void> cancelOpenJob(String id);
 
-  /// Either party asks to cancel an in-progress job. Refused if escrow is held.
+  /// Either party asks to cancel an in-progress job. Refused while a stage is delivered or disputed.
   Future<void> requestCancellation(String jobId, {String? reason});
 
   /// The other party answers a cancellation request: [accept] finishes it,
@@ -66,8 +60,7 @@ abstract interface class JobRepository {
   Future<void> requestPriceChange(String jobId,
       {required int newAmountSen, required String reason});
 
-  /// The other party answers a price change. Accepting an increase can fail
-  /// with `insufficient_balance`, like `acceptBid`.
+  /// The other party answers a price change; accepting an increase can fail with `insufficient_balance`.
   Future<void> respondToPriceChange(String jobId, {required bool accept});
 
   /// The proposer withdraws their pending price change.
@@ -106,19 +99,19 @@ abstract interface class JobRepository {
   /// Streams a job's activity timeline (oldest first), written by the server.
   Stream<List<JobEvent>> watchJobEvents(String jobId);
 
-  /// Streams the user's saved jobs for [jobIds], newest first (empty if none).
-  /// Must return every id, working around Firestore's 30-id `whereIn` limit.
+  /// Streams the saved jobs for [jobIds], newest first; handles lists over the `whereIn` cap.
   Stream<List<Job>> watchSavedJobs(List<String> jobIds);
 
   /// Saves [jobId]'s private service address. Only the owner may write it.
   Future<void> setJobAddress(String jobId, ServiceAddress address);
 
-  /// Streams [jobId]'s private service address (null if unset). Only the owner,
-  /// accepted provider and admins can read it.
+  /// Streams [jobId]'s private address (null if unset); readable by the owner, accepted provider and admins.
   Stream<ServiceAddress?> watchJobAddress(String jobId);
 }
 
-/// Firestore version of [JobRepository]. Jobs live in the `jobs` collection.
+/// What:   Firestore implementation of [JobRepository].
+/// Input:  `jobs` collection (and its `events` and `private` subcollections); Cloud Functions callables.
+/// Output: Jobs with Timestamps converted to DateTime.
 class FirestoreJobRepository implements JobRepository {
   FirestoreJobRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -147,8 +140,7 @@ class FirestoreJobRepository implements JobRepository {
     String? category,
     int limit = kOpenJobsPageSize,
   }) {
-    // Both shapes use composite indexes in firestore.indexes.json:
-    // (status, createdAt) and (status, category, createdAt).
+    // Needs composite indexes (status, createdAt) and (status, category, createdAt).
     Query<Map<String, dynamic>> query =
         _jobs.where('status', isEqualTo: JobStatus.open.storage);
     if (category != null) {
@@ -196,12 +188,6 @@ class FirestoreJobRepository implements JobRepository {
         .orderBy('bundleOrder')
         .get();
     return _toJobs(snapshot);
-  }
-
-  @override
-  Future<Job?> getById(String id) async {
-    final doc = await _jobs.doc(id).get();
-    return doc.exists ? _fromDoc(doc) : null;
   }
 
   @override
@@ -253,16 +239,8 @@ class FirestoreJobRepository implements JobRepository {
         'accept': accept,
       });
     } on FirebaseFunctionsException catch (e) {
-      final details = e.details;
-      if (e.code == 'failed-precondition' &&
-          details is Map &&
-          details['reason'] == 'insufficient_balance') {
-        throw InsufficientBalanceException(
-          shortfallSen: (details['shortfallSen'] as num).toInt(),
-          availableSen: (details['availableSen'] as num).toInt(),
-          requiredSen: (details['requiredSen'] as num).toInt(),
-        );
-      }
+      final shortfall = InsufficientBalanceException.from(e);
+      if (shortfall != null) throw shortfall;
       rethrow;
     }
   }
@@ -318,8 +296,7 @@ class FirestoreJobRepository implements JobRepository {
 
   @override
   Stream<List<JobEvent>> watchJobEvents(String jobId) {
-    // Newest first, bounded. Descending order makes the limit keep the
-    // recent events, so the caller doesn't reverse.
+    // Descending, so the limit keeps the newest events.
     return _jobs
         .doc(jobId)
         .collection('events')
@@ -337,19 +314,16 @@ class FirestoreJobRepository implements JobRepository {
   Stream<List<Job>> watchSavedJobs(List<String> jobIds) {
     if (jobIds.isEmpty) return Stream.value(const []);
 
-    // Firestore's whereIn allows 30 ids, so query in chunks of 30 and combine.
     final chunks = chunkForWhereIn(jobIds);
 
     Stream<List<Job>> chunkStream(List<String> ids) =>
         _jobs.where(FieldPath.documentId, whereIn: ids).snapshots().map(_toJobs);
 
-    // The common case: a single query.
     if (chunks.length == 1) return chunkStream(chunks.first).map(_byNewest);
 
     return _combineLatest(chunks.map(chunkStream).toList()).map(_byNewest);
   }
 
-  /// Most recent timeline entries kept for a job (the list shows the tail).
   static const _jobEventsLimit = 50;
 
   /// Newest first. Chunks finish in any order, so sort to keep the list steady.
@@ -364,8 +338,7 @@ class FirestoreJobRepository implements JobRepository {
     return sorted;
   }
 
-  /// Emits the latest value of every stream in [streams] once all have emitted.
-  /// A small hand-written combineLatest (rxdart isn't worth it for one use).
+  /// combineLatest: emits once every stream in [streams] has emitted (no rxdart dependency).
   Stream<List<Job>> _combineLatest(List<Stream<List<Job>>> streams) {
     final latest = List<List<Job>?>.filled(streams.length, null);
     final subscriptions = <StreamSubscription<List<Job>>>[];
@@ -378,7 +351,7 @@ class FirestoreJobRepository implements JobRepository {
           subscriptions.add(streams[index].listen(
             (jobs) {
               latest[index] = jobs;
-              // Wait until every chunk has reported, so the list isn't partial.
+              // Wait for every chunk so the list isn't partial.
               if (latest.every((chunk) => chunk != null)) {
                 controller.add([for (final chunk in latest) ...chunk!]);
               }
@@ -419,28 +392,10 @@ class FirestoreJobRepository implements JobRepository {
   List<Job> _toJobs(QuerySnapshot<Map<String, dynamic>> snapshot) =>
       snapshot.docs.map(_fromDoc).toList();
 
-  /// Turns Firestore Timestamps into DateTime before building the [Job].
-  Job _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = Map<String, dynamic>.of(doc.data() ?? {});
-    data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
-    data['deadline'] = (data['deadline'] as Timestamp?)?.toDate();
-    data['cancellationRequestedAt'] =
-        (data['cancellationRequestedAt'] as Timestamp?)?.toDate();
-    final pcr = data['priceChangeRequest'];
-    if (pcr is Map) {
-      data['priceChangeRequest'] = {
-        ...Map<String, dynamic>.from(pcr),
-        'requestedAt': (pcr['requestedAt'] as Timestamp?)?.toDate(),
-      };
-    }
-    data['appointment'] = _toDates(data['appointment']);
-    data['appointmentProposal'] = _toDates(data['appointmentProposal']);
-    data['onTheWayAt'] = (data['onTheWayAt'] as Timestamp?)?.toDate();
-    data['arrivedAt'] = (data['arrivedAt'] as Timestamp?)?.toDate();
-    data['cancelledAt'] = (data['cancelledAt'] as Timestamp?)?.toDate();
-    data['releasedAt'] = (data['releasedAt'] as Timestamp?)?.toDate();
-    return Job.fromMap(doc.id, data);
-  }
+  Job _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) => Job.fromMap(
+        doc.id,
+        _toDates(doc.data() ?? {}) as Map<String, dynamic>,
+      );
 
   /// What:   Converts every Timestamp inside [value] (maps and lists too).
   /// Input:  A Firestore field value.

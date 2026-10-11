@@ -6,9 +6,9 @@ import '../../auth/presentation/auth_controller.dart';
 import 'provider_flow_screen.dart';
 import 'requestor_flow_screen.dart';
 
-/// The single `/onboarding` route. Dispatches to the right onboarding flow
-/// based on the signed-in user's role: the 6-stage provider flow, or the
-/// lighter 3-stage requestor flow.
+/// What:   The `/onboarding` route.
+/// Input:  Signed-in user's role from [AuthController].
+/// Output: ProviderFlowScreen for providers, else RequestorFlowScreen.
 class OnboardingFlowScreen extends StatelessWidget {
   const OnboardingFlowScreen({super.key});
 

@@ -4,32 +4,41 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const {FieldValue, Timestamp} = require("firebase-admin/firestore");
-const {callerUid, bad, docId, bundleBiddingOpen, splitBundlePrice} =
-    require("./bundles");
-const {notifyUser, writeFundedMilestone} = require("./common");
+const {bundleBiddingOpen, splitBundlePrice} = require("./bundles");
+const {
+  callerUid, bad, docId, throwIfSuspended, assertCanPay, notifyUser,
+  writeFundedMilestone,
+} = require("./common");
 
 // Must match PlatformConfig.neutralTrustScore.
 const NEUTRAL_TRUST = 700;
 
-/** Every set of tasks a bid would accept, with what each set costs. */
-// Any non-empty subset of the bid's tasks is an offer.
+/** Sen per task if [bid] wins [taskIds]; the bundle price only for all of them. */
+function amountsFor(bid, taskIds) {
+  return taskIds.length === Object.keys(bid.taskPrices).length &&
+      bid.bundlePriceSen != null ?
+    splitBundlePrice(bid.taskPrices, bid.bundlePriceSen) :
+    Object.fromEntries(taskIds.map((id) => [id, bid.taskPrices[id]]));
+}
+
+/**
+ * What:   Offers for one bid: every non-empty subset of its tasks.
+ * Input:  [bid] {providerId, taskPrices, bundlePriceSen}, [taskIndex] id to bit.
+ * Output: [{providerId, taskAmountsSen, taskMask, priceSen}].
+ * Notes:  Skips subsets with a task the bundle no longer has.
+ */
 function offersFor(bid, taskIndex) {
   const priced = Object.keys(bid.taskPrices);
   const offers = [];
   for (let subset = 1; subset < (1 << priced.length); subset++) {
     const chosen = priced.filter((_, i) => (subset >> i) & 1);
-    // Skip task ids the bundle no longer has (they would count as task 0).
     if (chosen.some((id) => !Object.hasOwn(taskIndex, id))) continue;
-    const isWholeBid = chosen.length === priced.length;
-
-    const amounts = isWholeBid && bid.bundlePriceSen != null ?
-        splitBundlePrice(bid.taskPrices, bid.bundlePriceSen) :
-        Object.fromEntries(chosen.map((id) => [id, bid.taskPrices[id]]));
+    const amounts = amountsFor(bid, chosen);
     offers.push({
       providerId: bid.providerId,
       taskAmountsSen: amounts,
       taskMask: chosen.reduce((mask, id) => mask | (1 << taskIndex[id]), 0),
-      priceSen: Object.values(amounts).reduce((sum, sen) => sum + sen, 0),
+      priceSen: totalSenOf([{taskAmountsSen: amounts}]),
     });
   }
   return offers;
@@ -40,8 +49,7 @@ function weightedTrust(awards, trustByProvider) {
   let money = 0;
   let weighted = 0;
   awards.forEach((award) => {
-    const total = Object.values(award.taskAmountsSen)
-        .reduce((sum, sen) => sum + sen, 0);
+    const total = totalSenOf([award]);
     money += total;
     weighted += (trustByProvider[award.providerId] || 0) * total;
   });
@@ -65,14 +73,12 @@ function countBits(value) {
   return count;
 }
 
-/** The most a fewer-provider option may cost above the cheapest one. */
-// Both limits apply; the smaller one wins.
+/** The most a fewer-provider option may cost above the cheapest (smaller cap). */
 function allowanceSen(cheapestSen, capPct, capSen) {
   return Math.min(Math.floor(cheapestSen * capPct / 100), capSen);
 }
 
 /** Best award with exactly `k` providers within `ceiling` (top Trust Score). */
-// Needed because the DP below keeps only the cheapest award per state.
 function bestWithinCap({bidOffers, trustByProvider, coverage, k, ceiling}) {
   let best = null;
   const awards = [];
@@ -120,8 +126,12 @@ function trustByProviderFrom(bids) {
   return Object.fromEntries(bids.map((b) => [b.providerId, b.trustScore || 0]));
 }
 
-/** Builds the three options the requestor chooses between. */
-// Coverage first, then cost. Returns [] when nothing can be awarded.
+/**
+ * What:   Builds the three options the requestor chooses between.
+ * Input:  {tasks, bids, capPct, capSen} (shapes from taskFromSnap/bidFromSnap).
+ * Output: [cheapest, fewest, recommended], or [] when nothing can be awarded.
+ * How:    Most tasks covered first, then cost; a DP over task masks.
+ */
 function buildAwardOptions({tasks, bids, capPct, capSen}) {
   const trustByProvider = trustByProviderFrom(bids);
   const taskIndex = Object.fromEntries(tasks.map((t, i) => [t.id, i]));
@@ -241,8 +251,12 @@ function option(
   };
 }
 
-/** Prices and checks a hand-made award, before the server moves any money. */
-// Uses Map lookups so ids like "__proto__" cannot hit Object.prototype.
+/**
+ * What:   Prices and checks a hand-made award before any money moves.
+ * Input:  {tasks, bids, providerByTaskId}.
+ * Output: {awards, problems}; problems is empty when the pick is valid.
+ * Notes:  Map lookups, so ids like "__proto__" can't hit Object.prototype.
+ */
 function checkManualAward({tasks, bids, providerByTaskId}) {
   const problems = [];
   const bidByProvider = new Map(bids.map((b) => [b.providerId, b]));
@@ -275,12 +289,7 @@ function checkManualAward({tasks, bids, providerByTaskId}) {
       problems.push(`${bid.providerName} never priced ${titles}.`);
       return;
     }
-    const isWholeBid =
-        wonTaskIds.length === Object.keys(bid.taskPrices).length;
-    const amounts = isWholeBid && bid.bundlePriceSen != null ?
-        splitBundlePrice(bid.taskPrices, bid.bundlePriceSen) :
-        Object.fromEntries(wonTaskIds.map((id) => [id, bid.taskPrices[id]]));
-    awards.push({providerId, taskAmountsSen: amounts});
+    awards.push({providerId, taskAmountsSen: amountsFor(bid, wonTaskIds)});
   });
 
   return {awards, problems};
@@ -293,7 +302,11 @@ function totalSenOf(awards) {
         .reduce((inner, sen) => inner + sen, 0), 0);
 }
 
-/** Prices the requestor's hand-picked award, or returns the problems with it. */
+/**
+ * What:   Prices the requestor's hand-picked award as an option card.
+ * Input:  {tasks, bids, providerByTaskId, cheapestCostSen}.
+ * Output: {manual, problems}; manual is null when there are problems.
+ */
 function manualOption({tasks, bids, providerByTaskId, cheapestCostSen}) {
   const {awards, problems} = checkManualAward({tasks, bids, providerByTaskId});
   if (problems.length > 0) return {manual: null, problems};
@@ -320,18 +333,16 @@ function taskFromSnap(snap) {
 
 /** The shape the award engine needs from a bundle bid, incl. Trust Score. */
 function bidFromSnap(doc) {
+  const d = doc.data();
+  const visible = d.providerScoreVisible === true;
   return {
     providerId: doc.id,
-    providerName: doc.data().providerName || "Provider",
+    providerName: d.providerName || "Provider",
     // A hidden ("New") score counts as the neutral baseline when ranking.
-    trustScore: doc.data().providerScoreVisible === true ?
-        doc.data().providerTrustScore || 0 :
-        NEUTRAL_TRUST,
-    scoreVisible: doc.data().providerScoreVisible === true,
-    taskPrices: doc.data().taskPrices || {},
-    bundlePriceSen: doc.data().bundlePriceSen == null ?
-        null :
-        doc.data().bundlePriceSen,
+    trustScore: visible ? d.providerTrustScore || 0 : NEUTRAL_TRUST,
+    scoreVisible: visible,
+    taskPrices: d.taskPrices || {},
+    bundlePriceSen: d.bundlePriceSen ?? null,
   };
 }
 
@@ -363,7 +374,12 @@ async function readBundleForAward(db, bundleId, uid) {
   return {bundle, tasks, bids};
 }
 
-/** The 3 award options for the requestor, plus "Your pick" if one is sent. */
+/**
+ * What:   Callable that previews how a bundle could be awarded.
+ * Input:  {bundleId, providerByTaskId?} from BundleRepository.previewAward().
+ * Output: {options, manual?, problems?}: 3 options, plus "Your pick" if sent.
+ * Notes:  Uses the cap saved on the bundle when it was posted.
+ */
 exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
@@ -372,7 +388,6 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   const db = admin.firestore();
   const {bundle, tasks, bids} = await readBundleForAward(db, bundleId, uid);
 
-  // Checked here so the app does not show options awardBundle would refuse.
   if (!bundleBiddingOpen(bundle)) {
     throw new functions.https.HttpsError(
         "failed-precondition",
@@ -380,7 +395,6 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
         "awarded.");
   }
 
-  // Uses the cap saved on the bundle when posted, not today's PlatformConfig.
   const openTasks = tasks.filter((t) => t.status === "open");
   const options = buildAwardOptions({
     tasks: openTasks,
@@ -388,7 +402,7 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
     capPct: bundle.consolidationCapPct || 0,
     capSen: bundle.consolidationCapSen || 0,
   });
-  if (picks == null) return {options, bidCount: bids.length};
+  if (picks == null) return {options};
 
   const {manual, problems} = manualOption({
     tasks: openTasks,
@@ -396,7 +410,7 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
     providerByTaskId: picks,
     cheapestCostSen: options.length > 0 ? options[0].totalSen : 0,
   });
-  return {options, bidCount: bids.length, manual, problems};
+  return {options, manual, problems};
 });
 
 /** Days a released task gets to find a provider; the requestor can override. */
@@ -414,8 +428,7 @@ function releasedDeadline(millis) {
   return Timestamp.fromMillis(millis);
 }
 
-/** The write for an unawarded task: released to bidding, or cancelled. */
-// Dropping uses the same fields as cancelBundle.
+/** The write for an unawarded task: released to bidding, or cancelled (as cancelBundle does). */
 function leftoverTaskUpdate({drop, uid, deadline}) {
   if (drop) {
     return {
@@ -443,8 +456,14 @@ function checkPicks(raw) {
   return Object.fromEntries(entries);
 }
 
-/** Awards a whole bundle in one transaction. */
-// Prices are re-read from stored bids; the client only says who wins what.
+/**
+ * What:   Callable that awards a bundle in one transaction.
+ * Input:  {bundleId, providerByTaskId, expectedTotalSen?, dropUnawarded?,
+ *         releasedDeadlineMillis?} from BundleRepository.award().
+ * Output: Awarded tasks become funded in-progress jobs, bids are decided and
+ *         unawarded tasks are released or dropped; one wallet debit.
+ * Notes:  Prices come from the stored bids; the client only says who wins what.
+ */
 exports.awardBundle = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
@@ -457,13 +476,11 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
 
   const db = admin.firestore();
 
-  const result = await db.runTransaction(async (tx) => {
+  await db.runTransaction(async (tx) => {
     const bundleRef = db.doc(`bundles/${bundleId}`);
     const walletRef = db.doc(`users/${uid}`);
 
-    // Read the bundle first: a transaction cannot read after it writes.
-    const bundleSnap = await tx.get(bundleRef);
-    const bundle = bundleSnap.data();
+    const bundle = (await tx.get(bundleRef)).data();
     if (bundle && bundle.requestorId !== uid) {
       throw new functions.https.HttpsError(
           "permission-denied", "Only the client who posted it can award " +
@@ -480,14 +497,8 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
     const [walletSnap, ...taskSnaps] =
         await tx.getAll(walletRef, ...taskRefs);
 
-    // Read before any writes: a suspended requestor is refused first.
     const wallet = walletSnap.data() || {};
-    if (wallet.suspended === true) {
-      throw new functions.https.HttpsError(
-          "permission-denied",
-          "Your account is suspended. Contact support if you think this " +
-          "is a mistake.");
-    }
+    throwIfSuspended(wallet);
 
     // Queried inside the transaction so bids added after the preview count.
     const bidsSnap = await tx.get(db.collection(
@@ -518,9 +529,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           "One of these tasks would be awarded at RM 0.");
     }
 
-    const totalSen = awards.reduce((sum, award) =>
-      sum + Object.values(award.taskAmountsSen)
-          .reduce((inner, sen) => inner + sen, 0), 0);
+    const totalSen = totalSenOf(awards);
     if (expectedTotalSen != null && expectedTotalSen !== totalSen) {
       throw new functions.https.HttpsError(
           "failed-precondition",
@@ -528,20 +537,10 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           {reason: "changed", totalSen});
     }
 
-    const available =
-        (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
-    if (available < totalSen) {
-      throw new functions.https.HttpsError(
-          "failed-precondition",
-          "Insufficient available balance to award this bundle.", {
-            reason: "insufficient_balance",
-            shortfallSen: totalSen - available,
-            availableSen: available,
-            requiredSen: totalSen,
-          });
-    }
+    assertCanPay(wallet, totalSen,
+        "Insufficient available balance to award this bundle.");
 
-    // Writes. Each awarded task becomes an ordinary one-provider job.
+    // Each awarded task becomes an ordinary one-provider job.
     const wonTaskIds = new Set();
     awards.forEach((award) => {
       const bid = bids.find((b) => b.providerId === award.providerId);
@@ -600,7 +599,6 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           leftoverTaskUpdate({drop: dropUnawarded, uid, deadline}));
     });
 
-    // Plain fields (no counter doc) so admins can count split awards.
     const awardedProviderCount =
         new Set(awards.map((a) => a.providerId)).size;
     tx.update(bundleRef, {
@@ -612,25 +610,13 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
       releasedTaskCount: dropUnawarded ? 0 : leftoverTaskIds.length,
       droppedTaskCount: dropUnawarded ? leftoverTaskIds.length : 0,
     });
-
-    return {
-      taskCount: wonTaskIds.size,
-      providerCount: awards.length,
-      totalSen,
-      releasedTaskIds: dropUnawarded ? [] : leftoverTaskIds,
-      droppedTaskIds: dropUnawarded ? leftoverTaskIds : [],
-    };
   });
-
-  return result;
 });
 
-// Exported for tests only; index.js re-exports just the callables.
-exports.splitBundlePrice = splitBundlePrice;
+// Exported for tests; index.js re-exports the callables.
 exports.offersFor = offersFor;
 exports.buildAwardOptions = buildAwardOptions;
 exports.checkManualAward = checkManualAward;
 exports.allowanceSen = allowanceSen;
-exports.readBundleForAward = readBundleForAward;
 exports.manualOption = manualOption;
 exports.leftoverTaskUpdate = leftoverTaskUpdate;

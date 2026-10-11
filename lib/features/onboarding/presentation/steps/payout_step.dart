@@ -5,8 +5,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 6 - explains how payouts work, then submits for review. The payout
-/// method itself is added later, before the first withdrawal.
+/// What:   Provider stage 6: payout explainer and submit for review.
+/// Input:  [OnboardingController]; [AuthController] to refresh the user.
+/// Output: Save for Later / Submit for Review. The payout method is added before the first withdrawal.
 class PayoutStep extends StatelessWidget {
   const PayoutStep({super.key});
 
@@ -22,7 +23,7 @@ class PayoutStep extends StatelessWidget {
     final onboarding = context.read<OnboardingController>();
     final auth = context.read<AuthController>();
     final submitted = await onboarding.submitForReview();
-    // Refresh so verificationStatus=pending switches to the pending screen.
+    // Refresh so status 'pending' switches to the pending screen.
     if (submitted) await auth.refreshUser();
   }
 

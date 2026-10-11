@@ -4,26 +4,20 @@ import '../../onboarding/domain/face_box.dart';
 import '../../onboarding/domain/id_extract.dart';
 import '../domain/pending_verification.dart';
 
-/// Reads the admin verification queue and records approve/reject decisions.
-/// The UI depends on this interface so tests can use a fake without Firestore.
+/// What:   Admin verification API.
+/// Input:  Firestore `users` and their private docs via FirestoreVerificationRepository; a fake in tests.
+/// Output: The pending queue, identity documents, the ID check and decisions.
 abstract interface class VerificationRepository {
-  /// Streams every user awaiting review (`verificationStatus == 'pending'`),
-  /// oldest submission first so the queue is worked front-to-back.
+  /// Users with `verificationStatus == 'pending'`, oldest submission first.
   Stream<List<PendingVerification>> watchPending();
 
-  /// Loads the applicant's sensitive identity photos (ID, selfie, or the
-  /// requestor's ID/SSM document) from their owner+admin-only private doc, for
-  /// the review gallery (the ID and selfie carry their detected face box).
-  /// Returns an empty list when none are present.
+  /// The applicant's private identity photos (ID with face box, selfie, requestor or SSM document); empty if none.
   Future<List<VerificationDocument>> loadIdentityDocuments(String uid);
 
-  /// The automated MyKad check for [uid] (private `idExtract` doc), or null
-  /// when none has run yet.
+  /// The automated MyKad check for [uid], or null if none has run.
   Future<IdExtract?> loadIdExtract(String uid);
 
-  /// Records the admin's decision: flips `verificationStatus` to
-  /// `approved`/`rejected`, stamps `reviewedAt`, and (on reject) stores the
-  /// optional [reason] so the applicant can be told why.
+  /// Sets `verificationStatus` to approved or rejected, stamps `reviewedAt` and stores a reject [reason].
   Future<void> decide({
     required String uid,
     required bool approved,
@@ -31,9 +25,9 @@ abstract interface class VerificationRepository {
   });
 }
 
-/// Firestore-backed [VerificationRepository]. The queue is a query over the
-/// `users` collection; decisions are a single owner-or-admin-guarded update to
-/// the applicant's own doc (see `firestore.rules`).
+/// What:   Firestore-backed [VerificationRepository].
+/// Input:  A query over `users`; decisions are one admin-guarded write to the applicant's doc.
+/// Output: PendingVerification list, documents and decisions.
 class FirestoreVerificationRepository implements VerificationRepository {
   FirestoreVerificationRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -66,49 +60,30 @@ class FirestoreVerificationRepository implements VerificationRepository {
     });
   }
 
-  /// Merges in the applicant's private/payout doc (phone and payout bank
-  /// details) before building the snapshot - mirrors
-  /// `AuthRepository._mapUser`'s merge. A missing/unreadable private doc
-  /// degrades to null (applicants who haven't saved since the
-  /// payout-privacy migration keep showing those fields from the legacy
-  /// public-doc locations via `PendingVerification.fromMap`'s fallback),
-  /// never throws and never breaks the queue's rendering.
+  /// Builds the snapshot with the applicant's private payout and verification docs merged in.
   Future<PendingVerification?> _toPendingVerification(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) async {
-    Map<String, dynamic>? payout;
-    try {
-      payout =
-          (await doc.reference.collection('private').doc('payout').get())
-              .data();
-    } catch (_) {
-      payout = null;
-    }
-    // The SSM number moved off the world-readable user document (it is personal
-    // data for a sole proprietorship), so the queue reads it from the private
-    // doc that admins are allowed to see.
-    Map<String, dynamic>? verification;
-    try {
-      verification = (await doc.reference
-              .collection('private')
-              .doc('verification')
-              .get())
-          .data();
-    } catch (_) {
-      verification = null;
-    }
     return PendingVerification.fromMap(doc.id, doc.data(),
-        payoutData: payout, verificationData: verification);
+        payoutData: await _tryPrivate(doc.id, 'payout'),
+        verificationData: await _tryPrivate(doc.id, 'verification'));
+  }
+
+  DocumentReference<Map<String, dynamic>> _private(String uid, String id) =>
+      _users.doc(uid).collection('private').doc(id);
+
+  /// Reads `private/[id]`; a missing or unreadable doc gives null instead of breaking the queue.
+  Future<Map<String, dynamic>?> _tryPrivate(String uid, String id) async {
+    try {
+      return (await _private(uid, id).get()).data();
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
   Future<List<VerificationDocument>> loadIdentityDocuments(String uid) async {
-    final data = (await _users
-            .doc(uid)
-            .collection('private')
-            .doc('verification')
-            .get())
-        .data();
+    final data = (await _private(uid, 'verification').get()).data();
     if (data == null) return const [];
     final docs = <VerificationDocument>[];
     void add(String label, String? url, [String? boxField]) {
@@ -133,9 +108,8 @@ class FirestoreVerificationRepository implements VerificationRepository {
   }
 
   @override
-  Future<IdExtract?> loadIdExtract(String uid) async => IdExtract.fromMap(
-      (await _users.doc(uid).collection('private').doc('idExtract').get())
-          .data());
+  Future<IdExtract?> loadIdExtract(String uid) async =>
+      IdExtract.fromMap((await _private(uid, 'idExtract').get()).data());
 
   @override
   Future<void> decide({

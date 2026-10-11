@@ -1,5 +1,6 @@
-/// Where a face sits in a photo, as fractions (0-1) of the image so it stays
-/// valid at any resolution. [aspect] is image width / height.
+/// What:   Where a face sits in a photo, as 0-1 fractions so it holds at any resolution.
+/// Input:  FaceChecker result or a stored map; [aspect] is image width / height.
+/// Output: Used to crop avatars from ID and selfie photos.
 class FaceBox {
   const FaceBox({
     required this.left,
@@ -19,8 +20,7 @@ class FaceBox {
         'aspect': aspect,
       };
 
-  /// Null when [map] is absent or incomplete, so callers fall back to the
-  /// full image.
+  /// Null when absent or incomplete, so callers show the full image.
   static FaceBox? fromMap(Map<String, dynamic>? map) {
     if (map == null) return null;
     double? read(String k) => (map[k] as num?)?.toDouble();

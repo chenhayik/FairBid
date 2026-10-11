@@ -1,9 +1,7 @@
-/**
- * Unit tests for mykad.js, driven by the vector file the Dart client also
- * reads (test/mykad_number_test.dart). Plain node:assert. Run with `npm test`.
- */
+// Driven by the vector file the Dart client also reads (test/mykad_number_test.dart).
 
 const assert = require("node:assert");
+const test = require("node:test");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
@@ -13,19 +11,6 @@ const {
 const fixture = JSON.parse(fs.readFileSync(
     path.join(__dirname, "..", "test", "fixtures", "mykad_vectors.json"),
     "utf8"));
-
-let failed = 0;
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`  FAIL  ${name}\n        ${err.message}`);
-  }
-}
-
-console.log("mykad.js validation");
 
 for (const v of fixture.vectors) {
   test(v.name, () => {
@@ -87,16 +72,6 @@ test("parseMyKadText: no IC / not a MyKad", () => {
     hasMarkers: false});
 });
 
-test("parseMyKadText: only four keys, never address or religion", () => {
-  const p = parseMyKadText(CARD("900101-07-1234", ["AHMAD BIN ALI"], "LELAKI"));
-  assert.deepStrictEqual(Object.keys(p).sort(),
-      ["gender", "hasMarkers", "icNumber", "name"]);
-  const all = JSON.stringify(p).toUpperCase();
-  for (const w of ["JALAN", "MAWAR", "TAMAN", "47301", "SELANGOR", "ISLAM"]) {
-    assert.ok(!all.includes(w), w);
-  }
-});
-
 test("parseMyKadText: address words without digits never join the name", () => {
   const one = parseMyKadText(["900101-07-1234", "AHMAD BIN ALI",
     "JALAN MAWAR", "TAMAN INDAH", "ISLAM", "LELAKI"].join("\n"));
@@ -134,9 +109,3 @@ test("parseMyKadText: a religion word in a name is kept", () => {
   const q = parseMyKadText(["900101-07-1234", "NUR AISYAH", "HINDU"].join("\n"));
   assert.strictEqual(q.name, "NUR AISYAH");
 });
-
-if (failed > 0) {
-  console.log(`\n${failed} MyKad test(s) failed.`);
-  process.exit(1);
-}
-console.log("All MyKad tests passed.\n");

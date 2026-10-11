@@ -52,3 +52,6 @@ app.*.map.json
 # Firebase emulator artifacts
 *-debug.log
 .firebase/
+
+# Claude-generated docs
+docs/*.md

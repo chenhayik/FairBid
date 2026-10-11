@@ -9,9 +9,9 @@ import '../../auth/presentation/auth_controller.dart';
 import '../data/notification_repository.dart';
 import '../domain/app_notification.dart';
 
-/// The notification centre, opened from the bell in the app bar: the user's
-/// feed, newest first, with unread rows tinted. Tapping a row marks it read
-/// and follows its deep link.
+/// What:   Notification centre opened from the app bar bell.
+/// Input:  NotificationRepository.watchMine(uid) (notification_repository.dart).
+/// Output: Feed newest first with unread rows tinted; tapping marks read and follows the deep link.
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
 
@@ -20,7 +20,7 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  // Cached so rebuilds don't resubscribe to Firestore.
+  // Created once so rebuilds don't resubscribe.
   Stream<List<AppNotification>>? _notifications;
   String? _uid;
 
@@ -35,7 +35,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Future<void> _open(AppNotification notification) async {
-    // Mark-read is fire-and-forget; navigation shouldn't wait on it.
+    // Fire-and-forget: navigation shouldn't wait.
     if (!notification.read) {
       context
           .read<NotificationRepository>()
@@ -104,8 +104,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 }
 
-/// One notification row: type icon, title, body, relative time. Unread rows
-/// get the subtle-blue tint so the eye finds them first.
+/// One row: type icon, title, body and time; unread rows are tinted.
 class _NotificationTile extends StatelessWidget {
   const _NotificationTile({required this.notification, required this.onTap});
   final AppNotification notification;
@@ -116,9 +115,6 @@ class _NotificationTile extends StatelessWidget {
     final theme = Theme.of(context);
     final unread = !notification.read;
 
-    // AppCard rather than a hand-rolled Container: it reproduced AppCard's
-    // decoration exactly but only to vary the fill, and being opaque it also
-    // swallowed the InkWell's ripple.
     return AppCard(
       onTap: onTap,
       color: unread ? context.fairbid.subtleBlue : null,

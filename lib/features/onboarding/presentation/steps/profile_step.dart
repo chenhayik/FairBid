@@ -6,7 +6,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 4 - "Build your profile": display name, bio, skills, trust boosters.
+/// What:   Provider stage 4: display name, bio, skills, certificates and links.
+/// Input:  [OnboardingController.data].
+/// Output: Form; Save & Continue writes the fields back and saves.
 class ProfileStep extends StatefulWidget {
   const ProfileStep({super.key});
 
@@ -24,9 +26,7 @@ class _ProfileStepState extends State<ProfileStep> {
   void initState() {
     super.initState();
     final data = context.read<OnboardingController>().data;
-    // A registered business trades under its registered name, so that is the
-    // sensible default - but only when the applicant has not set one, so this
-    // can never overwrite a name they chose.
+    // Default to the business name, never overwriting a chosen display name.
     _displayName = TextEditingController(
         text: data.displayName.isNotEmpty ? data.displayName : data.businessName);
     _bio = TextEditingController(text: data.bio);

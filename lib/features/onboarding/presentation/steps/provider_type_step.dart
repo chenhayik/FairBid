@@ -6,8 +6,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/onboarding_data.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 2 - "Choose Provider Type": Individual/Freelancer vs Registered
-/// Business, each with its verification-requirement badge.
+/// What:   Provider stage 2: Individual / Freelancer or Registered Business.
+/// Input:  [OnboardingController.data].providerType.
+/// Output: Two selectable cards with their verification badges, and Continue.
 class ProviderTypeStep extends StatelessWidget {
   const ProviderTypeStep({super.key});
 

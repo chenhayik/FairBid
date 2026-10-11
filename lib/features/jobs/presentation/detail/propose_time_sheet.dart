@@ -130,7 +130,6 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     return d == null ? null : DateTime(d.year, d.month, d.day, 23, 59);
   }
 
-  /// Whether the confirmed visit is under 24 hours away.
   bool get _isLateChange {
     final start = widget.job.appointment?.startAt;
     return start != null &&

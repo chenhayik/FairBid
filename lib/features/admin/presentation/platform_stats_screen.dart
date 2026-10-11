@@ -6,7 +6,9 @@ import '../../../core/widgets/app_widgets.dart';
 import '../data/stats_repository.dart';
 import '../domain/platform_stats.dart';
 
-/// Admin Stats tab: the main numbers, loaded once. Pull down to refresh.
+/// What:   Admin Stats tab with the marketplace's main numbers.
+/// Input:  PlatformStats via StatsRepository.load() (stats_repository.dart), loaded once.
+/// Output: Stat cards; pull to refresh; button to recompute Trust Scores.
 class PlatformStatsScreen extends StatefulWidget {
   const PlatformStatsScreen({super.key});
 
@@ -30,7 +32,6 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
     await fresh;
   }
 
-  /// Recounts every user's Trust Score on the server. Safe to run again.
   Future<void> _recomputeTrust() async {
     setState(() => _recomputing = true);
     try {
@@ -89,11 +90,37 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
                   icon: Icons.payments_outlined,
                 ),
                 const SizedBox(height: 12),
-                _StatGrid(stats: stats),
+                _CardGrid(cells: [
+                  ('Clients', formatCount(stats.requestors),
+                      Icons.person_outline),
+                  ('Providers', formatCount(stats.providers),
+                      Icons.handyman_outlined),
+                  ('Open jobs', formatCount(stats.openJobs),
+                      Icons.work_outline),
+                  ('In progress', formatCount(stats.inProgressJobs),
+                      Icons.timelapse_outlined),
+                  ('Completed', formatCount(stats.completedJobs),
+                      Icons.task_alt_outlined),
+                  ('Pending checks', formatCount(stats.pendingVerifications),
+                      Icons.verified_user_outlined),
+                  ('Open disputes', formatCount(stats.openDisputes),
+                      Icons.gavel_rounded),
+                  ('Total users', formatCount(stats.totalUsers),
+                      Icons.groups_outlined),
+                ]),
                 const SizedBox(height: 24),
                 Text('Bundles', style: theme.textTheme.titleMedium),
                 const SizedBox(height: 12),
-                _BundleStatGrid(stats: stats),
+                _CardGrid(cells: [
+                  ('Bundles awarded', formatCount(stats.bundlesAwarded),
+                      Icons.inventory_2_outlined),
+                  (
+                    'Split awards',
+                    '${formatCount(stats.splitAwards)} '
+                        '(${(stats.splitAwardRate * 100).toStringAsFixed(0)}%)',
+                    Icons.call_split
+                  ),
+                ]),
                 const SizedBox(height: 24),
                 SecondaryButton(
                   label: _recomputing
@@ -110,7 +137,7 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
   }
 }
 
-/// Puts two stat cells in each row. Both cards in a row get the same height.
+/// Two stat cards per row, equal height.
 class _CardGrid extends StatelessWidget {
   const _CardGrid({required this.cells});
 
@@ -136,7 +163,7 @@ class _CardGrid extends StatelessWidget {
                   child: StatCard(label: label, value: value, icon: icon),
                 ),
               ],
-              // A single card on the last row keeps its normal width.
+              // A lone last card keeps its normal width.
               if (rowCells.length < _columns) const Spacer(),
             ],
           ),
@@ -144,56 +171,5 @@ class _CardGrid extends StatelessWidget {
       );
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows);
-  }
-}
-
-/// Two-column grid of the count numbers.
-class _StatGrid extends StatelessWidget {
-  const _StatGrid({required this.stats});
-
-  final PlatformStats stats;
-
-  @override
-  Widget build(BuildContext context) {
-    final cells = <(String, String, IconData)>[
-      ('Clients', formatCount(stats.requestors), Icons.person_outline),
-      ('Providers', formatCount(stats.providers), Icons.handyman_outlined),
-      ('Open jobs', formatCount(stats.openJobs), Icons.work_outline),
-      (
-        'In progress',
-        formatCount(stats.inProgressJobs),
-        Icons.timelapse_outlined
-      ),
-      ('Completed', formatCount(stats.completedJobs), Icons.task_alt_outlined),
-      (
-        'Pending checks',
-        formatCount(stats.pendingVerifications),
-        Icons.verified_user_outlined
-      ),
-      ('Open disputes', formatCount(stats.openDisputes), Icons.gavel_rounded),
-      ('Total users', formatCount(stats.totalUsers), Icons.groups_outlined),
-    ];
-    return _CardGrid(cells: cells);
-  }
-}
-
-/// Bundle award numbers, side by side.
-class _BundleStatGrid extends StatelessWidget {
-  const _BundleStatGrid({required this.stats});
-
-  final PlatformStats stats;
-
-  @override
-  Widget build(BuildContext context) {
-    final splitPct = (stats.splitAwardRate * 100).toStringAsFixed(0);
-    return _CardGrid(cells: [
-      (
-        'Bundles awarded',
-        formatCount(stats.bundlesAwarded),
-        Icons.inventory_2_outlined
-      ),
-      ('Split awards', '${formatCount(stats.splitAwards)} ($splitPct%)',
-          Icons.call_split),
-    ]);
   }
 }

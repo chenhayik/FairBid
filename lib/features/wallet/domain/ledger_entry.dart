@@ -29,19 +29,16 @@ enum LedgerType {
       };
 }
 
-/// One immutable entry in the top-level `transactions` ledger. Read-only on
-/// the client - only the wallet Cloud Functions (admin SDK) append entries,
-/// so there is no `toMap()`.
+/// What:   One entry in the top-level `transactions` ledger.
+/// Input:  Doc data via LedgerEntry.fromMap (wallet_repository.dart).
+/// Output: Immutable and read-only; only the wallet Cloud Functions append entries.
 class LedgerEntry {
   const LedgerEntry({
     required this.id,
     required this.type,
     required this.amountSen,
-    this.fromUid,
     this.toUid,
-    this.jobId,
     this.jobTitle,
-    this.milestoneId,
     this.createdAt,
   });
 
@@ -49,35 +46,24 @@ class LedgerEntry {
   final LedgerType type;
   final int amountSen;
 
-  /// Sending/receiving uid. `'escrow'` marks the escrow leg of a fund/release;
-  /// null marks the outside world (top-up source, withdrawal destination).
-  final String? fromUid;
+  /// Receiving uid; `'escrow'` is the escrow leg, null is the outside world (withdrawal).
   final String? toUid;
 
-  final String? jobId;
-
-  /// The job's title at fund/release time, so history rows are tellable
-  /// apart without a lookup.
+  /// The job title at the time, so history rows need no lookup.
   final String? jobTitle;
 
-  final String? milestoneId;
   final DateTime? createdAt;
 
   /// Whether this entry moves money *into* [uid]'s wallet.
   bool isCreditFor(String uid) => toUid == uid;
 
-  /// Builds a [LedgerEntry] from its doc id and (already
-  /// Timestamp-normalised) data map.
   factory LedgerEntry.fromMap(String id, Map<String, dynamic> m) =>
       LedgerEntry(
         id: id,
         type: LedgerType.fromStorage(m['type'] as String?),
         amountSen: (m['amountSen'] as num?)?.toInt() ?? 0,
-        fromUid: m['fromUid'] as String?,
         toUid: m['toUid'] as String?,
-        jobId: m['jobId'] as String?,
         jobTitle: m['jobTitle'] as String?,
-        milestoneId: m['milestoneId'] as String?,
         createdAt: m['createdAt'] as DateTime?,
       );
 }

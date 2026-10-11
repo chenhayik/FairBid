@@ -12,9 +12,9 @@ import '../../jobs/domain/milestone.dart';
 import '../../onboarding/data/document_storage_repository.dart';
 import '../data/dispute_repository.dart';
 
-/// Bottom sheet where a job participant disputes a funded/delivered
-/// [milestone]: a statement of the problem plus optional photo evidence.
-/// Submitting freezes the milestone and opens the dispute for admin review.
+/// What:   Bottom sheet to dispute a funded or delivered [milestone]: statement plus up to 3 photos.
+/// Input:  [milestone], optional [initialStatement] (e.g. a no-show); DisputeRepository, DocumentStorageRepository.
+/// Output: [show] resolves `true` once raised; this freezes the milestone for admin review.
 class RaiseDisputeSheet extends StatefulWidget {
   const RaiseDisputeSheet({
     super.key,
@@ -24,10 +24,8 @@ class RaiseDisputeSheet extends StatefulWidget {
 
   final Milestone milestone;
 
-  /// Pre-fills the statement field (e.g. for a no-show).
   final String? initialStatement;
 
-  /// Opens the sheet. Resolves to `true` when a dispute was raised.
   static Future<bool?> show(BuildContext context,
       {required Milestone milestone, String? initialStatement}) {
     return showModalBottomSheet<bool>(
@@ -96,7 +94,6 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
 
   void _removePhoto(String url) {
     setState(() => _evidenceUrls.remove(url));
-    // Best-effort cleanup of the abandoned upload.
     context.read<DocumentStorageRepository>().deleteByUrl(url).catchError((_) {});
   }
 
@@ -119,17 +116,12 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
           );
       if (!mounted) return;
       Navigator.of(context).pop(true);
-    } on FirebaseFunctionsException catch (e) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.message ?? 'Something went wrong. Please try again.';
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = 'Could not submit the dispute. Please try again.';
+        _error = (e is FirebaseFunctionsException ? e.message : null) ??
+            'Could not submit the dispute. Please try again.';
       });
     }
   }
@@ -192,7 +184,7 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
   }
 }
 
-/// Evidence thumbnails plus an add-photo tile (up to three photos).
+/// Evidence thumbnails plus an add-photo tile.
 class _EvidenceRow extends StatelessWidget {
   const _EvidenceRow({
     required this.urls,

@@ -30,8 +30,9 @@ import '../features/wallet/data/wallet_repository.dart';
 import 'router/app_router.dart';
 import 'theme/app_theme.dart';
 
-/// Root widget. Repositories are injected so production can pass the Firebase
-/// implementations and tests can pass fakes without any Firebase setup.
+/// What:   Root widget providing every repository and the three app controllers.
+/// Input:  Injected repositories (Firebase ones in main.dart, fakes in tests).
+/// Output: MultiProvider over the router app (or a loading screen until auth state is known).
 class FairBidApp extends StatelessWidget {
   const FairBidApp({
     super.key,
@@ -86,7 +87,6 @@ class FairBidApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Plain repositories, read by scoped controllers (e.g. Post-a-Job).
         Provider<JobRepository>.value(value: jobRepository),
         Provider<BidRepository>.value(value: bidRepository),
         Provider<BundleRepository>.value(value: bundleRepository),
@@ -130,33 +130,28 @@ class _FairBidAppView extends StatefulWidget {
 }
 
 class _FairBidAppViewState extends State<_FairBidAppView> {
-  // Built once, the first time auth state is known. Its `refreshListenable`
-  // keeps redirects in sync after that.
+  // Built once auth state is known; its refreshListenable keeps redirects in sync.
   GoRouter? _router;
 
-  // Push bootstrap state: init once per app run, register the device token
-  // once per signed-in uid.
+  // Push: init once per run, register the token once per signed-in uid.
   bool _pushInited = false;
   String? _pushTokenUid;
 
-  /// Keeps push wiring in step with auth state. Idempotent - runs on every
-  /// build but only acts on transitions (first signed-in build, uid change).
+  /// Keeps push wiring in step with auth state; acts only on transitions.
   void _syncPush(AuthController auth) {
     final user = auth.user;
     if (user == null) {
       _pushTokenUid = null; // next sign-in re-registers
       return;
     }
-    // Wait until onboarding is done so the permission prompt appears on the
-    // home screen, when the app has shown its value - not at cold start.
+    // After onboarding, so the permission prompt appears once the app has shown its value.
     if (user.needsOnboarding || _pushTokenUid == user.uid) return;
     _pushTokenUid = user.uid;
 
     final notifications = context.read<NotificationRepository>();
     final push = context.read<PushService>();
 
-    // Detach this device's token before sign-out completes, so the next
-    // account on this device can't receive this user's notifications.
+    // Detach this device's token before sign-out so the next account gets none of these pushes.
     auth.onBeforeSignOut = notifications.removeToken;
 
     if (!_pushInited) {
@@ -179,12 +174,11 @@ class _FairBidAppViewState extends State<_FairBidAppView> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthController>();
 
-    // Show a splash until we know whether someone is already signed in.
     if (auth.isInitializing) {
       return MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
-        home: const SplashScreen(),
+        home: const Scaffold(body: Center(child: CircularProgressIndicator())),
       );
     }
 

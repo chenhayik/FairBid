@@ -8,8 +8,9 @@ import 'bundle_pick_sheet.dart';
 import 'bundle_task_section.dart';
 import 'bundle_warning_banner.dart';
 
-/// "Pick providers yourself": one row per open task with its pick.
-/// Tap a row to see the bids for that task.
+/// What:   "Pick providers yourself": one row per task with its pick.
+/// Input:  [tasks], [bids] and [picks] from BundleDetailScreen.
+/// Output: Rows that open a bid sheet per task; [onPick] reports the choice.
 class BundlePickSection extends StatelessWidget {
   const BundlePickSection({
     super.key,
@@ -25,21 +26,19 @@ class BundlePickSection extends StatelessWidget {
 
   /// Task id -> provider id (null or missing: not awarded).
   final Map<String, String?> picks;
-
-  /// Sets [providerId] (or null) as the pick for all of [taskIds].
-  final void Function(List<String> taskIds, String? providerId) onPick;
+  final void Function(String taskId, String? providerId) onPick;
   final ValueChanged<Job> onOpenTask;
 
   Future<void> _change(BuildContext context, Job task) async {
     final chosen = await showBundlePickSheet(
       context,
       title: 'Choose a provider for ${task.title}',
-      taskIds: [task.id],
+      taskId: task.id,
       bids: bids,
       currentProviderId: picks[task.id],
     );
     if (chosen == null) return;
-    onPick([task.id], chosen == bundleNoProviderPick ? null : chosen);
+    onPick(task.id, chosen == bundleNoProviderPick ? null : chosen);
   }
 
   @override
@@ -92,11 +91,8 @@ class _PickRow extends StatelessWidget {
     final muted = theme.textTheme.bodyMedium?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
-    final biddable = bidsCoveringAll(bids, [task.id]).isNotEmpty;
-    BundleBid? picked;
-    for (final bid in bids) {
-      if (bid.providerId == providerId) picked = bid;
-    }
+    final biddable = bidsCoveringTask(bids, task.id).isNotEmpty;
+    final picked = bids.where((b) => b.providerId == providerId).lastOrNull;
 
     final Widget pickLine;
     if (!biddable) {
@@ -106,7 +102,7 @@ class _PickRow extends StatelessWidget {
     } else {
       pickLine = PriceRow(
         name: picked.providerName,
-        amountSen: bidPriceFor(picked, [task.id]),
+        amountSen: picked.priceFor(task.id) ?? 0,
         style: theme.textTheme.bodyMedium,
       );
     }

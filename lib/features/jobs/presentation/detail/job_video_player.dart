@@ -2,17 +2,13 @@ import 'package:chewie/chewie.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
-/// A tappable preview of a job's video: its first frame in a fixed-height
-/// box with a play-icon overlay. Tapping opens a full-screen Chewie player.
-/// Shared by the Post-a-Job form's attach preview
-/// (`post_job/post_job_screen.dart`) and the job detail's Video section, so
-/// both get the same first-frame-plus-play-button look and the same
-/// full-screen playback, without a `video_thumbnail` dependency.
+/// What:   Tappable preview of a job's video.
+/// Input:  [url] from job.videoUrl.
+/// Output: First frame with a play icon; tapping opens a full-screen Chewie player.
 class JobVideoPreview extends StatefulWidget {
-  const JobVideoPreview({super.key, required this.url, this.height = 160});
+  const JobVideoPreview({super.key, required this.url});
 
   final String url;
-  final double height;
 
   @override
   State<JobVideoPreview> createState() => _JobVideoPreviewState();
@@ -45,7 +41,7 @@ class _JobVideoPreviewState extends State<JobVideoPreview> {
       child: InkWell(
         onTap: _openFullScreen,
         child: SizedBox(
-          height: widget.height,
+          height: 160,
           width: double.infinity,
           child: ColoredBox(
             color: Colors.black,
@@ -81,10 +77,7 @@ class _JobVideoPreviewState extends State<JobVideoPreview> {
   }
 }
 
-/// Full-screen Chewie playback for a job video, pushed by [JobVideoPreview].
-/// Owns only the [ChewieController]; the [VideoPlayerController] itself
-/// belongs to (and is disposed by) the [JobVideoPreview] that pushed this
-/// route.
+// Owns only the ChewieController; JobVideoPreview owns the VideoPlayerController.
 class _FullScreenVideoPlayer extends StatefulWidget {
   const _FullScreenVideoPlayer({required this.controller});
   final VideoPlayerController controller;
@@ -98,19 +91,12 @@ class _FullScreenVideoPlayerState extends State<_FullScreenVideoPlayer> {
   late final ChewieController _chewie = ChewieController(
     videoPlayerController: widget.controller,
     autoPlay: true,
-    looping: false,
   );
 
   @override
   void dispose() {
-    // Chewie 1.14.1's ChewieController.dispose() doesn't touch the
-    // underlying VideoPlayerController, and that controller is shared with
-    // (and owned by) the JobVideoPreview below this route - so without this,
-    // popping the full-screen player leaves the video playing, with audio,
-    // behind a thumbnail that's supposed to be a static first frame. Pause
-    // and rewind it before releasing Chewie's controls; these are
-    // fire-and-forget (dispose() can't be async), but the platform channel
-    // preserves call order, so the pause always lands before the seek.
+    // Chewie's dispose leaves the shared controller playing behind the thumbnail.
+    // Fire-and-forget; the platform channel keeps pause before seek.
     widget.controller.pause();
     widget.controller.seekTo(Duration.zero);
     _chewie.dispose();

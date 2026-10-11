@@ -11,8 +11,9 @@ export '../domain/face_box.dart';
 
 enum FaceCheckKind { idCard, selfie }
 
-/// [problem] is a message for the applicant, or null when the photo is fine.
-/// [box] is the largest face, when one was found.
+/// What:   Result of a face check.
+/// Input:  FaceChecker.check().
+/// Output: [problem] for the applicant (null when fine); [box] is the largest face found.
 class FaceCheckResult {
   const FaceCheckResult({this.problem, this.box});
 
@@ -20,12 +21,16 @@ class FaceCheckResult {
   final FaceBox? box;
 }
 
-/// On-device capture quality gate for ID and selfie photos.
+/// What:   On-device capture quality gate for ID and selfie photos.
+/// Input:  File path and [FaceCheckKind].
+/// Output: A [FaceCheckResult].
 abstract interface class FaceChecker {
   Future<FaceCheckResult> check(String filePath, FaceCheckKind kind);
 }
 
-/// ML Kit implementation. Never blocks the applicant if ML Kit itself fails.
+/// What:   ML Kit [FaceChecker]; never blocks the applicant if ML Kit itself fails.
+/// Input:  Image file path.
+/// Output: Largest face box, or a retake message.
 class MlKitFaceChecker implements FaceChecker {
   const MlKitFaceChecker();
 
@@ -51,8 +56,7 @@ class MlKitFaceChecker implements FaceChecker {
                 ? _noCardFace
                 : 'We could not see your face. Retake it in good light.');
       }
-      // The card also carries a small ghost photo, and a selfie shows the
-      // card, so several faces are normal: judge the largest.
+      // Cards carry a ghost photo and selfies show the card: judge the largest face.
       final face = faces.reduce((a, b) => _area(a) >= _area(b) ? a : b);
       if (kind == FaceCheckKind.selfie) {
         final eyes = [face.leftEyeOpenProbability, face.rightEyeOpenProbability]
@@ -73,8 +77,7 @@ class MlKitFaceChecker implements FaceChecker {
 
   static double _area(Face f) => f.boundingBox.width * f.boundingBox.height;
 
-  /// ML Kit reports pixels of the EXIF-upright image; Flutter's decoder also
-  /// applies EXIF, so dividing by the decoded size gives fractions.
+  /// ML Kit reports EXIF-upright pixels, as does Flutter's decoder, so dividing gives fractions.
   static Future<FaceBox> _box(String path, Face face) async {
     final codec = await ui.instantiateImageCodec(await File(path).readAsBytes());
     final image = (await codec.getNextFrame()).image;

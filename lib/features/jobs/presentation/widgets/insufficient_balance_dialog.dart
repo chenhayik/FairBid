@@ -4,10 +4,9 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/util/money.dart';
 import '../../data/bid_repository.dart';
 
-/// Shared "Not enough balance" dialog shown when an accept/award is refused
-/// with [InsufficientBalanceException] - used by the job accept-bid flow and
-/// the bundle award flow so both report a shortfall the same way and offer
-/// the same "Top up" shortcut.
+/// What:   "Not enough balance" dialog for a refused accept or award.
+/// Input:  [e] from BidRepository.acceptBid() or BundleRepository.award().
+/// Output: Dialog with the shortfall and a Top up shortcut to `/profile/earnings`.
 Future<void> showInsufficientBalanceDialog(
   BuildContext context,
   InsufficientBalanceException e,

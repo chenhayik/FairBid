@@ -3,31 +3,27 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/milestone.dart';
 
-/// Reads and writes escrow milestones. The money-free submit goes straight
-/// to Firestore; release calls the Cloud Function that owns
-/// `walletBalanceSen` - Firestore rules reject any client write to it,
-/// mirroring how `recomputeTrustScore` protects the Trust Score. UI/controllers depend on this interface so tests can use a fake.
+/// What:   Escrow milestone reads and writes, behind an interface so tests can fake it.
+/// Input:  Firestore `jobs/{jobId}/milestones`; release goes through a callable.
+/// Output: Milestone streams, submit (plain write) and release (callable that moves money).
 abstract interface class MilestoneRepository {
-  /// Streams a job's milestones in their proposed order.
+  /// Streams a job's milestones in order.
   Stream<List<Milestone>> watchMilestones(String jobId);
 
-  /// Streams every milestone assigned to [providerId] across jobs (newest
-  /// first), for the Earnings screen's In Escrow / Total Earnings figures.
+  /// Streams the provider's milestones across jobs, newest first (Earnings figures).
   Stream<List<Milestone>> watchProviderMilestones(String providerId);
 
-  /// Provider marks a funded milestone as delivered. Plain guarded write -
-  /// rules enforce funded → submitted only, by the accepted provider.
+  /// Provider marks a funded milestone delivered (rules allow funded -> submitted only).
   Future<void> submitMilestone(String jobId, String milestoneId,
       {String? note});
 
-  /// Credits the provider's wallet, releases the milestone and - when it was
-  /// the job's last unreleased one - completes the job, unlocking reviews
-  /// (the `releaseMilestone` Cloud Function).
+  /// Pays the provider and releases the milestone; the last one completes the job.
   Future<void> releaseMilestone(String jobId, String milestoneId);
 }
 
-/// Firestore-backed [MilestoneRepository]. Milestones live at
-/// `jobs/{jobId}/milestones/{milestoneId}`.
+/// What:   Firestore and Cloud Functions [MilestoneRepository].
+/// Input:  Firestore `jobs/{id}/milestones` and callables.
+/// Output: Milestone streams and escrow actions.
 class FirestoreMilestoneRepository implements MilestoneRepository {
   FirestoreMilestoneRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -56,7 +52,7 @@ class FirestoreMilestoneRepository implements MilestoneRepository {
         .snapshots()
         .map((snapshot) => [
               for (final doc in snapshot.docs)
-                // A milestone's parent's parent is its job document.
+                // parent.parent is the job.
                 _fromDoc(doc.reference.parent.parent!.id, doc),
             ]);
   }
@@ -76,8 +72,6 @@ class FirestoreMilestoneRepository implements MilestoneRepository {
         {'jobId': jobId, 'milestoneId': milestoneId});
   }
 
-  /// Normalises Firestore Timestamps to DateTime before building the
-  /// [Milestone].
   Milestone _fromDoc(
       String jobId, DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});

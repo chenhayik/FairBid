@@ -1,27 +1,24 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Wires FCM push into the app: permission, the Android channel, foreground
-/// display, and tap → deep-link routing. Token *storage* is the
-/// NotificationRepository's job; this service only surfaces the moments
-/// (init, token refresh) the caller should react to.
+/// What:   FCM push wiring: permission, Android channel, foreground display and tap routing.
+/// Input:  FirebasePushService over firebase_messaging; a fake in tests.
+/// Output: Calls back on tapped routes and token refresh; token storage is NotificationRepository's job.
 abstract interface class PushService {
-  /// One-time setup: creates the notification channel, hooks foreground
-  /// messages and tap handlers. [onOpenRoute] receives the in-app route of a
-  /// tapped notification (from background, foreground banner, or cold start).
-  /// [onTokenRefresh] fires when FCM rotates this device's token.
+  /// One-time setup. [onOpenRoute] gets the in-app route of a tapped notification
+  /// (background, foreground or cold start); [onTokenRefresh] fires when FCM rotates the token.
   Future<void> init({
     required void Function(String route) onOpenRoute,
     required void Function() onTokenRefresh,
   });
 
-  /// Asks the user for notification permission (Android 13+ shows a system
-  /// prompt). Safe to call repeatedly - the OS only prompts once.
+  /// Asks for notification permission; safe to repeat (the OS prompts once).
   Future<void> requestPermission();
 }
 
-/// Production [PushService] over `firebase_messaging` +
-/// `flutter_local_notifications`.
+/// What:   Production [PushService] over `firebase_messaging` and `flutter_local_notifications`.
+/// Input:  FCM messages and taps.
+/// Output: Foreground banners and route callbacks.
 class FirebasePushService implements PushService {
   FirebasePushService({FirebaseMessaging? messaging})
       : _messaging = messaging ?? FirebaseMessaging.instance;
@@ -29,8 +26,7 @@ class FirebasePushService implements PushService {
   final FirebaseMessaging _messaging;
   final _local = FlutterLocalNotificationsPlugin();
 
-  /// Must match the manifest's default-channel meta-data AND the
-  /// `channelId` the onNotificationCreated Cloud Function sends.
+  /// Must match the manifest's default-channel meta-data and the `channelId` sent by `onNotificationCreated`.
   static const _channel = AndroidNotificationChannel(
     'fairbid_default',
     'FairBid notifications',
@@ -43,8 +39,7 @@ class FirebasePushService implements PushService {
     required void Function(String route) onOpenRoute,
     required void Function() onTokenRefresh,
   }) async {
-    // Local-notifications setup, used to display foreground messages (FCM
-    // shows nothing on its own while the app is open).
+    // FCM shows nothing in the foreground, so display via local notifications.
     await _local.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -59,7 +54,6 @@ class FirebasePushService implements PushService {
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(_channel);
 
-    // Foreground: render the push as a local notification banner.
     FirebaseMessaging.onMessage.listen((message) {
       final notification = message.notification;
       if (notification == null) return;
@@ -80,13 +74,13 @@ class FirebasePushService implements PushService {
       );
     });
 
-    // Background → tapped: the app resumes on the notification's route.
+    // Tapped from background.
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       final route = message.data['route'] as String?;
       if (route != null && route.isNotEmpty) onOpenRoute(route);
     });
 
-    // Terminated → tapped: the app cold-starts from the notification.
+    // Tapped from terminated.
     final initial = await _messaging.getInitialMessage();
     final initialRoute = initial?.data['route'] as String?;
     if (initialRoute != null && initialRoute.isNotEmpty) {

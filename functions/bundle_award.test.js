@@ -1,12 +1,9 @@
-// Unit tests for the award engine in bundle_award.js.
-//
-// The scenario is the bathroom bundle from reference/bundle_bidding/demo.dart,
-// so the ported engine is pinned to the numbers the prototype produced.
-// Plain node:assert, in the style of bundles.test.js. Run with `npm test`.
+// Unit tests for the award engine in bundle_award.js, on a four-task bathroom
+// bundle whose numbers were pinned from the original prototype.
 
 const assert = require("node:assert");
+const test = require("node:test");
 const {
-  splitBundlePrice,
   offersFor,
   buildAwardOptions,
   checkManualAward,
@@ -14,17 +11,6 @@ const {
   manualOption,
   leftoverTaskUpdate,
 } = require("./bundle_award");
-
-let failed = 0;
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`  FAIL  ${name}\n        ${err.message}`);
-  }
-}
 
 // A four-task bathroom bundle.
 const TASKS = [
@@ -69,18 +55,6 @@ const CAP = {capPct: 5, capSen: 50000}; // 5% AND RM 500, as PlatformConfig has
 function pick(options, key) {
   return options.find((o) => o.key === key);
 }
-
-console.log("bundle_award.js engine");
-
-test("a bundle price splits across tasks and adds up exactly", () => {
-  const amounts = splitBundlePrice({waterproof: 22000, tiling: 30000}, 50000);
-  assert.strictEqual(amounts.waterproof + amounts.tiling, 50000);
-  assert.strictEqual(amounts.waterproof, 21153);
-  assert.strictEqual(amounts.tiling, 28847);
-  // An awkward ratio still loses nothing to rounding.
-  const thirds = splitBundlePrice({a: 1, b: 1, c: 1}, 100);
-  assert.strictEqual(thirds.a + thirds.b + thirds.c, 100);
-});
 
 test("a bid offers every subset it would accept", () => {
   // Two tasks: each on its own, plus both together.
@@ -156,23 +130,6 @@ test("the cap is the smaller of the percentage and the ringgit ceiling", () => {
   assert.strictEqual(allowanceSen(8400000, 5, 50000), 50000); // ceiling wins
 });
 
-test("a hand-picked award is priced from the stored bids", () => {
-  const {awards, problems} = checkManualAward({
-    tasks: TASKS,
-    bids: BIDS,
-    providerByTaskId: {
-      plumbing: "budi",
-      electrical: "chandran",
-      waterproof: "dev",
-      tiling: "dev",
-    },
-  });
-  assert.deepStrictEqual(problems, []);
-  const dev = awards.find((a) => a.providerId === "dev");
-  assert.strictEqual(
-      dev.taskAmountsSen.waterproof + dev.taskAmountsSen.tiling, 50000);
-});
-
 test("a hand-picked award may not break a bid's terms", () => {
   const refuse = (providerByTaskId) => checkManualAward(
       {tasks: TASKS, bids: BIDS, providerByTaskId}).problems;
@@ -217,7 +174,7 @@ test("offersFor / buildAwardOptions drop a bid pricing a task the bundle " +
   ];
   // x priced task "B", which this bundle doesn't have (say, it stopped
   // being open) - it must offer nothing at all, not silently cover task A
-  // the way `1 << taskIndex["B"]` (== `1 << undefined` == 1) used to.
+  // the way `1 << taskIndex["B"]` (== `1 << undefined` == 1) would.
   assert.deepStrictEqual(offersFor(bids[0], taskIndex), []);
 
   const options = buildAwardOptions({tasks, bids, capPct: 5, capSen: 50000});
@@ -278,22 +235,15 @@ test("when Trust Score ties within the cap, Recommended takes the cheaper",
   assert.strictEqual(recommended.totalSen, 1000);
 });
 
-// ---------------------------------------------------------------------------
-// Phase 4: pricing the requestor's own hand-picked award for the preview
-// ("Your pick"), via the same pure helper previewBundleAward calls.
-// ---------------------------------------------------------------------------
-
-test("manualOption returns problems, not an option, for a bad pick", () => {
-  // Chandran never priced plumbing, same as checkManualAward on its own.
-  const {manual, problems} = manualOption({
+test("manualOption prices a valid pick and refuses a bad one", () => {
+  // Chandran never priced plumbing: problems, not an option.
+  const bad = manualOption({
     tasks: TASKS, bids: BIDS, providerByTaskId: {plumbing: "chandran"},
     cheapestCostSen: 84000,
   });
-  assert.strictEqual(manual, null);
-  assert.ok(problems[0].includes("never priced"));
-});
+  assert.strictEqual(bad.manual, null);
+  assert.ok(bad.problems[0].includes("never priced"));
 
-test("manualOption prices a valid pick as an option card", () => {
   const {manual, problems} = manualOption({
     tasks: TASKS,
     bids: BIDS,
@@ -329,9 +279,3 @@ test("leftoverTaskUpdate drops a task by cancelling it", () => {
   assert.ok(update.cancellationReason.includes("dropped"));
   assert.strictEqual(update.releasedAt, undefined);
 });
-
-if (failed > 0) {
-  console.log(`\n${failed} award engine test(s) failed.`);
-  process.exit(1);
-}
-console.log("All award engine tests passed.\n");

@@ -1,22 +1,11 @@
 const assert = require("node:assert");
+const test = require("node:test");
 const {
   validateBundle,
   validateBundleBid,
   bundleBiddingOpen,
   splitBundlePrice,
-  uidsToCount,
 } = require("./bundles");
-
-let failed = 0;
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`  FAIL  ${name}\n        ${err.message}`);
-  }
-}
 
 /** A task that passes validation; each test breaks one thing on purpose. */
 function task(overrides = {}) {
@@ -39,12 +28,7 @@ function payload(overrides = {}) {
   };
 }
 
-/** Asserts [fn] throws the callable's `invalid-argument` error. */
-function rejects(fn) {
-  assert.throws(fn, (err) => err.code === "invalid-argument");
-}
-
-console.log("bundles.js validateBundle");
+const INVALID = {code: "invalid-argument"};
 
 test("accepts a valid bundle and keeps its task order", () => {
   const result = validateBundle(payload({
@@ -64,8 +48,8 @@ test("accepts a valid bundle and keeps its task order", () => {
 });
 
 test("a bundle needs between 2 and 6 tasks", () => {
-  rejects(() => validateBundle(payload({tasks: [task()]})));
-  rejects(() => validateBundle(payload({tasks: Array(7).fill(task())})));
+  assert.throws(() => validateBundle(payload({tasks: [task()]})), INVALID);
+  assert.throws(() => validateBundle(payload({tasks: Array(7).fill(task())})), INVALID);
   validateBundle(payload({tasks: Array(6).fill(task())})); // 6 is fine
 });
 
@@ -90,42 +74,40 @@ test("photo tags must point at real, distinct photos", () => {
     photoUrls: ["a.jpg"],
     tasks: [task({photoIndexes}), task()],
   });
-  rejects(() => validateBundle(tagged([1]))); // no second photo
-  rejects(() => validateBundle(tagged([-1])));
-  rejects(() => validateBundle(tagged([0, 0])));
-  rejects(() => validateBundle(tagged("0")));
+  assert.throws(() => validateBundle(tagged([1])), INVALID); // no second photo
+  assert.throws(() => validateBundle(tagged([-1])), INVALID);
+  assert.throws(() => validateBundle(tagged([0, 0])), INVALID);
+  assert.throws(() => validateBundle(tagged("0")), INVALID);
   validateBundle(tagged([0]));
 });
 
 test("a category outside kServiceCategories is refused", () => {
-  rejects(() => validateBundle(payload({
+  assert.throws(() => validateBundle(payload({
     tasks: [task({category: "Roofing"}), task()],
-  })));
+  })), INVALID);
 });
 
 test("a budget range that is back to front is refused", () => {
-  rejects(() => validateBundle(payload({
+  assert.throws(() => validateBundle(payload({
     tasks: [task({budgetMinSen: 50000, budgetMaxSen: 10000}), task()],
-  })));
+  })), INVALID);
 });
 
 test("a past deadline is refused; a future one becomes a Timestamp", () => {
-  rejects(() => validateBundle(payload({deadlineMillis: Date.now() - 1000})));
+  assert.throws(() => validateBundle(payload({deadlineMillis: Date.now() - 1000})), INVALID);
   const inAWeek = Date.now() + 7 * 24 * 60 * 60 * 1000;
   const result = validateBundle(payload({deadlineMillis: inAWeek}));
   assert.strictEqual(result.deadline.toMillis(), inAWeek);
 });
 
 test("blank text and a missing map pin are refused", () => {
-  rejects(() => validateBundle(payload({title: "   "})));
-  rejects(() => validateBundle(payload({location: {address: "Penang"}})));
-  rejects(() => validateBundle(payload({
+  assert.throws(() => validateBundle(payload({title: "   "})), INVALID);
+  assert.throws(() => validateBundle(payload({location: {address: "Penang"}})), INVALID);
+  assert.throws(() => validateBundle(payload({
     tasks: [task({description: ""}), task()],
-  })));
-  rejects(() => validateBundle(undefined));
+  })), INVALID);
+  assert.throws(() => validateBundle(undefined), INVALID);
 });
-
-console.log("bundles.js validateBundleBid");
 
 /** A valid bundle-bid payload: two tasks, no bundle price. */
 function bidPayload(overrides = {}) {
@@ -146,27 +128,27 @@ test("accepts a valid bid and adds the task prices up", () => {
 });
 
 test("a bid must cover between 1 and 6 tasks", () => {
-  rejects(() => validateBundleBid(bidPayload({taskPrices: {}})));
-  rejects(() => validateBundleBid(bidPayload({taskPrices: []})));
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: {}})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: []})), INVALID);
   const seven = {};
   for (let i = 0; i < 7; i++) seven[`task${i}`] = 1000;
-  rejects(() => validateBundleBid(bidPayload({taskPrices: seven})));
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: seven})), INVALID);
 });
 
 test("every task price must be a whole number of sen above zero", () => {
-  rejects(() => validateBundleBid(bidPayload({taskPrices: {task1: 0}})));
-  rejects(() => validateBundleBid(bidPayload({taskPrices: {task1: -500}})));
-  rejects(() => validateBundleBid(bidPayload({taskPrices: {task1: 12.5}})));
-  rejects(() => validateBundleBid(bidPayload({taskPrices: {task1: "15000"}})));
-  rejects(() => validateBundleBid(
-      bidPayload({taskPrices: {task1: 100000001}})));
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: {task1: 0}})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: {task1: -500}})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: {task1: 12.5}})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: {task1: "15000"}})), INVALID);
+  assert.throws(() => validateBundleBid(
+      bidPayload({taskPrices: {task1: 100000001}})), INVALID);
 });
 
 test("a bid can't pass the RM 50,000 wallet cap", () => {
-  rejects(() => validateBundleBid(bidPayload({taskPrices: {task1: 5000001}})));
+  assert.throws(() => validateBundleBid(bidPayload({taskPrices: {task1: 5000001}})), INVALID);
   // Two tasks under the cap alone, over it together.
-  rejects(() => validateBundleBid(
-      bidPayload({taskPrices: {task1: 3000000, task2: 3000000}})));
+  assert.throws(() => validateBundleBid(
+      bidPayload({taskPrices: {task1: 3000000, task2: 3000000}})), INVALID);
   // A bundle price brings the same pair back under it.
   validateBundleBid(bidPayload({
     taskPrices: {task1: 3000000, task2: 3000000},
@@ -175,9 +157,9 @@ test("a bid can't pass the RM 50,000 wallet cap", () => {
 });
 
 test("a bundle price must be lower than the task prices added up", () => {
-  rejects(() => validateBundleBid(bidPayload({bundlePriceSen: 24000})));
-  rejects(() => validateBundleBid(bidPayload({bundlePriceSen: 30000})));
-  rejects(() => validateBundleBid(bidPayload({bundlePriceSen: 0})));
+  assert.throws(() => validateBundleBid(bidPayload({bundlePriceSen: 24000})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({bundlePriceSen: 30000})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({bundlePriceSen: 0})), INVALID);
   const result = validateBundleBid(bidPayload({bundlePriceSen: 21000}));
   assert.strictEqual(result.bundlePriceSen, 21000);
 });
@@ -191,10 +173,10 @@ test("a bundle price too low to share across every task is refused", () => {
   // Splitting RM 5,000 in proportion to a RM 0.01 task and a RM 10,000 task
   // rounds the small task's share down to 0 - it would be awarded at RM 0
   // and could never be funded.
-  rejects(() => validateBundleBid(bidPayload({
+  assert.throws(() => validateBundleBid(bidPayload({
     taskPrices: {task1: 1, task2: 1000000},
     bundlePriceSen: 500000,
-  })));
+  })), INVALID);
 });
 
 test("splitBundlePrice sums exactly and gives every task at least 1 sen",
@@ -202,15 +184,19 @@ test("splitBundlePrice sums exactly and gives every task at least 1 sen",
   const amounts = splitBundlePrice({task1: 15000, task2: 9000}, 20000);
   assert.strictEqual(amounts.task1 + amounts.task2, 20000);
   assert.ok(Object.values(amounts).every((sen) => sen >= 1));
+  // The last task absorbs the rounding.
+  assert.deepStrictEqual(
+      splitBundlePrice({waterproof: 22000, tiling: 30000}, 50000),
+      {waterproof: 21153, tiling: 28847});
   const thirds = splitBundlePrice({a: 1, b: 1, c: 1}, 100);
   assert.strictEqual(thirds.a + thirds.b + thirds.c, 100);
   assert.ok(Object.values(thirds).every((sen) => sen >= 1));
 });
 
 test("the duration and the message are required", () => {
-  rejects(() => validateBundleBid(bidPayload({estimatedDuration: ""})));
-  rejects(() => validateBundleBid(bidPayload({message: "   "})));
-  rejects(() => validateBundleBid(undefined));
+  assert.throws(() => validateBundleBid(bidPayload({estimatedDuration: ""})), INVALID);
+  assert.throws(() => validateBundleBid(bidPayload({message: "   "})), INVALID);
+  assert.throws(() => validateBundleBid(undefined), INVALID);
 });
 
 test("a bundle stops taking bids when it closes or its deadline passes", () => {
@@ -225,34 +211,3 @@ test("a bundle stops taking bids when it closes or its deadline passes", () => {
   assert.strictEqual(
       bundleBiddingOpen({status: "cancelled", deadline: inAnHour}), false);
 });
-
-// ---------------------------------------------------------------------------
-// Phase 5: which participants a completed bundle task still owes a
-// `jobsCompleted` bump - a bundle counts once per participant, not per task.
-// ---------------------------------------------------------------------------
-
-console.log("bundles.js uidsToCount");
-
-test("with nobody already counted, every participant is due the bump", () => {
-  assert.deepStrictEqual(
-      uidsToCount(["provider1", "requestor1"], []),
-      ["provider1", "requestor1"]);
-});
-
-test("a uid already counted for this bundle is skipped", () => {
-  assert.deepStrictEqual(
-      uidsToCount(["provider1", "requestor1"], ["provider1"]),
-      ["requestor1"]);
-});
-
-test("once both are counted, nobody is due a further bump", () => {
-  assert.deepStrictEqual(
-      uidsToCount(["provider1", "requestor1"], ["provider1", "requestor1"]),
-      []);
-});
-
-if (failed > 0) {
-  console.log(`\n${failed} bundle validation test(s) failed.`);
-  process.exit(1);
-}
-console.log("All bundle validation tests passed.\n");

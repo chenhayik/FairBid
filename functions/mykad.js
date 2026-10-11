@@ -1,26 +1,34 @@
-/**
- * MyKad (Malaysian IC) number validation - the JS twin of
- * lib/core/util/mykad_number.dart, pinned to it by
- * test/fixtures/mykad_vectors.json.
- *
- * Format YYMMDD-PB-###G. There is NO checksum: the only offline checks are
- * length, a real birth date, age >= 18 and a plausible place-of-birth code.
- * Dependency-free so the tests run in plain node.
- */
+// MyKad (Malaysian IC) validation: the JS twin of lib/core/util/mykad_number.dart,
+// pinned to it by test/fixtures/mykad_vectors.json. Format YYMMDD-PB-###G with
+// no checksum: only length, a real birth date, age >= 18 and a plausible
+// place-of-birth code can be checked offline.
 
-/** Strips every non-digit. */
+/**
+ * What:   IC normaliser.
+ * Input:  Any text.
+ * Output: Its digits only.
+ */
 function normalizeIc(s) {
   return String(s ?? "").replace(/\D/g, "");
 }
 
-/** `******-07-**27` - enough to recognise, not enough to reuse. */
+/**
+ * What:   IC mask.
+ * Input:  An IC number.
+ * Output: `******-07-**27` (enough to recognise, not to reuse), or "" if not
+ *         12 digits.
+ */
 function maskIc(ic) {
   const n = normalizeIc(ic);
   if (n.length !== 12) return "";
   return `******-${n.slice(6, 8)}-**${n.slice(10)}`;
 }
 
-/** Today's date (YYYY-MM-DD) in Asia/Kuala_Lumpur: UTC+8, no DST. */
+/**
+ * What:   Today's date in Asia/Kuala_Lumpur (UTC+8, no DST).
+ * Input:  Optional [now] Date.
+ * Output: `YYYY-MM-DD`.
+ */
 function todayInKl(now = new Date()) {
   return new Date(now.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
@@ -49,10 +57,11 @@ function isRealDate(y, m, d) {
 const pad = (n, w) => String(n).padStart(w, "0");
 
 /**
- * Issue codes: wrong-length, invalid-date, invalid-pb-code, underage.
- * `unknown` PB codes are not an issue - they set pbNeedsReview.
- * @param {string} ic what the user typed
- * @param {string|Date} today YYYY-MM-DD, normally todayInKl()
+ * What:   IC validator.
+ * Input:  [ic] as typed; [today] as YYYY-MM-DD, normally todayInKl().
+ * Output: {ok, issues, normalized, masked, dob, isMale, pbNeedsReview}; issues
+ *         are wrong-length, invalid-date, invalid-pb-code, underage.
+ * Notes:  Unknown place-of-birth codes are not an issue; they set pbNeedsReview.
  */
 function validateIc(ic, today) {
   const normalized = normalizeIc(ic);
@@ -107,8 +116,10 @@ const RE_RELIGION = /^(ISLAM|KRISTIAN|BUDDHA|HINDU)$/;
 const RE_MARKERS = /KAD\s+PENGENALAN|MYKAD|WARGANEGARA|IDENTITY\s+CARD/i;
 
 /**
- * Reads IC number, name and gender from the flattened OCR text of a MyKad
- * front. Deliberately never returns the address or religion.
+ * What:   Reader for the OCR text of a MyKad front.
+ * Input:  Flattened OCR text.
+ * Output: {icNumber, name, gender, hasMarkers}.
+ * Notes:  Never returns the address or religion.
  */
 function parseMyKadText(text) {
   const src = String(text ?? "");

@@ -25,11 +25,9 @@ import '../../wallet/presentation/payout_method_screen.dart';
 import '../../wallet/presentation/toyyibpay_webview_screen.dart';
 import '../../wallet/presentation/wallet_amount_sheet.dart';
 
-/// The wallet screen. Providers see Earnings & Payouts - Available (with
-/// Withdraw), In Escrow and Total Earnings from their milestones, and their
-/// payout method. Requestors see their wallet with a real toyyibPay
-/// (sandbox) Top Up - plus a demo top-up kept around for testing without the
-/// gateway. Both share the transaction history.
+/// What:   Wallet screen: Earnings & payouts for providers, My wallet for requestors.
+/// Input:  WalletRepository (ledger, payout method), MilestoneRepository / JobRepository for escrow figures.
+/// Output: Providers: Available with Withdraw, In escrow, Total earnings, payout method. Requestors: toyyibPay (sandbox) Top Up, optional demo top-up, held-in-escrow card. Both: transaction history.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 
@@ -38,7 +36,7 @@ class EarningsScreen extends StatefulWidget {
 }
 
 class _EarningsScreenState extends State<EarningsScreen> {
-  // Cached so rebuilds don't resubscribe to Firestore.
+  // Created once so rebuilds don't resubscribe.
   Stream<List<LedgerEntry>>? _transactions;
   Stream<List<Milestone>>? _milestones;
 
@@ -78,29 +76,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
 
   /// Asks for a payout method before the first withdrawal.
   Future<void> _askForPayoutMethod() async {
-    final add = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Where should we send it?'),
-        content: const Text('Add a DuitNow ID or bank account before your '
-            'first withdrawal.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Add payout method'),
-          ),
-        ],
-      ),
+    final add = await showConfirmDialog(
+      context,
+      title: 'Where should we send it?',
+      body: 'Add a DuitNow ID or bank account before your first withdrawal.',
+      cancelLabel: 'Not now',
+      actionLabel: 'Add payout method',
     );
-    if (add == true && mounted) await PayoutMethodScreen.open(context);
+    if (add && mounted) await PayoutMethodScreen.open(context);
   }
 
-  /// Runs after a successful top-up/withdraw so the Available figure (read
-  /// from the profile) reflects the new balance immediately.
+  /// Re-reads the profile so Available reflects a new balance at once.
   Future<void> _refreshBalance() =>
       context.read<AuthController>().refreshUser();
 
@@ -116,8 +102,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
       return;
     }
 
-    // Step up before money leaves the account: a stolen unlocked phone
-    // shouldn't be enough to drain a wallet.
+    // Step-up auth: an unlocked stolen phone shouldn't drain the wallet.
     final confirmed = await ReauthDialog.show(
       context,
       user: user,
@@ -148,15 +133,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
     }
   }
 
-  /// Real top-up: asks for an amount, creates a toyyibPay (sandbox) bill and
-  /// opens its hosted payment page in a WebView. The wallet balance only
-  /// updates once the server independently confirms the bill was paid - the
-  /// WebView returning is just a UX cue, never trusted on its own - so this
-  /// reconciles with the server immediately after, as a backstop for a
-  /// webhook toyyibPay hasn't delivered yet. The WebView's return status is
-  /// only ever used to pick which copy to show below (cancelled vs.
-  /// attempted); [WalletRepository.reconcileTopUp] is the sole source of
-  /// truth for whether money actually moved.
+  /// Top-up: asks for an amount, opens a toyyibPay (sandbox) bill in a WebView, then reconciles with
+  /// the server (backstop for a missed webhook). The WebView status only picks the copy;
+  /// [WalletRepository.reconcileTopUp] decides whether money moved.
   Future<void> _topUp() async {
     final wallet = context.read<WalletRepository>();
     String? billCode;
@@ -186,10 +165,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
     logPayment('topup.webview.returned',
         data: {'billCode': billCode, 'statusHint': status?.name});
 
-    // The user backed out before the browser ever reached toyyibPay's return
-    // URL: most likely nothing was attempted, so there is nothing to
-    // reconcile - reconciling anyway would just report "not paid" and read
-    // as a false alarm.
+    // Backed out before the return URL: nothing to reconcile (it would read as a false alarm).
     if (status == null || status == ToyyibpayReturnStatus.cancelled) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Payment cancelled. Nothing was charged.')));
@@ -201,21 +177,13 @@ class _EarningsScreenState extends State<EarningsScreen> {
     bool credited;
     try {
       credited = await wallet.reconcileTopUp(billCode!);
-    } on FirebaseFunctionsException catch (e) {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          e.message ??
+          (e is FirebaseFunctionsException ? e.message : null) ??
               "Couldn't confirm your payment. If you were charged, it will "
                   'appear in your transaction history automatically once '
                   "processed. Don't pay again.")));
-      return;
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              "Couldn't confirm your payment. If you were charged, it will "
-              'appear in your transaction history automatically once '
-              "processed. Don't pay again.")));
       return;
     }
 
@@ -234,8 +202,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Demo-only top-up standing in for the gateway (kept for testing without
-  /// driving the real toyyibPay flow); untouched by the change above.
+  /// Demo top-up for testing without the real gateway.
   Future<void> _topUpDemo() async {
     final wallet = context.read<WalletRepository>();
     int? amountSen;
@@ -271,11 +238,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
       appBar:
           AppBar(title: Text(isProvider ? 'Earnings & payouts' : 'My wallet')),
       body: SafeArea(
-        // The top-up failure copy tells users their payment will show up here,
-        // and people reach for a pull-to-refresh at exactly that moment. The
-        // balance and ledger are live streams so this is mostly reassurance,
-        // but an unresponsive pull right after paying reads as "my money is
-        // gone". AlwaysScrollable so the gesture works on a short list too.
+        // Pull-to-refresh is mostly reassurance (the data is live) but is expected right after paying.
         child: RefreshIndicator(
           onRefresh: _refreshBalance,
           child: ListView(
@@ -299,7 +262,10 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 ),
               ),
             ],
-            if (!isProvider) ...[
+            if (isProvider) ...[
+              const SizedBox(height: 16),
+              _EscrowStats(stream: _milestones),
+            ] else ...[
               const SizedBox(height: 8),
               // Refunds land here, so clients can take money back out too.
               SecondaryButton(
@@ -308,21 +274,12 @@ class _EarningsScreenState extends State<EarningsScreen> {
               ),
               const SizedBox(height: 16),
               _HeldForJobsCard(stream: _myJobs),
-              const SizedBox(height: 16),
-              _PayoutMethodCard(
-                method: _payout,
-                onEdit: () => PayoutMethodScreen.open(context),
-              ),
             ],
-            if (isProvider) ...[
-              const SizedBox(height: 16),
-              _EscrowStats(stream: _milestones),
-              const SizedBox(height: 16),
-              _PayoutMethodCard(
-                method: _payout,
-                onEdit: () => PayoutMethodScreen.open(context),
-              ),
-            ],
+            const SizedBox(height: 16),
+            _PayoutMethodCard(
+              method: _payout,
+              onEdit: () => PayoutMethodScreen.open(context),
+            ),
             const SizedBox(height: 16),
             _TransactionHistoryCard(stream: _transactions, myUid: user.uid),
             ],
@@ -379,8 +336,7 @@ class _AvailableCard extends StatelessWidget {
   }
 }
 
-/// In Escrow (funded + delivered milestones) and Total Earnings (released),
-/// summed live from the provider's milestones across all their jobs.
+/// In Escrow (funded + submitted) and Total Earnings (released), summed from the provider's milestones.
 class _EscrowStats extends StatelessWidget {
   const _EscrowStats({required this.stream});
   final Stream<List<Milestone>>? stream;
@@ -399,46 +355,31 @@ class _EscrowStats extends StatelessWidget {
             ),
           );
         }
-        // Without this, the first frame renders "RM 0.00" for both figures,
-        // so a provider opening the wallet is briefly told their escrowed
-        // money is zero. Dashes match the stat cards on provider home.
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Column(
-            children: [
-              StatCard(
-                label: 'In escrow',
-                value: '-',
-                icon: Icons.lock_outline,
-              ),
-              SizedBox(height: 12),
-              StatCard(label: 'Total earnings', value: '-'),
-            ],
-          );
-        }
-        final milestones = snapshot.data ?? [];
+        // Dashes while loading, so RM 0.00 isn't shown as fact.
+        final loading = snapshot.connectionState == ConnectionState.waiting;
+        final milestones = loading ? const <Milestone>[] : snapshot.data ?? [];
         int inEscrowSen = 0, earnedSen = 0;
         for (final m in milestones) {
           switch (m.status) {
             case MilestoneStatus.funded || MilestoneStatus.submitted:
               inEscrowSen += m.amountSen;
-            // A dispute won by the provider now writes `released` (counted
-            // above). `resolved` only appears on legacy documents from before
-            // that change; count it here so a past dispute win still shows up.
+            // `resolved` only exists on legacy dispute wins.
             case MilestoneStatus.released || MilestoneStatus.resolved:
               earnedSen += m.amountSen;
             default:
               break;
           }
         }
+        String show(int sen) => loading ? '-' : formatRm(sen);
         return Column(
           children: [
             StatCard(
               label: 'In escrow',
-              value: formatRm(inEscrowSen),
+              value: show(inEscrowSen),
               icon: Icons.lock_outline,
             ),
             const SizedBox(height: 12),
-            StatCard(label: 'Total earnings', value: formatRm(earnedSen)),
+            StatCard(label: 'Total earnings', value: show(earnedSen)),
           ],
         );
       },
@@ -446,7 +387,7 @@ class _EscrowStats extends StatelessWidget {
   }
 }
 
-/// Money a client has paid into escrow for jobs still in progress.
+/// Money a client has in escrow for in-progress jobs.
 class _HeldForJobsCard extends StatelessWidget {
   const _HeldForJobsCard({required this.stream});
   final Stream<List<Job>>? stream;
@@ -456,7 +397,7 @@ class _HeldForJobsCard extends StatelessWidget {
     return StreamBuilder<List<Job>>(
       stream: stream,
       builder: (context, snapshot) {
-        // A job paid in full at award holds its whole price until released.
+        // A job is paid in full at award and holds its whole price until released.
         final heldSen = (snapshot.data ?? const <Job>[])
             .where((j) => j.status == JobStatus.inProgress)
             .fold<int>(0, (sum, j) => sum + (j.acceptedBidAmountSen ?? 0));
@@ -562,8 +503,7 @@ class _TransactionHistoryCard extends StatelessWidget {
                   message: 'Please check your connection and try again.',
                 );
               }
-              // Check loading before empty, otherwise "No transactions yet"
-              // is asserted as fact while the ledger is still arriving.
+              // Loading before empty, so "No transactions yet" isn't asserted early.
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24),

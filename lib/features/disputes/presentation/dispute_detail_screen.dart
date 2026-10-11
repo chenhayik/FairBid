@@ -7,6 +7,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/form_widgets.dart';
+import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../admin/domain/pending_verification.dart';
 import '../../admin/presentation/widgets/document_gallery.dart';
 import '../../messages/data/chat_repository.dart';
@@ -14,9 +16,9 @@ import '../../messages/domain/message.dart';
 import '../data/dispute_repository.dart';
 import '../domain/dispute.dart';
 
-/// The ruling screen an admin opens from the dispute queue: the raiser's
-/// statement, photo evidence and the job's chat history, then a Release /
-/// Refund decision on the escrowed amount.
+/// What:   Admin ruling screen for one dispute.
+/// Input:  [dispute] from the queue; chat via ChatRepository.watchMessages() (chat_repository.dart).
+/// Output: Statement, evidence and chat; Pay / Refund calls resolveDispute then pops.
 class DisputeDetailScreen extends StatefulWidget {
   const DisputeDetailScreen({super.key, required this.dispute});
 
@@ -32,15 +34,27 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
   Dispute get d => widget.dispute;
 
   Future<void> _rule(DisputeResolution resolution) async {
+    final release = resolution == DisputeResolution.release;
     final note = await showDialog<String>(
       context: context,
-      builder: (context) => _RulingNoteDialog(resolution: resolution),
+      builder: (context) => ReasonDialog(
+        title: release
+            ? 'Pay the provider?'
+            : 'Refund the client and end the job?',
+        message: release
+            ? 'The money in this dispute goes to the provider. '
+                'Explain why; both sides will see it.'
+            : 'All money still held goes back to the client and the job '
+                'is cancelled. Explain why; both sides will see it.',
+        hint: 'e.g. Delivered work matches the milestone scope.',
+        confirmLabel: release ? 'Pay provider' : 'Refund and end job',
+        confirmColor: release ? null : context.fairbid.danger,
+      ),
     );
-    // Null → the admin cancelled. The dialog enforces a non-empty note.
+    // Null means cancelled; the dialog enforces a non-empty note.
     if (note == null || !mounted) return;
 
-    // Capture the messenger before the async gap and the pop, so the snackbar
-    // shows on the queue (this screen's context is gone once we pop).
+    // Captured early: this screen's context is gone after the pop, and the snackbar belongs on the queue.
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
@@ -53,17 +67,12 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
             ? '${formatRm(d.amountSen)} paid to the provider.'
             : 'The client was refunded and the job has ended.'),
       ));
-    } on FirebaseFunctionsException catch (e) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
       messenger.showSnackBar(SnackBar(
-          content:
-              Text(e.message ?? 'Could not save the ruling. Please try again.')));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not save the ruling. Please try again.')));
+          content: Text((e is FirebaseFunctionsException ? e.message : null) ??
+              'Could not save the ruling. Please try again.')));
     }
   }
 
@@ -132,7 +141,7 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
   }
 }
 
-/// Job/milestone summary, the disputed amount and who raised it.
+/// Job and milestone summary, disputed amount and who raised it.
 class _DisputeHeader extends StatelessWidget {
   const _DisputeHeader({required this.dispute});
 
@@ -181,35 +190,20 @@ class _DisputeHeader extends StatelessWidget {
   }
 }
 
-/// Read-only view of the job's chat thread (client left, provider right) so
-/// the admin can weigh what both parties agreed in writing.
-class _ChatHistoryCard extends StatefulWidget {
+/// Read-only job chat (client left, provider right) for weighing what was agreed.
+class _ChatHistoryCard extends StatelessWidget {
   const _ChatHistoryCard({required this.dispute});
 
   final Dispute dispute;
 
   @override
-  State<_ChatHistoryCard> createState() => _ChatHistoryCardState();
-}
-
-class _ChatHistoryCardState extends State<_ChatHistoryCard> {
-  // Cached so rebuilds don't resubscribe to Firestore.
-  late final Stream<List<Message>> _messages;
-
-  @override
-  void initState() {
-    super.initState();
-    _messages = context
-        .read<ChatRepository>()
-        .watchMessages(widget.dispute.conversationId);
-  }
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AppCard(
-      child: StreamBuilder<List<Message>>(
-        stream: _messages,
+      child: KeyedStreamBuilder<List<Message>>(
+        cacheKey: dispute.conversationId,
+        create: () =>
+            context.read<ChatRepository>().watchMessages(dispute.conversationId),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Padding(
@@ -217,7 +211,7 @@ class _ChatHistoryCardState extends State<_ChatHistoryCard> {
               child: Center(child: CircularProgressIndicator()),
             );
           }
-          // Newest-first from the repository → oldest-first for reading.
+          // Repository gives newest-first; reverse for reading.
           final messages = (snapshot.data ?? []).reversed.toList();
           if (messages.isEmpty) {
             return const EmptyState(
@@ -232,7 +226,7 @@ class _ChatHistoryCardState extends State<_ChatHistoryCard> {
               for (final message in messages)
                 _ChatLine(
                   message: message,
-                  isProvider: message.senderId == widget.dispute.providerId,
+                  isProvider: message.senderId == dispute.providerId,
                 ),
               const SizedBox(height: 4),
               Text('Showing the latest ${messages.length} messages.',
@@ -247,7 +241,7 @@ class _ChatHistoryCardState extends State<_ChatHistoryCard> {
   }
 }
 
-/// One message row: client on the left in grey, provider on the right in blue.
+/// One message: client left in grey, provider right in blue.
 class _ChatLine extends StatelessWidget {
   const _ChatLine({required this.message, required this.isProvider});
 
@@ -292,7 +286,7 @@ class _ChatLine extends StatelessWidget {
   }
 }
 
-/// Sticky bottom bar with the two rulings on the escrowed amount.
+/// Sticky bottom bar with the Pay and Refund rulings.
 class _RulingBar extends StatelessWidget {
   const _RulingBar({
     required this.amountSen,
@@ -315,7 +309,7 @@ class _RulingBar extends StatelessWidget {
         color: Colors.white,
         border: Border(top: BorderSide(color: context.fairbid.borderSubtle)),
       ),
-      // Stacked so each label can say exactly what happens.
+      // Stacked so each label can be explicit.
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -338,77 +332,6 @@ class _RulingBar extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Ruling-note dialog. The note is required - it explains the decision to
-/// both parties - so confirm stays disabled until something is typed.
-class _RulingNoteDialog extends StatefulWidget {
-  const _RulingNoteDialog({required this.resolution});
-
-  final DisputeResolution resolution;
-
-  @override
-  State<_RulingNoteDialog> createState() => _RulingNoteDialogState();
-}
-
-class _RulingNoteDialogState extends State<_RulingNoteDialog> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final release = widget.resolution == DisputeResolution.release;
-    return AlertDialog(
-      title: Text(release
-          ? 'Pay the provider?'
-          : 'Refund the client and end the job?'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-              release
-                  ? 'The money in this dispute goes to the provider. '
-                      'Explain why; both sides will see it.'
-                  : 'All money still held goes back to the client and the job '
-                      'is cancelled. Explain why; both sides will see it.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            maxLines: 3,
-            autofocus: true,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              hintText: 'e.g. Delivered work matches the milestone scope.',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          style: release
-              ? null
-              : FilledButton.styleFrom(
-                  backgroundColor: context.fairbid.danger),
-          onPressed: _controller.text.trim().isEmpty
-              ? null
-              : () => Navigator.of(context).pop(_controller.text.trim()),
-          child: Text(release ? 'Pay provider' : 'Refund and end job'),
-        ),
-      ],
     );
   }
 }

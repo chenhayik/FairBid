@@ -1,18 +1,15 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
-/// An authentication error with a message that is safe to show the user.
-///
-/// Firebase throws [FirebaseAuthException] with terse codes like
-/// `wrong-password`. [AuthException.fromFirebase] turns those codes into short,
-/// friendly sentences so every screen can display errors the same way.
+/// What:   Auth error whose [message] is safe to show the user.
+/// Input:  Thrown by FirebaseAuthRepository; [AuthException.fromFirebase] maps Firebase codes.
+/// Output: [message] shown by screens and AuthController.errorMessage.
 class AuthException implements Exception {
   const AuthException(this.message);
 
   final String message;
 
   factory AuthException.fromFirebase(FirebaseAuthException e) {
-    // Android reports an expired TOTP challenge as code 'unknown' with the
-    // real reason only in the message.
+    // Android reports an expired TOTP challenge as code 'unknown'.
     if (e.message?.contains('TOTP_CHALLENGE_TIMEOUT') ?? false) {
       return const AuthException(
           'That took too long. Please sign in again.');

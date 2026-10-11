@@ -1,8 +1,7 @@
-/// A requestor's precise, structured Malaysian service address for a job -
-/// distinct from [JobLocation]'s coarse map pin, which stays visible to every
-/// bidder. This is kept private (see `job_repository.dart`'s
-/// `setJobAddress`/`watchJobAddress` and the matching Firestore rule): only
-/// the job's owner, its accepted provider and admins may ever read it.
+/// What:   A job's private street address, separate from the coarse public pin.
+/// Input:  `jobs/{jobId}/private/address` via JobRepository.watchJobAddress() (job_repository.dart).
+/// Output: Structured fields plus [summary]/[formatted] for display.
+/// Notes:  Only the owner, accepted provider and admins can read it (firestore.rules).
 class ServiceAddress {
   const ServiceAddress({
     required this.line1,
@@ -40,9 +39,7 @@ class ServiceAddress {
         'accessNote': accessNote,
       };
 
-  /// Rebuilds a [ServiceAddress] from a stored map. Returns `null` when
-  /// [map] is null or has no [line1], so callers can treat "no address" -
-  /// the common case, since this is entirely optional - cleanly.
+  /// Null when [map] is null or has no [line1] (no address set).
   static ServiceAddress? fromMap(Map<String, dynamic>? map) {
     final line1 = map?['line1'] as String?;
     if (line1 == null || line1.isEmpty) return null;

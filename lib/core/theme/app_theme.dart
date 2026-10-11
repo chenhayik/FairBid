@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// FairBid brand and semantic colours that are not part of Material's
-/// [ColorScheme]. Read them with `Theme.of(context).extension<FairBidColors>()`.
-///
-/// Values come from DESIGN.md (§1 Colour tokens).
+/// What:   FairBid brand and semantic colours outside Material's [ColorScheme] (DESIGN.md §1).
+/// Input:  Built in [AppTheme]; read with `context.fairbid`.
+/// Output: Theme extension of colour tokens.
 @immutable
 class FairBidColors extends ThemeExtension<FairBidColors> {
   const FairBidColors({
@@ -25,11 +24,7 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
   final Color borderSubtle; // #E2E8F0 hairline border
   final Color warningText; // #B07B00 dark amber icon/accent on tinted fills
 
-  /// #087F3F dark green for text and glyphs on light fills. [success] is a
-  /// fill colour: at 2.2:1 on white and 2.05:1 on its own 10% tint it fails
-  /// AA as a foreground, which is why "BEST VALUE" and the paid-out milestone
-  /// tick were the hardest things on their cards to read. Pair fills with
-  /// [success] and anything readable with this.
+  /// #087F3F dark green for text and glyphs on light fills; [success] fails AA as a foreground.
   final Color successText;
 
   @override
@@ -82,19 +77,19 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
   );
 }
 
-/// Convenience accessor: `context.fairbid.verified` etc.
 extension FairBidColorsX on BuildContext {
   FairBidColors get fairbid => Theme.of(this).extension<FairBidColors>()!;
 }
 
-/// Central place to build the app's [ThemeData] from the DESIGN.md tokens.
+/// What:   Builds the app's [ThemeData] from the DESIGN.md tokens.
+/// Input:  None; [light] is built once.
+/// Output: The light theme with the [FairBidColors] extension.
 class AppTheme {
   const AppTheme._();
 
   static const brandBlue = Color(0xFF0052FF);
 
-  /// Built once: a fresh ThemeData per rebuild never compares equal (its
-  /// state-aware button styles are closures), which re-themes the whole app.
+  /// Built once: a fresh ThemeData never compares equal (closure-based styles) and would re-theme the app.
   static final ThemeData light = _buildLight();
 
   static ThemeData _buildLight() {
@@ -195,11 +190,7 @@ class AppTheme {
     );
   }
 
-  // Typography scale from DESIGN.md §2 (mapped onto Material's TextTheme slots).
-  //
-  // Use copyWith on the base styles (never a fresh `TextStyle`) so the text
-  // colours Flutter already resolved from the colorScheme are preserved - a
-  // colourless override makes typed input render invisible on white fields.
+  // DESIGN.md §2 typography. Use copyWith on the base styles: a fresh TextStyle loses the resolved colour and typed input turns invisible.
   static TextTheme _textTheme(TextTheme base) {
     return base.copyWith(
       headlineMedium: base.headlineMedium?.copyWith(

@@ -6,12 +6,9 @@ import '../../../core/widgets/app_widgets.dart';
 import '../domain/mfa.dart';
 import 'auth_controller.dart';
 
-/// Asks for the 6-digit code from the user's authenticator app to finish a
-/// sign-in or re-authentication that Firebase paused for a second factor.
-///
-/// [show] resolves true once the code is accepted. A wrong code is retried
-/// against the same challenge; an expired one closes the sheet so the caller
-/// can restart sign-in.
+/// What:   Bottom sheet asking for the authenticator app's 6-digit code.
+/// Input:  [MfaChallenge] from a paused sign-in or re-auth; [AuthController.submitMfaCode].
+/// Output: [show] resolves true once accepted; a wrong code retries, an expired one closes it.
 class MfaCodeSheet extends StatefulWidget {
   const MfaCodeSheet({super.key, required this.challenge});
 
@@ -66,10 +63,9 @@ class _MfaCodeSheetState extends State<MfaCodeSheet> {
       return;
     }
     final message = auth.errorMessage ?? 'Could not verify that code.';
-    // Clear the controller's copy so the screen behind this sheet doesn't
-    // also render it in its own error banner.
+    // Clear the controller's copy so the screen behind doesn't show it too.
     auth.clearError();
-    // An expired challenge can't be retried - close so the caller restarts.
+    // An expired challenge can't be retried; close so the caller restarts.
     if (message.contains('sign in again')) {
       Navigator.of(context).pop(false);
       return;

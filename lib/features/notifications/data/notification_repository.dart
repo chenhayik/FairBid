@@ -3,16 +3,14 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 import '../domain/app_notification.dart';
 
-/// Reads the user's notification feed and manages their FCM device tokens.
-/// Notifications are written only by Cloud Functions; the client streams them
-/// and may flip `read`. UI/controllers depend on this interface so tests can
-/// use a fake without Firebase.
+/// What:   Notification feed and FCM device-token API.
+/// Input:  Firestore and FCM via FirebaseNotificationRepository; a fake in tests.
+/// Output: Feed streams; Cloud Functions write notifications, the client only flips `read`.
 abstract interface class NotificationRepository {
-  /// Streams the user's newest notifications, newest first.
+  /// The user's newest notifications, newest first.
   Stream<List<AppNotification>> watchMine(String uid);
 
-  /// Streams how many of the user's notifications are unread, for the bell
-  /// badge.
+  /// Unread count for the bell badge.
   Stream<int> watchUnreadCount(String uid);
 
   /// Marks one notification as read.
@@ -21,18 +19,16 @@ abstract interface class NotificationRepository {
   /// Marks every unread notification as read.
   Future<void> markAllRead(String uid);
 
-  /// Registers this device's FCM token on the user's profile (multi-device:
-  /// tokens live in an array). Call after sign-in and on token refresh.
+  /// Adds this device's FCM token to the profile's token array; call after sign-in and on refresh.
   Future<void> registerToken(String uid);
 
-  /// Removes this device's token so the next account on this device can't
-  /// receive the previous user's notifications. Call before sign-out.
+  /// Removes this device's token so the next account here gets none of this user's pushes; call before sign-out.
   Future<void> removeToken(String uid);
 }
 
-/// Firebase-backed [NotificationRepository]. Notifications live at
-/// `users/{uid}/notifications`; tokens in the `fcmTokens` array on the user
-/// doc (owner-writable - the field is not in the protected list).
+/// What:   Firebase-backed [NotificationRepository].
+/// Input:  `users/{uid}/notifications`; tokens in the owner-writable `fcmTokens` array on the user doc.
+/// Output: AppNotification streams and token writes.
 class FirebaseNotificationRepository implements NotificationRepository {
   FirebaseNotificationRepository({
     FirebaseFirestore? firestore,
@@ -48,7 +44,7 @@ class FirebaseNotificationRepository implements NotificationRepository {
 
   @override
   Stream<List<AppNotification>> watchMine(String uid) {
-    // Single-field orderBy inside one subcollection - no composite index.
+    // Single-field orderBy needs no composite index.
     return _notifications(uid)
         .orderBy('createdAt', descending: true)
         .limit(50)
@@ -60,8 +56,7 @@ class FirebaseNotificationRepository implements NotificationRepository {
 
   @override
   Stream<int> watchUnreadCount(String uid) {
-    // Derived from the same stream the list uses (like ChatRepository's
-    // watchTotalUnread) - one Firestore listener serves both surfaces.
+    // Derived from the list's stream.
     return watchMine(uid).map(
         (items) => items.where((n) => !n.read).length);
   }
@@ -101,7 +96,6 @@ class FirebaseNotificationRepository implements NotificationRepository {
     });
   }
 
-  /// Normalises Firestore Timestamps to DateTime before building the model.
   AppNotification _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});
     data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();

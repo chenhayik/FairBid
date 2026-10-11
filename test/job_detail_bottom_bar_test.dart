@@ -13,52 +13,16 @@ import 'package:fairbid/features/jobs/presentation/detail/job_detail_view_model.
 import 'package:fairbid/features/profile/presentation/leave_review_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:go_router/go_router.dart';
 
-import 'widget_test.dart';
+import 'helpers/builders.dart';
+import 'helpers/fakes.dart';
+import 'helpers/harness.dart';
 
 const _longDescription =
     'What needs doing\nThe kitchen sink leaks under the cabinet and the '
     'cabinet floor is swollen.\n\nAccess & details\nGround floor unit, '
     'parking outside. Weekdays after 6pm or Saturday morning.\n\n'
     'Expected outcome\nNo leaks, cabinet base replaced, area cleaned.';
-
-/// Photos plus a long description push the milestone and review sections
-/// well below the fold of a 360x780 screen.
-Job _tallJob({
-  required bool owner,
-  JobStatus status = JobStatus.inProgress,
-}) => Job(
-  id: 'job-1',
-  requestorId: owner ? 'uid-1' : 'req-9',
-  requestorName: 'Rita Client',
-  title: 'Fix leaking sink',
-  description: _longDescription,
-  category: 'Plumbing',
-  location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Bangsar, KL'),
-  budget: const JobBudget(minSen: 10000, maxSen: 25000),
-  photoUrls: const [
-    'https://example.com/a.jpg',
-    'https://example.com/b.jpg',
-  ],
-  createdAt: DateTime.now(),
-  status: status,
-  acceptedProviderId: owner ? 'prov-1' : 'uid-1',
-  acceptedProviderName: 'Pro Fixer',
-  acceptedBidAmountSen: 15000,
-);
-
-Milestone _milestone(MilestoneStatus status, {required bool owner}) =>
-    Milestone(
-      id: 'ms-1',
-      jobId: 'job-1',
-      providerId: owner ? 'prov-1' : 'uid-1',
-      description: 'Full repair',
-      amountSen: 15000,
-      order: 0,
-      status: status,
-      createdAt: DateTime.now(),
-    );
 
 /// A release that stays in flight until [gate] completes.
 class _SlowReleaseRepository extends FakeMilestoneRepository {
@@ -73,7 +37,8 @@ class _SlowReleaseRepository extends FakeMilestoneRepository {
 }
 
 void main() {
-  /// Opens `/jobs/job-1` at 360x780, text scale 1.3, and never scrolls.
+  /// Photos plus a long description push the milestone and review sections
+  /// well below the fold of a 360x780 screen at text scale 1.3.
   Future<void> open(
     WidgetTester tester, {
     required bool owner,
@@ -84,42 +49,20 @@ void main() {
       List<Milestone> seed,
     )?
     repo,
-  }) async {
-    tester.view.physicalSize = const Size(360, 780) * 2;
-    tester.view.devicePixelRatio = 2;
-    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
-    addTearDown(tester.view.reset);
-    // The test font is far wider than a real one, so unrelated RenderFlex
-    // overflows would otherwise fail these behaviour tests.
-    final onError = FlutterError.onError;
-    FlutterError.onError = (details) {
-      if (!details.exceptionAsString().contains('overflowed')) {
-        onError?.call(details);
-      }
-    };
-    addTearDown(() => FlutterError.onError = onError);
-    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-
-    // Providers must be verified, or the app routes them to onboarding.
-    final auth = FakeAuthRepository()
-      ..verificationStatus = 'approved'
-      ..seedSignedIn(owner ? UserRole.requestor : UserRole.provider);
-    final job = _tallJob(owner: owner, status: status);
-    final seed = [if (milestone != null) _milestone(milestone, owner: owner)];
-    final jobs = FakeJobRepository([job]);
-    await tester.pumpWidget(
-      buildApp(
-        auth,
-        jobRepository: jobs,
-        milestoneRepository: repo?.call(jobs, seed) ??
-            FakeMilestoneRepository(jobs, seed),
-      ),
-    );
-    await tester.pumpAndSettle();
-    GoRouter.of(tester.element(find.byType(Scaffold).first))
-        .push<void>('/jobs/job-1');
-    await tester.pumpAndSettle();
-  }
+  }) => pumpJobDetail(
+    tester,
+    testJob(
+      owner: owner,
+      status: status,
+      description: _longDescription,
+      budget: const JobBudget(minSen: 10000, maxSen: 25000),
+      photoUrls: const ['https://example.com/a.jpg', 'https://example.com/b.jpg'],
+    ),
+    owner: owner,
+    milestones: [if (milestone != null) sampleMilestone(status: milestone, owner: owner)],
+    milestoneRepo: repo,
+    textScale: 1.3,
+  );
 
   group('bottom bar actions work without scrolling (360x780, 1.3x)', () {
     testWidgets('owner Release opens the confirm', (tester) async {

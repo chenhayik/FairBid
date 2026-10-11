@@ -10,8 +10,9 @@ import '../../../core/widgets/keyed_stream_builder.dart';
 import '../data/dispute_repository.dart';
 import '../domain/dispute.dart';
 
-/// Admin Home › Disputes tab: every open milestone dispute, oldest first, for
-/// the admin to open and rule on. Mirrors the verification queue.
+/// What:   Admin Disputes tab: open milestone disputes, oldest first.
+/// Input:  DisputeRepository.watchOpenDisputes() (dispute_repository.dart).
+/// Output: Cards that open `/admin/dispute`.
 class DisputeQueueScreen extends StatelessWidget {
   const DisputeQueueScreen({super.key});
 
@@ -77,7 +78,6 @@ class DisputeQueueScreen extends StatelessWidget {
   }
 }
 
-/// One open dispute in the queue list.
 class _DisputeCard extends StatelessWidget {
   const _DisputeCard({required this.dispute, required this.onTap});
 

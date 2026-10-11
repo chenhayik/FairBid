@@ -5,8 +5,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/bundle_award.dart';
 import 'bundle_warning_banner.dart';
 
-/// Sticky bottom bar for the client's own picks: the server-priced total,
-/// any problems, and the Award button.
+/// What:   Sticky bar for the client's own picks.
+/// Input:  [option] priced by BundleRepository.priceManualAward(); [problems], [pricing], [stale].
+/// Output: Total, problems and an Award button ([onAward]); [onRefresh] re-prices.
 class BundlePickBar extends StatelessWidget {
   const BundlePickBar({
     super.key,
@@ -19,7 +20,7 @@ class BundlePickBar extends StatelessWidget {
     required this.onAward,
   });
 
-  /// The priced pick, or null while pricing or when the server refused it.
+  /// Null while pricing or when the server refused the picks.
   final BundleAwardOption? option;
   final List<String> problems;
   final bool pricing;

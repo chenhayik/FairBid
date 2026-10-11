@@ -7,8 +7,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/user_chip.dart';
 import '../../domain/bid.dart';
 
-/// One bid as the requestor sees it: provider identity, price, duration and
-/// proposal, with an Accept action while the job is still open.
+/// What:   One bid as the requestor sees it.
+/// Input:  [bid] from BidRepository.watchBids(); [onAccept] while the job is open.
+/// Output: Provider, price, duration, proposal and an Accept bid button.
 class BidCard extends StatelessWidget {
   const BidCard(
       {super.key,
@@ -20,21 +21,16 @@ class BidCard extends StatelessWidget {
 
   final Bid bid;
 
-  /// Shown as an "Accept bid" button when non-null (job still open).
+  /// Shows the "Accept bid" button when set.
   final VoidCallback? onAccept;
 
-  /// Whether this bid's accept is in flight. Accepting runs a server
-  /// transaction that can take a second or two, so the button spins rather
-  /// than sitting inert and inviting a second tap on another provider.
+  /// This bid's accept is in flight (a server transaction); the button spins.
   final bool busy;
 
-  /// Whether the accept action can be taken. Set false on the *other* cards
-  /// while one accept is in flight, so the button greys out instead of
-  /// disappearing (which is what nulling [onAccept] would do).
+  /// False on the other cards while one accept runs, so the button greys out.
   final bool enabled;
 
-  /// Whether this is the top bid by the price+trust composite. When true the
-  /// card wears a success-accented "BEST VALUE" pill (design §6.6).
+  /// The top bid by price and trust; wears a "BEST VALUE" pill.
   final bool isBestValue;
 
   @override
@@ -56,36 +52,27 @@ class BidCard extends StatelessWidget {
           ],
           Row(
             children: [
-              // Only the identity row is tappable (through to the provider's
-              // public profile) - not the whole card, which already owns the
-              // Accept bid action below.
+              // Only the identity row opens the profile; the card owns Accept.
               Expanded(
                 child: UserChip(
                   uid: bid.providerId,
                   name: bid.providerName,
                   photoUrl: bid.providerPhotoUrl,
                   nameStyle: theme.textTheme.titleLarge,
-                  // A provider who hasn't earned a visible score yet is
-                  // labelled honestly instead of showing the internal
-                  // ranking prior as if it were earned.
+                  // Don't show the internal ranking prior as an earned score.
                   subtitle: bid.providerScoreVisible
                       ? 'Trust Score $trustPercent/100'
                       : 'New provider, no score yet',
                 ),
               ),
               const SizedBox(width: 8),
-              if (bid.providerScoreVisible)
-                PillBadge(
-                  label: 'Verified',
-                  icon: Icons.verified,
-                  color: context.fairbid.verified,
-                )
-              else
-                PillBadge(
-                  label: 'New',
-                  icon: Icons.auto_awesome,
-                  color: context.fairbid.verified,
-                ),
+              PillBadge(
+                label: bid.providerScoreVisible ? 'Verified' : 'New',
+                icon: bid.providerScoreVisible
+                    ? Icons.verified
+                    : Icons.auto_awesome,
+                color: context.fairbid.verified,
+              ),
             ],
           ),
           const SizedBox(height: 12),

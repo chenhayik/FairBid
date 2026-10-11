@@ -1,23 +1,26 @@
 // Pure rules for jobs funded at award (`fundedAtAward`): how a price change is
-// spread over the funded stages and what a cancellation refunds. Dependency-
-// free so `npm test` can cover every rule without Firebase, like
-// price_change.js. [milestones] is an array of `{id, status, amountSen,
-// order}` rows (the milestone doc id plus its data).
+// spread over the funded stages and what a cancellation refunds. Needs no
+// Firebase. [milestones] is an array of `{id, status, amountSen, order}` rows.
 
-// A finished milestone status; `resolved` is only kept for old data.
+/** True for a finished stage; `resolved` is only kept for old data. */
 const isTerminal = (status) =>
   status === "released" || status === "resolved" || status === "refunded";
 
 const sumAmounts = (rows) => rows.reduce((s, m) => s + (m.amountSen || 0), 0);
 
-/** Money held in escrow that no one has delivered against yet. */
+/**
+ * What:   Escrow not yet delivered against.
+ * Input:  [milestones] rows.
+ * Output: Total sen of `funded` stages.
+ */
 const fundedSen = (milestones) =>
   sumAmounts(milestones.filter((m) => m.status === "funded"));
 
 /**
- * Error message if a price change of [deltaSen] (new price minus old) can't
- * be taken from the funded stages, else null. Only a decrease is limited: it
- * is refunded out of stages that haven't been delivered, disputed or paid.
+ * What:   Limit check for a price change.
+ * Input:  [milestones] and [deltaSen] (new price minus old).
+ * Output: An error message, or null. Only a decrease is limited: it is refunded
+ *         from stages not yet delivered, disputed or paid.
  */
 function checkFundedPriceChange(milestones, deltaSen) {
   const available = fundedSen(milestones);
@@ -30,11 +33,11 @@ function checkFundedPriceChange(milestones, deltaSen) {
 }
 
 /**
- * How an increase of [deltaSen] lands on the stages: it grows the only stage
- * when the job has exactly one and it is still `funded`, otherwise it becomes
- * a new "Price change" stage after the last one. Returns
- * `{grow: {id, amountSen}}` (the stage's new amount) or
- * `{add: {id, order, amountSen}}`.
+ * What:   Plan for a price increase.
+ * Input:  [milestones] and [deltaSen] > 0.
+ * Output: `{grow: {id, amountSen}}` (the only stage, if still funded, gets its
+ *         new amount) or `{add: {id, order, amountSen}}` (a new "Price change"
+ *         stage after the last).
  */
 function planIncrease(milestones, deltaSen) {
   if (milestones.length === 1 && milestones[0].status === "funded") {
@@ -46,10 +49,11 @@ function planIncrease(milestones, deltaSen) {
 }
 
 /**
- * How a decrease of [refundSen] is taken: from `funded` stages, highest order
- * first. Returns `{updates: [{id, amountSen}], deleteIds: [id]}` where
- * `updates` holds the reduced stages' new amounts and `deleteIds` those that
- * reached zero. Callers validate with [checkFundedPriceChange] first.
+ * What:   Plan for a price decrease.
+ * Input:  [milestones] and [refundSen] > 0.
+ * Output: `{updates: [{id, amountSen}], deleteIds}`: reduced stages and those
+ *         that reached zero, taken from `funded` stages, highest order first.
+ * Notes:  Validate with checkFundedPriceChange first.
  */
 function planDecrease(milestones, refundSen) {
   const funded = milestones
@@ -69,22 +73,28 @@ function planDecrease(milestones, refundSen) {
 }
 
 /**
- * True when removing [deleteIds] leaves only paid stages, i.e. the decrease
- * itself finished the job (nothing is left to deliver or release).
+ * What:   Completion check after a decrease.
+ * Input:  [milestones] and the [deleteIds] removed.
+ * Output: True when only finished stages remain, so the decrease finished the job.
  */
 function finishedByDecrease(milestones, deleteIds) {
   const gone = new Set(deleteIds);
   return milestones.every((m) => gone.has(m.id) || isTerminal(m.status));
 }
 
-/** A cancellation can go ahead unless a stage is delivered or disputed. */
+/**
+ * What:   Cancellation guard.
+ * Input:  [milestones] rows.
+ * Output: False when any stage is delivered or disputed, else true.
+ */
 const canCancelFunded = (milestones) =>
   !milestones.some((m) => m.status === "submitted" || m.status === "disputed");
 
 /**
- * What cancelling refunds and cleans up: every `funded` stage is refunded in
- * full (`refunds`), and every stage that is neither funded nor paid is deleted
- * (`deleteIds`). Paid stages stay.
+ * What:   Plan for a cancellation.
+ * Input:  [milestones] rows.
+ * Output: `{refunds: [{id, amountSen}], deleteIds}`: funded stages refunded in
+ *         full; every unpaid stage deleted; paid stages stay.
  */
 function cancellationPlan(milestones) {
   const refunds = milestones
@@ -99,8 +109,10 @@ function cancellationPlan(milestones) {
 }
 
 /**
- * What a "refund the client and end the job" ruling settles: every stage
- * still holding money is refunded and unfunded ones are deleted.
+ * What:   Plan for a dispute ruling that refunds the client.
+ * Input:  [milestones] rows.
+ * Output: `{refunds, deleteIds}`: every stage still holding money (funded,
+ *         submitted, disputed) refunded; unfunded stages deleted.
  */
 function disputeRefundPlan(milestones) {
   const held = ["funded", "submitted", "disputed"];
@@ -112,6 +124,7 @@ function disputeRefundPlan(milestones) {
   return {refunds, deleteIds: unfunded.map((m) => m.id)};
 }
 
+exports.isTerminal = isTerminal;
 exports.fundedSen = fundedSen;
 exports.disputeRefundPlan = disputeRefundPlan;
 exports.checkFundedPriceChange = checkFundedPriceChange;

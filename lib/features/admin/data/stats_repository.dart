@@ -3,19 +3,20 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/platform_stats.dart';
 
-/// Loads platform stats for the admin dashboard.
-/// The UI uses this interface so tests can use a fake.
+/// What:   Admin dashboard stats API.
+/// Input:  Firestore aggregates via FirestoreStatsRepository; a fake in tests.
+/// Output: PlatformStats and the Trust Score recompute.
 abstract interface class StatsRepository {
-  /// Loads the numbers once. Pull-to-refresh calls it again.
+  /// Loads the numbers once.
   Future<PlatformStats> load();
 
-  /// Recounts every user's completed jobs and lost disputes (`backfillTrust`).
-  /// Safe to run again. Returns how many users were processed.
+  /// Recounts every user's completed jobs and lost disputes (`backfillTrust`); returns the user count. Safe to rerun.
   Future<int> recomputeTrustScores();
 }
 
-/// Firestore version of [StatsRepository]. Uses `count()`/`sum()` queries,
-/// so no documents are downloaded.
+/// What:   Firestore [StatsRepository].
+/// Input:  `count()` / `sum()` aggregate queries, so no documents are downloaded.
+/// Output: PlatformStats.
 class FirestoreStatsRepository implements StatsRepository {
   FirestoreStatsRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -42,7 +43,7 @@ class FirestoreStatsRepository implements StatsRepository {
     final bundles = _firestore.collection('bundles');
     final disputes = _firestore.collection('disputes');
 
-    // Runs all the queries at the same time.
+    // Order matches the PlatformStats fields below.
     final results = await Future.wait([
       _count(users.where('role', isEqualTo: 'requestor')),
       _count(users.where('role', isEqualTo: 'provider')),

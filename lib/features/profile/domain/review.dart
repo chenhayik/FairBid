@@ -1,7 +1,6 @@
-/// A review left on a user's profile after a completed job. Stored at
-/// `users/{revieweeId}/reviews/{reviewId}`; the reviewee's uid is the path, so
-/// it is not a stored field. Framework-agnostic - the repository handles the
-/// Firestore ↔ [Review] mapping.
+/// What:   A review left on a user's profile after a completed job.
+/// Input:  `users/{revieweeId}/reviews/{reviewId}` via reviewFromDoc(); the reviewee is the path, not a field.
+/// Output: Immutable model; [toMap] writes only the client-set fields.
 class Review {
   const Review({
     required this.id,
@@ -15,40 +14,29 @@ class Review {
     this.createdAt,
     this.flagged = false,
     this.flagReason,
-    this.flaggedByUid,
     this.hidden = false,
   });
 
-  /// The review document's id (its path, not a stored field).
   final String id;
   final String reviewerId;
   final String reviewerName;
 
-  /// Snapshot of the reviewer's `profilePhotoUrl` at review time, denormalised
-  /// so the review list shows a face without loading the reviewer's profile -
-  /// mirrors how [reviewerName] is already denormalised. Null if the reviewer
-  /// had no photo when they reviewed. A future Cloud Function could refresh
-  /// this snapshot if the reviewer later changes their photo.
+  /// The reviewer's photo at review time, denormalised like [reviewerName]; null if none.
   final String? reviewerPhotoUrl;
 
-  /// Star rating, 1–5.
+  /// Stars, 1-5.
   final int rating;
   final String comment;
   final String? jobId;
   final String? jobTitle;
   final DateTime? createdAt;
 
-  /// Moderation state. A reviewee reports an unfair review (`flagged` + the
-  /// reason), and an admin either hides it (`hidden`, which also reverses its
-  /// effect on the Trust Score, server-side) or keeps it (flag cleared).
+  /// Moderation: the reviewee flags it, then an admin hides it (reversing its Trust Score effect) or clears the flag.
   final bool flagged;
   final String? flagReason;
-  final String? flaggedByUid;
   final bool hidden;
 
-  /// Fields written to Firestore. `createdAt` for a new review is set by the
-  /// repository (server timestamp); the moderation fields are never part of a
-  /// new review (flagging/hiding write them later), so both are omitted here.
+  /// Client-written fields; `createdAt` is a server timestamp and moderation fields are written later.
   Map<String, dynamic> toMap() => {
         'reviewerId': reviewerId,
         'reviewerName': reviewerName,
@@ -59,8 +47,7 @@ class Review {
         if (jobTitle != null) 'jobTitle': jobTitle,
       };
 
-  /// Builds a [Review] from its doc id and (already Timestamp-normalised)
-  /// data. Older docs lack the moderation fields and read as unflagged.
+  /// Builds from the doc id and Timestamp-normalised data; older docs read as unflagged.
   factory Review.fromMap(String id, Map<String, dynamic> m) => Review(
         id: id,
         reviewerId: m['reviewerId'] as String? ?? '',
@@ -73,7 +60,6 @@ class Review {
         createdAt: m['createdAt'] as DateTime?,
         flagged: m['flagged'] as bool? ?? false,
         flagReason: m['flagReason'] as String?,
-        flaggedByUid: m['flaggedByUid'] as String?,
         hidden: m['hidden'] as bool? ?? false,
       );
 }

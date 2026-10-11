@@ -22,10 +22,9 @@ List<String> _parseSkills(String text) => {
         if (s.trim().isNotEmpty) s.trim(),
     }.toList();
 
-/// Pushed form for editing the signed-in user's profile: full name, phone,
-/// map location, About text and (providers) category and skills. Email is
-/// shown read-only. One Save writes through [AuthController.updateProfile] and
-/// pops back to the profile.
+/// What:   Edit Profile form: name, phone, map location, About and (providers) category and skills.
+/// Input:  [AuthController.user]; email is read-only.
+/// Output: One Save calls [AuthController.updateProfile] and pops.
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
 
@@ -78,13 +77,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final picked = await RegionPickerScreen.show(
       context,
       initialCenter: lat == null || lng == null ? null : LatLng(lat, lng),
-      initialRegion: code == null
-          ? null
-          : Region(
-              districtCode: code,
-              districtName: Region.districtNameFor(code),
-              town: isProvider ? user?.baseTown : user?.defaultTown,
-            ),
+      initialRegion: Region.fromMap({
+        'districtCode': code,
+        'town': isProvider ? user?.baseTown : user?.defaultTown,
+      }),
     );
     if (picked == null) return;
     setState(() {
@@ -98,15 +94,23 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _saving = true);
     final isProvider =
         context.read<AuthController>().user?.role == UserRole.provider;
-    await context.read<AuthController>().updateProfile(
-          displayName: _name.text,
-          phone: _phone.text,
-          location: _locationLabel,
-          bio: _bio.text,
-          picked: _picked,
-          category: isProvider ? _category : null,
-          skills: isProvider ? _parseSkills(_skills.text) : null,
-        );
+    try {
+      await context.read<AuthController>().updateProfile(
+            displayName: _name.text,
+            phone: _phone.text,
+            location: _locationLabel,
+            bio: _bio.text,
+            picked: _picked,
+            category: isProvider ? _category : null,
+            skills: isProvider ? _parseSkills(_skills.text) : null,
+          );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not save your profile')));
+      return;
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     context.pop();
@@ -191,11 +195,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 }
 
-/// The profile-photo control at the top of the form: the current avatar (or
-/// the placeholder, via [UserAvatar]) with a "Change photo" / "Add photo"
-/// action beneath it. Picking a photo uploads it immediately and saves the
-/// resulting URL, rather than waiting for the form's own Save button -
-/// mirroring how the other upload boxes in the app behave.
+/// Avatar with a "Change photo" / "Add photo" action; picking uploads and saves the URL at once, not on Save.
 class _AvatarPicker extends StatefulWidget {
   const _AvatarPicker({required this.photoUrl});
 
@@ -210,8 +210,7 @@ class _AvatarPickerState extends State<_AvatarPicker> {
   bool _uploading = false;
 
   Future<void> _pick() async {
-    // Capture everything context-derived before the first await, so nothing
-    // below ever touches BuildContext across an async gap.
+    // Captured before the first await to avoid using context across the gap.
     final auth = context.read<AuthController>();
     final storage = context.read<DocumentStorageRepository>();
     final messenger = ScaffoldMessenger.of(context);
@@ -277,8 +276,7 @@ class _AvatarPickerState extends State<_AvatarPicker> {
   }
 }
 
-/// A non-editable field styled like [AppTextField] for values the user can view
-/// but not change here (e.g. their email address).
+/// A non-editable field styled like [AppTextField] (e.g. the email).
 class _ReadOnlyField extends StatelessWidget {
   const _ReadOnlyField({required this.label, required this.value});
 

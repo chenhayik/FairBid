@@ -1,101 +1,20 @@
-// New tests for batch A's bundle-bidding UI fixes (bid sheet, Post a Job,
-// shared form field, server copy). Reuses the fakes/helpers declared
-// top-level in widget_test.dart rather than duplicating them.
+// The bundle bid sheet (validation, server errors, withdraw) and the bundle
+// entry points on Post a Job.
 
-import 'package:fairbid/core/theme/app_theme.dart';
 import 'package:fairbid/core/widgets/app_widgets.dart';
 import 'package:fairbid/core/widgets/form_widgets.dart';
-import 'package:fairbid/features/auth/domain/app_user.dart';
 import 'package:fairbid/features/auth/domain/user_role.dart';
 import 'package:fairbid/features/jobs/data/bundle_bid_repository.dart';
-import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
-import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_controller.dart';
 import 'package:fairbid/features/jobs/presentation/bid/submit_bundle_bid_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
 
-import 'widget_test.dart';
-
-/// A [BundleBidRepository] whose `submit` always fails with a server-style
-/// message, so the sheet's error-banner behaviour can be exercised - unlike
-/// the shared [FakeBundleBidRepository], which never fails.
-class _FailingBundleBidRepository implements BundleBidRepository {
-  @override
-  Future<void> submit({
-    required String bundleId,
-    required Map<String, int> taskPrices,
-    int? bundlePriceSen,
-    required String estimatedDuration,
-    String message = '',
-  }) async {
-    throw const BundleBidRejectedException(
-      'One of the tasks you picked is no longer open.',
-    );
-  }
-
-  @override
-  Future<void> withdraw(String bundleId) => throw UnimplementedError();
-
-  @override
-  Stream<BundleBid?> watchMyBundleBid(String bundleId, String providerId) =>
-      throw UnimplementedError();
-
-  @override
-  Future<BundleBid?> getMyBundleBid(String bundleId, String providerId) =>
-      throw UnimplementedError();
-
-  @override
-  Stream<List<BundleBid>> watchBundleBids(String bundleId) =>
-      throw UnimplementedError();
-
-  @override
-  Stream<List<BundleBid>> watchMyBundleBids(String providerId) =>
-      throw UnimplementedError();
-}
+import 'helpers/builders.dart';
+import 'helpers/fakes.dart';
+import 'helpers/harness.dart';
 
 void main() {
-  final bidder = const AppUser(
-    uid: 'prov-1',
-    email: 'pro@test.com',
-    displayName: 'Pro Fixer',
-    role: UserRole.provider,
-  );
-
-  /// Pumps the sheet on its own - a form, so it needs nothing from the
-  /// router or the shell, only the controller its fields drive.
-  Future<void> pumpSheet(
-    WidgetTester tester, {
-    required BundleBidRepository bundleBids,
-    required List<Job> tasks,
-    BundleBid? existing,
-  }) async {
-    await tester.pumpWidget(MaterialApp(
-      theme: AppTheme.light,
-      home: ChangeNotifierProvider(
-        create: (_) => SubmitBundleBidController(bundleBids),
-        child: Scaffold(
-          body: SubmitBundleBidSheet(
-            bundle: sampleBundle(id: 'b1', taskIds: tasks.map((t) => t.id).toList()),
-            tasks: tasks,
-            bidder: bidder,
-            existing: existing,
-          ),
-        ),
-      ),
-    ));
-    await tester.pumpAndSettle();
-  }
-
-  /// Taps something that may be below the fold on this tall sheet.
-  Future<void> tapAt(WidgetTester tester, Finder finder) async {
-    await tester.ensureVisible(finder);
-    await tester.pumpAndSettle();
-    await tester.tap(finder);
-    await tester.pumpAndSettle();
-  }
-
   group('Bundle bid sheet: server error stays visible', () {
     testWidgets(
       'a rejected submit shows the error banner both at the top and above '
@@ -105,9 +24,12 @@ void main() {
         final tasks = [
           sampleJob(id: 'job-1', title: 'Waterproof the floor'),
         ];
-        await pumpSheet(
+        await pumpBundleBidSheet(
           tester,
-          bundleBids: _FailingBundleBidRepository(),
+          bundleBids: FakeBundleBidRepository()
+            ..submitError = const BundleBidRejectedException(
+              'One of the tasks you picked is no longer open.',
+            ),
           tasks: tasks,
         );
 
@@ -141,15 +63,8 @@ void main() {
           sampleJob(id: 'job-2', title: 'Tile the floor'),
         ];
         final bundleBids = FakeBundleBidRepository();
-        final existing = BundleBid(
-          bundleId: 'b1',
-          providerId: 'prov-1',
-          providerName: 'Pro Fixer',
-          taskPrices: const {'job-1': 10000},
-          estimatedDuration: 'Less than 1 week',
-          message: 'I can do this.',
-        );
-        await pumpSheet(
+        final existing = sampleBundleBid(providerName: 'Pro Fixer', taskPrices: const {'job-1': 10000}, estimatedDuration: 'Less than 1 week', message: 'I can do this.');
+        await pumpBundleBidSheet(
           tester,
           bundleBids: bundleBids,
           tasks: tasks,
@@ -202,7 +117,7 @@ void main() {
           location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Penang'),
           budget: const JobBudget(minSen: 30000, maxSen: 50000),
         );
-        await pumpSheet(
+        await pumpBundleBidSheet(
           tester,
           bundleBids: FakeBundleBidRepository(),
           tasks: [first, second],
@@ -240,7 +155,7 @@ void main() {
       'the package deal link shows from two ticked tasks, reveals the field, '
       'and Remove clears and hides it again',
       (tester) async {
-        await pumpSheet(
+        await pumpBundleBidSheet(
           tester,
           bundleBids: FakeBundleBidRepository(),
           tasks: tasks,
@@ -279,7 +194,7 @@ void main() {
     testWidgets(
       'dropping below two ticked tasks hides the package deal field',
       (tester) async {
-        await pumpSheet(
+        await pumpBundleBidSheet(
           tester,
           bundleBids: FakeBundleBidRepository(),
           tasks: tasks,
@@ -301,16 +216,8 @@ void main() {
     testWidgets(
       'editing a bid that has a bundle price shows the field already open',
       (tester) async {
-        final existing = BundleBid(
-          bundleId: 'b1',
-          providerId: 'prov-1',
-          providerName: 'Pro Fixer',
-          taskPrices: const {'job-1': 10000, 'job-2': 10000},
-          bundlePriceSen: 15000,
-          estimatedDuration: 'Less than 1 week',
-          message: 'I can do this.',
-        );
-        await pumpSheet(
+        final existing = sampleBundleBid(providerName: 'Pro Fixer', taskPrices: const {'job-1': 10000, 'job-2': 10000}, bundlePriceSen: 15000, estimatedDuration: 'Less than 1 week', message: 'I can do this.');
+        await pumpBundleBidSheet(
           tester,
           bundleBids: FakeBundleBidRepository(),
           tasks: tasks,
@@ -327,7 +234,7 @@ void main() {
   group('Bundle bid sheet: escrow copy addresses the provider', () {
     testWidgets('the escrow checkbox explains escrow to a provider,'
         ' not a client', (tester) async {
-      await pumpSheet(
+      await pumpBundleBidSheet(
         tester,
         bundleBids: FakeBundleBidRepository(),
         tasks: [sampleJob(id: 'job-1', title: 'Waterproof the floor')],
@@ -344,26 +251,11 @@ void main() {
   });
 
   group('Post a bundle: draft card and invalid-submit feedback', () {
-    Future<void> openPostJob(WidgetTester tester) async {
-      await tester.binding.setSurfaceSize(const Size(800, 2400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final auth = FakeAuthRepository()
-        ..defaultLat = 5.4164
-        ..defaultLng = 100.3327
-        ..defaultDistrictCode = 'TL'
-        ..defaultTown = 'George Town'
-        ..seedSignedIn(UserRole.requestor);
-      await tester.pumpWidget(buildApp(auth, bundle: FakeBundleRepository()));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('+ Post a job'));
-      await tester.pumpAndSettle();
-    }
-
     testWidgets(
       'the AI draft card says it only fills task 1 once the form is a '
       'bundle',
       (tester) async {
-        await openPostJob(tester);
+        await openPostJob(tester, bundle: FakeBundleRepository(), height: 2400);
         final add = find.textContaining('Add another task');
         await tester.ensureVisible(add);
         await tester.tap(add);
@@ -382,16 +274,13 @@ void main() {
       (tester) async {
         // A small viewport, so the top (category) and bottom (submit button)
         // of the empty form cannot both be on screen at once.
-        await tester.binding.setSurfaceSize(const Size(400, 700));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
         final auth = FakeAuthRepository()
           ..defaultLat = 5.4164
           ..defaultLng = 100.3327
           ..defaultDistrictCode = 'TL'
           ..defaultTown = 'George Town'
           ..seedSignedIn(UserRole.requestor);
-        await tester.pumpWidget(buildApp(auth, bundle: FakeBundleRepository()));
-        await tester.pumpAndSettle();
+        await pumpApp(tester, buildApp(auth, bundle: FakeBundleRepository()), size: const Size(400, 700));
         await tester.tap(find.text('+ Post a job'));
         await tester.pumpAndSettle();
 

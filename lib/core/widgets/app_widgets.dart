@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../util/motion.dart';
 
-/// Full-width filled action button that shows a spinner while [busy].
+/// What:   Full-width filled action button.
+/// Input:  [label], [onPressed]; [busy] shows a spinner; optional [trailingIcon].
+/// Output: Button that keeps its enabled colours but ignores taps while [busy].
 class PrimaryButton extends StatelessWidget {
   const PrimaryButton({
     super.key,
@@ -20,15 +22,8 @@ class PrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // While busy the button must keep its *enabled* colours. Passing null to
-    // onPressed would render it disabled, fading the fill to 35%-alpha brand
-    // blue, against which the white spinner sits at 1.78:1 and is effectively
-    // invisible - so every commitment action in the app looked unresponsive
-    // exactly while it was working. A no-op keeps the fill, and AbsorbPointer
-    // below blocks the repeat tap that null was there to prevent.
-    // Full width by itself (not via the shared theme - see filledButtonTheme
-    // in app_theme.dart) so a bare FilledButton (dialog actions) can size to
-    // its content instead of stretching edge-to-edge.
+    // A no-op (not null) keeps the enabled fill so the spinner stays visible;
+    // AbsorbPointer blocks repeat taps.
     final button = SizedBox(
       width: double.infinity,
       child: FilledButton(
@@ -48,8 +43,6 @@ class PrimaryButton extends StatelessWidget {
             : Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Flexible so a long label wraps/ellipses at larger text
-                  // scales instead of overflowing the button.
                   Flexible(
                     child: Text(
                       label,
@@ -69,20 +62,40 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
-/// Full-width outlined secondary action button.
+/// What:   Outlined secondary action button.
+/// Input:  [label], [onPressed]; [busy] swaps the label for a spinner.
+/// Output: Button that ignores taps while [busy].
 class SecondaryButton extends StatelessWidget {
-  const SecondaryButton({super.key, required this.label, this.onPressed});
+  const SecondaryButton({
+    super.key,
+    required this.label,
+    this.onPressed,
+    this.busy = false,
+  });
 
   final String label;
   final VoidCallback? onPressed;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton(onPressed: onPressed, child: Text(label));
+    final button = OutlinedButton(
+      onPressed: busy ? () {} : onPressed,
+      child: busy
+          ? const SizedBox(
+              height: 18,
+              width: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Text(label),
+    );
+    return busy ? AbsorbPointer(child: button) : button;
   }
 }
 
-/// "Continue with Google" button with the G mark, per the design mock.
+/// What:   "Continue with Google" button with the G mark.
+/// Input:  [onPressed]; [enabled] false disables it.
+/// Output: Outlined white button.
 class GoogleButton extends StatelessWidget {
   const GoogleButton({super.key, this.onPressed, this.enabled = true});
 
@@ -100,8 +113,7 @@ class GoogleButton extends StatelessWidget {
       ),
       icon: Image.asset(
         'assets/images/google_g.png',
-        // Height only: the mark is 200x204, and Google's branding guidelines
-        // forbid distorting it, so let the width follow the aspect ratio.
+        // Height only: Google's branding forbids distorting the mark.
         height: 18,
         excludeFromSemantics: true,
       ),
@@ -110,7 +122,9 @@ class GoogleButton extends StatelessWidget {
   }
 }
 
-/// Thin "OR" separator between the form and social sign-in.
+/// What:   Thin "OR" separator between the form and social sign-in.
+/// Input:  None.
+/// Output: A divider row with a centred "OR".
 class OrDivider extends StatelessWidget {
   const OrDivider({super.key});
 
@@ -136,7 +150,9 @@ class OrDivider extends StatelessWidget {
   }
 }
 
-/// Red tinted banner for auth / form errors.
+/// What:   Red tinted banner for auth and form errors.
+/// Input:  [message].
+/// Output: Banner with an error icon and the message.
 class ErrorBanner extends StatelessWidget {
   const ErrorBanner(this.message, {super.key});
   final String message;
@@ -162,8 +178,9 @@ class ErrorBanner extends StatelessWidget {
   }
 }
 
-/// Tinted informational banner with an icon, a bold title and body text.
-/// Used for "Unlock badge", "Bank-Level Security", "Trust Boosters" etc.
+/// What:   Tinted informational banner with an icon, bold title and body.
+/// Input:  [icon], [title], [body]; optional [color], [background], [leftAccent], [trailing], [bottom].
+/// Output: Banner; [bottom] is a full-width row under the text, [trailing] sits beside it.
 class InfoBanner extends StatelessWidget {
   const InfoBanner({
     super.key,
@@ -180,14 +197,10 @@ class InfoBanner extends StatelessWidget {
   final IconData icon;
   final String title;
   final String body;
-  final Color? color; // icon + accent colour, defaults to brand blue
-  final Color? background; // defaults to subtle blue
-  final bool leftAccent; // 4px solid left border, per DESIGN.md banners
+  final Color? color;
+  final Color? background;
+  final bool leftAccent;
   final Widget? trailing;
-
-  /// Optional full-width widget under the title/body - e.g. an action button
-  /// that needs its own row rather than squeezing beside the text like
-  /// [trailing] does.
   final Widget? bottom;
 
   @override
@@ -237,7 +250,9 @@ class InfoBanner extends StatelessWidget {
   }
 }
 
-/// Pill-shaped status chip: tinted background, full-strength icon + label.
+/// What:   Pill-shaped status chip.
+/// Input:  [label]; optional [icon] and [color].
+/// Output: Tinted pill with a full-strength icon and label.
 class PillBadge extends StatelessWidget {
   const PillBadge({
     super.key,
@@ -266,7 +281,6 @@ class PillBadge extends StatelessWidget {
             Icon(icon, size: 14, color: accent),
             const SizedBox(width: 6),
           ],
-          // Flexible so long labels shrink instead of overflowing the pill.
           Flexible(
             child: Text(label,
                 overflow: TextOverflow.ellipsis,
@@ -281,7 +295,10 @@ class PillBadge extends StatelessWidget {
   }
 }
 
-/// White card with the standard hairline border and 12px radius (L1 surface).
+/// What:   White card with hairline border and 12px radius.
+/// Input:  [child]; optional [padding], [color], [onTap].
+/// Output: The card; tappable with a ripple when [onTap] is set.
+/// Notes:  Use [onTap], not an outer InkWell - the opaque fill hides the ripple.
 class AppCard extends StatelessWidget {
   const AppCard({
     super.key,
@@ -293,19 +310,7 @@ class AppCard extends StatelessWidget {
 
   final Widget child;
   final EdgeInsetsGeometry? padding;
-
-  /// Makes the whole card tappable, *with* a ripple.
-  ///
-  /// Always prefer this over wrapping an [AppCard] in an [InkWell]. Ink
-  /// features are painted into the nearest [Material] before its descendants
-  /// are drawn, so the card's own opaque fill covered the splash completely:
-  /// every job card, conversation row and queue row in the app registered as a
-  /// dead tap. Rendering the fill *as* the Material puts the ink above it.
   final VoidCallback? onTap;
-
-  /// Card fill, defaulting to white. Exists so the handful of tinted cards
-  /// (an unread notification, say) can reuse this instead of hand-rolling the
-  /// same decoration.
   final Color? color;
 
   @override
@@ -316,8 +321,6 @@ class AppCard extends StatelessWidget {
       child: child,
     );
     return Material(
-      // Falls back to the theme's white card surface (not the scaffold
-      // background's `surface`, which is the same tint and hides the card).
       color: color ?? Theme.of(context).colorScheme.surfaceContainerLowest,
       shape: RoundedRectangleBorder(
         borderRadius: radius,
@@ -335,8 +338,9 @@ class AppCard extends StatelessWidget {
   }
 }
 
-/// Card that can be tapped to select it - role cards, provider-type cards.
-/// Selected: blue 2px border on a subtle blue fill, per the mock.
+/// What:   Tappable card that shows a selected state (role and provider-type cards).
+/// Input:  [selected], [onTap], [child].
+/// Output: Card with a 2px blue border on a subtle blue fill when selected.
 class SelectableCard extends StatelessWidget {
   const SelectableCard({
     super.key,
@@ -373,21 +377,20 @@ class SelectableCard extends StatelessWidget {
   }
 }
 
-/// Dashboard metric tile: subtle-blue fill, no border, a big value and a small
-/// uppercase caption (DESIGN.md §6.4). Optional icon in the top-right.
+/// What:   Dashboard metric tile.
+/// Input:  [label], [value]; optional [icon].
+/// Output: Subtle-blue tile with a big value under an uppercase caption.
 class StatCard extends StatelessWidget {
   const StatCard({
     super.key,
     required this.label,
     required this.value,
     this.icon,
-    this.valueColor,
   });
 
   final String label;
   final String value;
   final IconData? icon;
-  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
@@ -419,7 +422,7 @@ class StatCard extends StatelessWidget {
             value,
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.w700,
-              color: valueColor ?? theme.colorScheme.onSurface,
+              color: theme.colorScheme.onSurface,
             ),
           ),
         ],
@@ -428,7 +431,9 @@ class StatCard extends StatelessWidget {
   }
 }
 
-/// Centred placeholder for screens/lists that have no content yet.
+/// What:   Centred placeholder for screens and lists with no content.
+/// Input:  [icon], [title], [message].
+/// Output: Icon, title and message in a column.
 class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,
@@ -467,10 +472,9 @@ class EmptyState extends StatelessWidget {
   }
 }
 
-/// A labelled progress bar used for the Trust Score breakdown
-/// (Reviews / Track Record / Verification / Profile). An optional [hint]
-/// tells the user how to raise the sub-score; [onTap] makes the row a
-/// shortcut to the place they can act on it (e.g. Edit Profile).
+/// What:   Labelled progress bar for one Trust Score part.
+/// Input:  [label], [percent] (0-100); optional [hint] and [onTap].
+/// Output: Bar row; [hint] says how to raise it, [onTap] links to where to act.
 class TrustScoreBar extends StatelessWidget {
   const TrustScoreBar({
     super.key,
@@ -481,7 +485,7 @@ class TrustScoreBar extends StatelessWidget {
   });
 
   final String label;
-  final int percent; // 0–100
+  final int percent;
   final String? hint;
   final VoidCallback? onTap;
 
@@ -529,3 +533,36 @@ class TrustScoreBar extends StatelessWidget {
         onTap: onTap, borderRadius: BorderRadius.circular(8), child: bar);
   }
 }
+
+/// What:   A plain Cancel / confirm dialog.
+/// Input:  [title], [body] and the confirm button's [actionLabel].
+/// Output: true if confirmed, false if cancelled or dismissed.
+/// Notes:  [danger] paints the confirm button red.
+Future<bool> showConfirmDialog(
+  BuildContext context, {
+  required String title,
+  required String body,
+  required String actionLabel,
+  String cancelLabel = 'Cancel',
+  bool danger = false,
+}) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(cancelLabel)),
+          FilledButton(
+              style: danger
+                  ? FilledButton.styleFrom(
+                      backgroundColor: ctx.fairbid.danger)
+                  : null,
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(actionLabel)),
+        ],
+      ),
+    ) ??
+    false;

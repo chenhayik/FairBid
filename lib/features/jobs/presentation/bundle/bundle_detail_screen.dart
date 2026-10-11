@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
-import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/util/plural.dart';
 import '../../../../core/widgets/app_widgets.dart';
@@ -19,20 +18,21 @@ import '../../domain/bundle.dart';
 import '../../domain/bundle_award.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
+import '../widgets/deadline_picker.dart';
 import '../widgets/insufficient_balance_dialog.dart';
 import 'bundle_bid_list.dart';
-import 'bundle_buttons.dart';
 import 'bundle_header.dart';
 import 'bundle_option_card.dart';
 import 'bundle_pick_bar.dart';
 import 'bundle_pick_section.dart';
 import 'bundle_provider_view.dart';
+import 'bundle_pick_logic.dart';
 import 'bundle_task_section.dart';
 import 'bundle_warning_banner.dart';
 
-/// One bundled posting. The client sees its tasks, who bid on what, and the
-/// award options (awarding happens here, in one action); anyone else sees the
-/// read-only [BundleProviderView].
+/// What:   Bundle detail screen.
+/// Input:  Bundle, tasks and bids via BundleRepository / JobRepository / BundleBidRepository streams.
+/// Output: Owner: tasks, bids, award options and award/cancel. Anyone else: [BundleProviderView].
 class BundleDetailScreen extends StatefulWidget {
   const BundleDetailScreen({
     super.key,
@@ -42,8 +42,7 @@ class BundleDetailScreen extends StatefulWidget {
 
   final String bundleId;
 
-  /// The task this screen was opened from, if any: tapping that task goes
-  /// back to it instead of stacking another copy on the back stack.
+  /// Tapping this task pops back to it instead of stacking another copy.
   final String? fromTaskId;
 
   @override
@@ -57,13 +56,12 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
   late final Stream<List<Job>> _tasks = context
       .read<JobRepository>()
       .watchBundleTasks(widget.bundleId);
-  // Owner only (rules deny everyone else) - and lazy, so only the owner's
-  // view ever subscribes.
+  // Owner only (rules deny others); lazy, so only the owner's view subscribes.
   late final Stream<List<BundleBid>> _bids = context
       .read<BundleBidRepository>()
       .watchBundleBids(widget.bundleId);
 
-  /// The viewer's own bid, for the provider view. Lazy, like [_bids].
+  /// Lazy, like [_bids].
   late final Stream<BundleBid?> _myBid = context
       .read<BundleBidRepository>()
       .watchMyBundleBid(
@@ -71,38 +69,30 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
         context.read<AuthController>().user!.uid,
       );
 
-  /// Priced options from the server, or null until they are asked for.
+  /// Null until requested.
   List<BundleAwardOption>? _options;
   bool _loadingOptions = false;
   bool _awarding = false;
   bool _cancelling = false;
   String? _error;
 
-  /// The bids [_options] were priced from (see [_bidsSignature]), so a live
-  /// bids list that has since moved on can be noticed and offered a refresh.
+  /// Signature of the bids [_options] were priced from; a mismatch offers a refresh.
   String? _optionsSignature;
 
-  /// The client's own picks: task id -> provider id, or null for "don't
-  /// award". Starts with every task unpicked.
+  /// Task id -> provider id, or null for "don't award".
   final Map<String, String?> _picks = {};
 
-  /// The picks' own priced option (from `priceManualAward`), or null while
-  /// pricing or when the server refused the picks.
+  /// The picks priced by `priceManualAward`; null while pricing or refused.
   BundleAwardOption? _manualOption;
   List<String> _manualProblems = const [];
   bool _pricingManual = false;
 
-  /// The bids [_manualOption] was priced from, like [_optionsSignature].
   String? _manualSignature;
 
   /// Counts pricing calls so a slow, older answer can't overwrite a newer one.
   int _pricingRun = 0;
 
-  /// A cheap fingerprint of [bids]: who bid, their status, when they last
-  /// changed it and what they're charging - sorted so it doesn't depend on
-  /// the stream's delivery order. Two calls with the same bids produce the
-  /// same signature; any change to any bid (including an edit, which keeps
-  /// `createdAt` but bumps `updatedAt` and the prices) changes it.
+  /// Order-independent fingerprint of [bids]; any edit (new updatedAt or prices) changes it.
   String _bidsSignature(List<BundleBid> bids) {
     String pricesOf(BundleBid bid) {
       final entries = bid.taskPrices.entries.toList()
@@ -146,18 +136,11 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Sets [providerId] (or null) as the pick for all of [taskIds], then
-  /// prices the picks again.
-  void _onPick(List<String> taskIds, String? providerId, List<BundleBid> bids) {
-    setState(() {
-      for (final id in taskIds) {
-        _picks[id] = providerId;
-      }
-    });
+  void _onPick(String taskId, String? providerId, List<BundleBid> bids) {
+    setState(() => _picks[taskId] = providerId);
     _priceManual(bids);
   }
 
-  /// Replaces the picks with those of [option], for the client to tweak.
   void _useOption(BundleAwardOption option, List<BundleBid> bids) {
     setState(() {
       _picks
@@ -167,7 +150,6 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     _priceManual(bids);
   }
 
-  /// Prices the current picks through `previewBundleAward`.
   Future<void> _priceManual(List<BundleBid> bids) async {
     final picks = {
       for (final entry in _picks.entries)
@@ -206,35 +188,18 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Confirms and cancels the whole bundle (and its still-open tasks) through
-  /// `cancelBundle`. Available to the owner any time the bundle is still
-  /// open, whether or not bidding has closed - it's the only way to call the
-  /// posting off before it's awarded.
+  /// Confirms, then cancels the whole bundle and its open tasks.
   Future<void> _cancelBundle() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cancel this bundle?'),
-        content: const Text(
-          "This also cancels its still-open tasks. Providers who've "
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Cancel this bundle?',
+      body: "This also cancels its still-open tasks. Providers who've "
           "already bid will be notified. This can't be undone.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Keep it'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: context.fairbid.danger,
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Cancel bundle'),
-          ),
-        ],
-      ),
+      cancelLabel: 'Keep it',
+      actionLabel: 'Cancel bundle',
+      danger: true,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     setState(() {
       _cancelling = true;
@@ -255,30 +220,15 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Confirms and sends the award. When [option] leaves tasks uncovered, the
-  /// confirmation also asks what happens to them: released back to ordinary
-  /// bidding with a deadline - defaulting to 7 days out, changeable via the
-  /// same date picker `post_job_screen`'s deadline field uses - or dropped.
+  /// Confirms, then awards. For uncovered tasks it also asks: release to
+  /// ordinary bidding (deadline defaults to 7 days) or drop.
   Future<void> _award(BundleAwardOption option, List<Job> tasks) async {
-    String titleFor(String taskId) {
-      for (final task in tasks) {
-        if (task.id == taskId) return task.title;
-      }
-      return 'a task';
-    }
+    String titleFor(String taskId) => taskTitle(tasks, taskId);
 
     DateTime? releasedDeadline;
     var dropUnawarded = false;
     if (option.uncoveredTaskIds.isNotEmpty) {
-      final defaultDate = DateTime.now().add(const Duration(days: 7));
-      releasedDeadline = DateTime(
-        defaultDate.year,
-        defaultDate.month,
-        defaultDate.day,
-        23,
-        59,
-        59,
-      );
+      releasedDeadline = endOfDay(DateTime.now().add(const Duration(days: 7)));
     }
 
     final confirmed = await showDialog<bool>(
@@ -339,31 +289,12 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                     ),
                     TextButton(
                       onPressed: () async {
-                        final tomorrow = DateTime.now().add(
-                          const Duration(days: 1),
-                        );
-                        final firstDate = DateTime(
-                          tomorrow.year,
-                          tomorrow.month,
-                          tomorrow.day,
-                        );
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: releasedDeadline!,
-                          firstDate: firstDate,
-                          lastDate: firstDate.add(const Duration(days: 90)),
+                        final picked = await pickBiddingDeadline(
+                          context,
+                          initial: releasedDeadline,
                         );
                         if (picked == null) return;
-                        setDialogState(
-                          () => releasedDeadline = DateTime(
-                            picked.year,
-                            picked.month,
-                            picked.day,
-                            23,
-                            59,
-                            59,
-                          ),
-                        );
+                        setDialogState(() => releasedDeadline = picked);
                       },
                       child: const Text('Change'),
                     ),
@@ -391,8 +322,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
       _awarding = true;
       _error = null;
     });
-    // Capture the outcome, then clear busy state *before* reporting it -
-    // otherwise the Award button spins behind the insufficient-balance dialog.
+    // Clear busy before reporting, or the button spins behind the dialog.
     Object? failure;
     try {
       await context.read<BundleRepository>().award(
@@ -419,8 +349,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     if (failure is InsufficientBalanceException) {
       await showInsufficientBalanceDialog(context, failure);
     } else if (failure is BundleRejectedException) {
-      // Stale options are the likeliest cause - clearing them brings back
-      // "Show award options" instead of leaving the client stuck.
+      // Stale options are likeliest; clearing them brings back "Show award options".
       final message = failure.message;
       setState(() {
         _error = message;
@@ -432,8 +361,6 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Opens [task]'s job detail - or, when this screen was opened from that
-  /// task, goes back to it instead of stacking another copy.
   void _openTask(Job task) {
     if (task.id == widget.fromTaskId && context.canPop()) {
       context.pop();
@@ -471,7 +398,6 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
 
   Widget _body(BuildContext context, Bundle bundle) {
     final theme = Theme.of(context);
-    final deadline = bundleDeadlineText(bundle);
 
     return StreamBuilder<List<Job>>(
       stream: _tasks,
@@ -489,30 +415,11 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
             final list = ListView(
               padding: const EdgeInsets.all(24),
               children: [
-                Text(
-                  '${plural(bundle.taskCount, 'task')}  •  '
-                  '${plural(bids.length, 'bid')}',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                if (bundle.description.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(bundle.description, style: theme.textTheme.bodyMedium),
-                ],
-                if (deadline != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    deadline,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: BundleStatusPill(bundle: bundle),
+                ...bundleSummary(
+                  context,
+                  bundle,
+                  counts: '${plural(bundle.taskCount, 'task')}  •  '
+                      '${plural(bids.length, 'bid')}',
                 ),
                 if (bids.isNotEmpty) ...[
                   const SizedBox(height: 12),
@@ -525,7 +432,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                 ],
                 if (bundle.status == BundleStatus.open) ...[
                   const SizedBox(height: 12),
-                  OutlinedBusyButton(
+                  SecondaryButton(
                     label: 'Cancel bundle',
                     busy: _cancelling,
                     onPressed: _cancelBundle,
@@ -606,7 +513,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                       tasks: tasks,
                       bids: bids,
                       picks: _picks,
-                      onPick: (ids, id) => _onPick(ids, id, bids),
+                      onPick: (taskId, id) => _onPick(taskId, id, bids),
                       onOpenTask: _openTask,
                     )
                   else
@@ -615,7 +522,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
               ],
             );
             if (!(picking && hasPick)) return list;
-            // The priced pick stays in view while the client scrolls.
+            // Keeps the priced pick in view while scrolling.
             return Column(
               children: [
                 Expanded(child: list),

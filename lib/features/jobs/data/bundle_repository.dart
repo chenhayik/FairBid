@@ -6,15 +6,18 @@ import '../domain/bundle_award.dart';
 import '../domain/job.dart';
 import 'bid_repository.dart';
 
-/// Thrown by [BundleRepository.create] when `createBundle` refuses the
-/// posting. The message comes from the server and can be shown as is.
+/// What:   Thrown when a bundle callable refuses the request.
+/// Input:  [message], server-written.
+/// Output: Exception shown as-is.
 class BundleRejectedException implements Exception {
   const BundleRejectedException(this.message);
   final String message;
 }
 
-/// Reads bundles and creates them through the `createBundle` callable.
-/// No update or delete: `firestore.rules` blocks client writes to bundles.
+/// What:   Bundle reads plus the create, cancel and award callables.
+/// Input:  Firestore `bundles` and Cloud Functions, via FirestoreBundleRepository.
+/// Output: Bundles and priced award options; failures as [BundleRejectedException].
+/// Notes:  firestore.rules blocks client writes to bundles.
 abstract interface class BundleRepository {
   Future<String> create({
     required String title,
@@ -31,16 +34,13 @@ abstract interface class BundleRepository {
 
   Future<Bundle?> getById(String id);
 
-  /// Cancels an open bundle (`cancelBundle`) along with its open tasks.
-  /// A task in an open bundle can't be cancelled alone (`firestore.rules`).
+  /// Cancels an open bundle and its open tasks (a task can't be cancelled alone).
   Future<void> cancelBundle(String id);
 
-  /// The three award options for [bundleId], priced by `previewBundleAward`.
-  /// Empty when no bid covers anything yet.
+  /// The award options for [bundleId]; empty when no bid covers anything yet.
   Future<List<BundleAwardOption>> previewAward(String bundleId);
 
-  /// Prices the requestor's own picks (task id -> provider id). Returns the
-  /// priced pick (key `'manual'`) or the server's problems, never both.
+  /// Prices the requestor's own picks (task id -> provider id): the priced option or the problems, never both.
   Future<({BundleAwardOption? option, List<String> problems})> priceManualAward(
     String bundleId,
     Map<String, String> providerByTaskId,
@@ -57,6 +57,9 @@ abstract interface class BundleRepository {
   });
 }
 
+/// What:   Firestore and Cloud Functions [BundleRepository].
+/// Input:  Firestore `bundles` and callables.
+/// Output: Bundles and award options.
 class FirestoreBundleRepository implements BundleRepository {
   FirestoreBundleRepository({
     FirebaseFirestore? firestore,
@@ -80,38 +83,20 @@ class FirestoreBundleRepository implements BundleRepository {
     DateTime? deadline,
   }) async {
     try {
-      return await _create(
-        title: title,
-        description: description,
-        location: location,
-        tasks: tasks,
-        photoUrls: photoUrls,
-        deadline: deadline,
-      );
+      final result = await _functions.httpsCallable('createBundle').call({
+        'title': title,
+        'description': description,
+        'location': location.toMap(),
+        'photoUrls': photoUrls,
+        if (deadline != null) 'deadlineMillis': deadline.millisecondsSinceEpoch,
+        'tasks': [for (final task in tasks) task.toMap()],
+      });
+      return (result.data as Map)['bundleId'] as String;
     } on FirebaseFunctionsException catch (e) {
       throw BundleRejectedException(
         e.message ?? 'Could not post the bundle. Please try again.',
       );
     }
-  }
-
-  Future<String> _create({
-    required String title,
-    required String description,
-    required JobLocation location,
-    required List<BundleTaskDraft> tasks,
-    List<String> photoUrls = const [],
-    DateTime? deadline,
-  }) async {
-    final result = await _functions.httpsCallable('createBundle').call({
-      'title': title,
-      'description': description,
-      'location': location.toMap(),
-      'photoUrls': photoUrls,
-      if (deadline != null) 'deadlineMillis': deadline.millisecondsSinceEpoch,
-      'tasks': [for (final task in tasks) task.toMap()],
-    });
-    return (result.data as Map)['bundleId'] as String;
   }
 
   @override
@@ -207,15 +192,9 @@ class FirestoreBundleRepository implements BundleRepository {
           'releasedDeadlineMillis': releasedDeadline.millisecondsSinceEpoch,
       });
     } on FirebaseFunctionsException catch (e) {
-      // Reports a shortfall like acceptBid, so the same top-up prompt works.
-      final details = e.details;
-      if (details is Map && details['reason'] == 'insufficient_balance') {
-        throw InsufficientBalanceException(
-          shortfallSen: (details['shortfallSen'] as num).toInt(),
-          availableSen: (details['availableSen'] as num).toInt(),
-          requiredSen: (details['requiredSen'] as num).toInt(),
-        );
-      }
+      // A shortfall is reported like acceptBid, so the same top-up prompt works.
+      final shortfall = InsufficientBalanceException.from(e);
+      if (shortfall != null) throw shortfall;
       throw BundleRejectedException(
         e.message ?? 'Could not award this bundle. Please try again.',
       );

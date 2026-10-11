@@ -3,6 +3,8 @@
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
+const {FieldValue, Timestamp} = require("firebase-admin/firestore");
+const {callerUid, bad, throwIfSuspended, notifyUser} = require("./common");
 
 // Must match lib/core/util/malaysian_banks.dart. Lengths are account digits.
 const BANKS = [
@@ -31,14 +33,13 @@ const GENERIC_LENGTH = {min: 8, max: 17};
 // New or changed payout details wait this long before a withdrawal.
 const HOLD_MS = 24 * 60 * 60 * 1000;
 
-/** An invalid-argument error with a message the provider can read. */
-function bad(message) {
-  return new functions.https.HttpsError("invalid-argument", message);
-}
-
 const digits = (value) => String(value || "").replace(/\D/g, "");
 
-/** A Malaysian mobile number as 01XXXXXXXX(X), or null when it isn't one. */
+/**
+ * What:   Mobile number normaliser.
+ * Input:  Any phone text (+60, spaces, dashes).
+ * Output: `01XXXXXXXX(X)`, or null when it isn't a Malaysian mobile.
+ */
 function normaliseMobile(value) {
   let d = digits(value);
   if (d.startsWith("60")) d = d.slice(1);
@@ -50,7 +51,12 @@ function maskMobile(mobile) {
   return `${mobile.slice(0, 3)}-•••• ${mobile.slice(-3)}`;
 }
 
-/** Checks a bank account against the bank's known lengths. */
+/**
+ * What:   Bank account check.
+ * Input:  Bank [swift] code and [accountNumber].
+ * Output: {bank, last4}; throws `invalid-argument` for an unknown bank, a
+ *         non-digit number or a length the bank doesn't use.
+ */
 function checkBankAccount(swift, accountNumber) {
   const bank = BANKS.find((b) => b.swift === swift);
   if (!bank) throw bad("Pick your bank from the list.");
@@ -72,10 +78,10 @@ function checkBankAccount(swift, accountNumber) {
 }
 
 /**
- * Builds the stored payout method from the request and the provider's own
- * profile. Pure, so tests need no emulator. DuitNow IDs always come from the
- * profile, never from what the app sends. MyKad isn't offered: the IC number
- * is deleted once verification is decided.
+ * What:   Builds the stored payout method.
+ * Input:  The request [data] and {phone, ssmNumber, isBusiness} from the profile.
+ * Output: The fields to store (`method`, `masked`, ...); throws `invalid-argument`.
+ * Notes:  DuitNow IDs always come from the profile, never from the app.
  */
 function buildPayoutMethod(data, {phone, ssmNumber, isBusiness}) {
   const method = data?.method;
@@ -115,15 +121,13 @@ function buildPayoutMethod(data, {phone, ssmNumber, isBusiness}) {
 }
 
 /**
- * Saves the caller's payout method. A change (not the first setup) starts a
- * 24-hour hold before the next withdrawal, in case the account was taken over.
+ * What:   Callable that saves the caller's payout method.
+ * Input:  {method, ...} from WalletRepository.savePayoutMethod().
+ * Output: Writes `private/payoutMethod`; a change (not the first setup) starts a
+ *         24-hour withdrawal hold and notifies the user.
  */
 exports.savePayoutMethod = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-        "unauthenticated", "You must be signed in.");
-  }
-  const uid = context.auth.uid;
+  const uid = callerUid(context);
   const db = admin.firestore();
   const userRef = db.doc(`users/${uid}`);
   const methodRef = userRef.collection("private").doc("payoutMethod");
@@ -136,15 +140,11 @@ exports.savePayoutMethod = functions.https.onCall(async (data, context) => {
             userRef.collection("private").doc("verification"),
             methodRef);
     const user = userSnap.data() || {};
-    // Clients need one too, to withdraw refunds.
     if (user.role !== "provider" && user.role !== "requestor") {
       throw new functions.https.HttpsError(
           "permission-denied", "Admins don't have a payout method.");
     }
-    if (user.suspended === true) {
-      throw new functions.https.HttpsError(
-          "permission-denied", "Your account is suspended.");
-    }
+    throwIfSuspended(user);
     const built = buildPayoutMethod(data, {
       // Older accounts still keep the phone on the public doc.
       phone: payoutSnap.data()?.phone ?? user.phone,
@@ -156,26 +156,22 @@ exports.savePayoutMethod = functions.https.onCall(async (data, context) => {
       ...built,
       // Always the verified profile name, never typed in.
       holderName: user.displayName || "",
-      availableAt: admin.firestore.Timestamp.fromMillis(
-          existing.exists ? now + HOLD_MS : now),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      availableAt: Timestamp.fromMillis(existing.exists ? now + HOLD_MS : now),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     if (existing.exists) {
-      tx.set(userRef.collection("notifications").doc(), {
+      notifyUser(tx, uid, {
         type: "account",
         title: "Payout method changed",
         body: `Withdrawals now go to ${built.masked}, from 24 hours ` +
             "from now. If this wasn't you, change your password.",
         route: "/profile/earnings",
-        read: false,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     }
   });
 });
 
-// Exported for payout_method.test.js and the withdraw check in index.js.
-exports.BANKS = BANKS;
+// Exported for tests and the withdraw check in index.js.
 exports.normaliseMobile = normaliseMobile;
 exports.checkBankAccount = checkBankAccount;
 exports.buildPayoutMethod = buildPayoutMethod;

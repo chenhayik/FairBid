@@ -16,8 +16,9 @@ import '../detail/photo_strip.dart';
 import '../widgets/status_colors.dart';
 import 'bundle_header.dart';
 
-/// A provider's read-only view of a bundle: its tasks, their own bid, and a
-/// bid button. Other providers' bids are never read, so no award or cancel.
+/// What:   A provider's read-only view of a bundle.
+/// Input:  [bundle], [tasks] and the viewer's own [myBid] streams from BundleDetailScreen.
+/// Output: Tasks, own bid card and a bid button; other providers' bids are never read.
 class BundleProviderView extends StatelessWidget {
   const BundleProviderView({
     super.key,
@@ -31,7 +32,6 @@ class BundleProviderView extends StatelessWidget {
   final Bundle bundle;
   final Stream<List<Job>> tasks;
 
-  /// The viewer's own bid on [bundle] - the only bid they may read.
   final Stream<BundleBid?> myBid;
   final AppUser me;
   final ValueChanged<Job> onOpenTask;
@@ -55,7 +55,7 @@ class BundleProviderView extends StatelessWidget {
                 ],
                 const SizedBox(height: 20),
                 StreamBuilder<List<Job>>(
-                  // Keyed so it isn't remounted when the bid card shows.
+                  // Keyed so it isn't remounted when the bid card appears.
                   key: const ValueKey('tasks'),
                   stream: tasks,
                   builder: (context, taskSnap) {
@@ -88,32 +88,8 @@ class BundleProviderView extends StatelessWidget {
 
   List<Widget> _header(BuildContext context) {
     final theme = Theme.of(context);
-    final deadline = bundleDeadlineText(bundle);
     return [
-      Text(
-        plural(bundle.taskCount, 'task'),
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
-      ),
-      if (bundle.description.isNotEmpty) ...[
-        const SizedBox(height: 8),
-        Text(bundle.description, style: theme.textTheme.bodyMedium),
-      ],
-      if (deadline != null) ...[
-        const SizedBox(height: 8),
-        Text(
-          deadline,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ],
-      const SizedBox(height: 8),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: BundleStatusPill(bundle: bundle),
-      ),
+      ...bundleSummary(context, bundle, counts: plural(bundle.taskCount, 'task')),
       if (bundle.photoUrls.isNotEmpty) ...[
         const SizedBox(height: 16),
         Text('Photos', style: theme.textTheme.titleLarge),
@@ -123,7 +99,7 @@ class BundleProviderView extends StatelessWidget {
     ];
   }
 
-  /// The one primary action, shown only to providers while bidding is open.
+  /// The bid button; only for providers while bidding is open.
   Widget? _bidBar(BuildContext context, BundleBid? mine) {
     if (!bundle.biddingOpen || me.role != UserRole.provider) return null;
     final verified = me.verificationStatus == 'approved';
@@ -154,7 +130,7 @@ class BundleProviderView extends StatelessWidget {
   }
 }
 
-/// "Your bundle bid: RM x for N tasks" with its status.
+// "Your bundle bid: RM x for N tasks" with its status.
 class _MyBidCard extends StatelessWidget {
   const _MyBidCard({required this.bid});
 
@@ -184,7 +160,7 @@ class _MyBidCard extends StatelessWidget {
   }
 }
 
-/// One task of the bundle, tapping through to its job detail.
+// One task of the bundle; taps through to its job detail.
 class _TaskCard extends StatefulWidget {
   const _TaskCard({
     required this.task,

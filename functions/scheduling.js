@@ -6,8 +6,9 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const {FieldValue, Timestamp} = require("firebase-admin/firestore");
-const {callerUid, bad, docId} = require("./bundles");
-const {notifyUser, logJobEvent} = require("./common");
+const {
+  callerUid, bad, docId, jobRole, counterpartyUid, notifyUser, logJobEvent,
+} = require("./common");
 
 const MIN_LEAD_MS = 30 * 60 * 1000;
 const MAX_AHEAD_MS = 90 * 24 * 60 * 60 * 1000;
@@ -120,17 +121,6 @@ function validateVisitDay(job, nowMs) {
 /** What: ETA check. Input: minutes. Output: true for 15/30/45/60. */
 const isAllowedEta = (minutes) => ETA_MINUTES.includes(minutes);
 
-/** What: Party lookup. Input: job data, uid. Output: role or null. */
-function roleOf(job, uid) {
-  if (job?.requestorId === uid) return "requestor";
-  if (job?.acceptedProviderId === uid) return "provider";
-  return null;
-}
-
-/** What: Other party. Input: job data, caller role. Output: their uid. */
-const otherUid = (job, role) =>
-  role === "requestor" ? job.acceptedProviderId : job.requestorId;
-
 /** What: Copy label. Input: caller role. Output: "The client"/"The provider". */
 const roleLabel = (role) => role === "requestor" ? "The client" : "The provider";
 
@@ -143,7 +133,7 @@ const precondition = (message) =>
 /** Reads the job in [tx]; returns it with the caller's role or throws. */
 async function readJob(tx, jobRef, uid) {
   const job = (await tx.get(jobRef)).data();
-  const role = roleOf(job, uid);
+  const role = jobRole(job, uid);
   if (!role) throw denied("Only the job's participants can schedule a visit.");
   return {job, role};
 }
@@ -189,7 +179,7 @@ async function readGroup(tx, jobId, proposal, uid) {
   return snaps
       .filter((snap) => snap.exists)
       .map((snap) => ({ref: snap.ref, job: snap.data()}))
-      .filter(({job}) => job.status === "in_progress" && roleOf(job, uid) &&
+      .filter(({job}) => job.status === "in_progress" && jobRole(job, uid) &&
           sameProposal(job.appointmentProposal, proposal));
 }
 
@@ -254,7 +244,7 @@ exports.proposeAppointment = functions.https.onCall(async (data, context) => {
       logJobEvent(ref.id, null, "appointment_proposed",
           `${roleLabel(role)} proposed a visit time`, tx);
     }
-    notifyUser(tx, otherUid(job, role), {
+    notifyUser(tx, counterpartyUid(job, role), {
       type: "appointment",
       title: isLate(job) ? "Visit change at short notice" :
         "Visit time proposed",
@@ -315,7 +305,7 @@ exports.respondToAppointment = functions.https.onCall(async (data, context) => {
       throw precondition(
           "You proposed this; the other party must respond.");
     }
-    const proposerUid = otherUid(job, role);
+    const proposerUid = counterpartyUid(job, role);
 
     const index = data.optionIndex;
     if (!Number.isInteger(index) || index < 0 ||
@@ -371,7 +361,7 @@ exports.withdrawAppointmentProposal =
         logJobEvent(ref.id, null, "appointment_withdrawn",
             "Visit time proposal withdrawn", tx);
       }
-      notifyUser(tx, otherUid(job, role), {
+      notifyUser(tx, counterpartyUid(job, role), {
         type: "appointment",
         title: "Visit proposal withdrawn",
         body: `${roleLabel(role)} withdrew the suggested times for ` +
@@ -490,12 +480,11 @@ exports.sendVisitReminders = functions.pubsub
       functions.logger.info(`sendVisitReminders: ${sent} visit(s) reminded`);
     });
 
-// Exported for tests only; index.js re-exports just the callables.
+// Exported for tests; index.js re-exports the callables.
 exports.reminderDue = reminderDue;
 exports.validateProposal = validateProposal;
 exports.validateVisitDay = validateVisitDay;
 exports.validateSibling = validateSibling;
 exports.sameProposal = sameProposal;
-exports.isAllowedEta = isAllowedEta;
 exports.isLateReschedule = isLateReschedule;
 exports.formatVisit = formatVisit;

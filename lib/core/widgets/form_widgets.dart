@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// Text field with an external label above it (per the design mock), optional
-/// show/hide toggle for secrets, and the standard FairBid styling.
+/// What:   Text field with an external label, optional show/hide toggle for secrets, and FairBid styling.
+/// Input:  [controller], [label], validators and the display options below.
+/// Output: A labelled TextFormField.
 class AppTextField extends StatefulWidget {
   const AppTextField({
     super.key,
@@ -38,16 +39,14 @@ class AppTextField extends StatefulWidget {
   final int maxLines;
   final int? maxLength;
 
-  /// False greys the field out and blocks input - e.g. while a request is
-  /// in flight.
+  /// False greys the field out and blocks input.
   final bool enabled;
 
-  /// Optional widget on the right of the label row (e.g. a "Forgot?" link).
+  /// Widget on the right of the label row (e.g. "Forgot?").
   final Widget? labelTrailing;
   final ValueChanged<String>? onSubmitted;
 
-  /// Key on the inner `TextFormField`, not this widget - lets a caller find
-  /// its `FormFieldState` (e.g. to scroll the first invalid field into view).
+  /// Key on the inner TextFormField, to reach its FormFieldState.
   final GlobalKey<FormFieldState<String>>? fieldKey;
 
   @override
@@ -115,8 +114,9 @@ class _AppTextFieldState extends State<AppTextField> {
   }
 }
 
-/// Header shown above every onboarding step: "Stage X of 6", the section name
-/// on the right in brand blue, and a thin progress bar underneath.
+/// What:   Header above every onboarding step.
+/// Input:  [stage] of [totalStages] (the last step number) and the [sectionLabel].
+/// Output: "Stage X of N", the section name in brand blue and a progress bar.
 class StageHeader extends StatelessWidget {
   const StageHeader({
     super.key,
@@ -165,12 +165,9 @@ class StageHeader extends StatelessWidget {
   }
 }
 
-/// Dashed-border upload area: icon, "Click to upload" and a hint line.
-/// Shows the picked file name with a green check once [pickedName] is set.
-/// While [busy] (a pick/upload this box triggered is in flight), shows an
-/// in-place spinner instead of the icon and disables the tap target - so
-/// per-upload progress is obvious right where the user is looking, as
-/// opposed to a screen-wide overlay.
+/// What:   Dashed-border upload area.
+/// Input:  [icon], [hint], [onTap]; [pickedName] once a file is chosen; [busy] while uploading.
+/// Output: Icon with "Click to upload" and the hint; the file name with a green check when picked; an in-place spinner and disabled tap while [busy].
 class UploadBox extends StatelessWidget {
   const UploadBox({
     super.key,
@@ -195,8 +192,7 @@ class UploadBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final picked = pickedName != null;
-    // successText: `accent` colours the label text and the 28px glyph, not
-    // just the border, so it has to clear AA against the white box.
+    // successText: `accent` colours text and glyph, which must clear AA on white.
     final accent =
         picked ? context.fairbid.successText : context.fairbid.verified;
 
@@ -245,7 +241,7 @@ class UploadBox extends StatelessWidget {
   }
 }
 
-/// Paints a rounded-rectangle dashed border (Flutter has no built-in one).
+/// Paints a dashed rounded-rectangle border (Flutter has none built in).
 class _DashedRRectPainter extends CustomPainter {
   const _DashedRRectPainter({required this.color});
 
@@ -282,8 +278,9 @@ class _DashedRRectPainter extends CustomPainter {
       oldDelegate.color != color;
 }
 
-/// Green-check bullet line used in the "Tips for a successful verification"
-/// card and the pending-review checklist.
+/// What:   Green-check bullet line for tips and checklists.
+/// Input:  [text].
+/// Output: A row with a green check and the text.
 class CheckBullet extends StatelessWidget {
   const CheckBullet(this.text, {super.key});
   final String text;
@@ -303,6 +300,76 @@ class CheckBullet extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// What:   A dialog asking for a required free-text reason.
+/// Input:  [title], [message], [hint] and the confirm button's [confirmLabel] / [confirmColor].
+/// Output: Pops the trimmed text on confirm, null on cancel.
+/// Notes:  Confirm stays disabled until something is typed.
+class ReasonDialog extends StatefulWidget {
+  const ReasonDialog({
+    super.key,
+    required this.title,
+    required this.message,
+    required this.hint,
+    required this.confirmLabel,
+    this.confirmColor,
+  });
+
+  final String title, message, hint, confirmLabel;
+  final Color? confirmColor;
+
+  @override
+  State<ReasonDialog> createState() => _ReasonDialogState();
+}
+
+class _ReasonDialogState extends State<ReasonDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = _controller.text.trim();
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.message,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            maxLines: 3,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(hintText: widget.hint),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: widget.confirmColor == null
+              ? null
+              : FilledButton.styleFrom(backgroundColor: widget.confirmColor),
+          onPressed: text.isEmpty ? null : () => Navigator.of(context).pop(text),
+          child: Text(widget.confirmLabel),
+        ),
+      ],
     );
   }
 }

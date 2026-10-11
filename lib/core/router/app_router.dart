@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/admin/domain/pending_verification.dart';
@@ -30,14 +29,15 @@ import '../../features/profile/presentation/user_reviews_screen.dart';
 import '../../features/wallet/presentation/payout_method_screen.dart';
 import '../navigation/app_shell.dart';
 
-/// Builds the app router. It listens to [auth] so that signing in/out or
-/// finishing onboarding automatically redirects to the right screen.
+/// What:   Builds the app's GoRouter.
+/// Input:  [auth]; its changes (sign in/out, onboarding, suspension) re-run the redirects.
+/// Output: Routes for auth, onboarding, pushed screens and the four-tab shell.
 GoRouter buildRouter(AuthController auth) {
   return GoRouter(
     refreshListenable: auth,
     initialLocation: '/login',
     redirect: (context, state) {
-      // While the first auth state is loading, stay put (splash is shown).
+      // Stay put while the first auth state loads.
       if (auth.isInitializing) return null;
 
       final user = auth.user;
@@ -47,15 +47,13 @@ GoRouter buildRouter(AuthController auth) {
       // Signed out → only the auth screens are reachable.
       if (user == null) return onAuthScreen ? null : '/login';
 
-      // Suspended users (never admins) are locked to the suspended notice -
-      // above onboarding so a mid-onboarding suspension still applies.
+      // Above onboarding so a mid-onboarding suspension still applies; admins are exempt.
       if (user.suspended && user.role != UserRole.admin) {
         return location == '/suspended' ? null : '/suspended';
       }
-      // A reinstated user must never linger on the suspended screen.
       if (location == '/suspended') return '/home';
 
-      // Providers who haven't submitted onboarding are locked into it.
+      // Users who haven't finished onboarding are locked into it.
       if (user.needsOnboarding) {
         return location == '/onboarding' ? null : '/onboarding';
       }
@@ -72,13 +70,12 @@ GoRouter buildRouter(AuthController auth) {
           path: '/onboarding',
           builder: (_, _) => const OnboardingFlowScreen()),
 
-      // Jobs - pushed full-screen (outside the tab shell) with a back button.
+      // Pushed full-screen outside the tab shell.
       GoRoute(path: '/post-job', builder: (_, _) => const PostJobScreen()),
       GoRoute(path: '/jobs', builder: (_, _) => const JobFeedScreen()),
       GoRoute(
           path: '/jobs/saved', builder: (_, _) => const SavedJobsScreen()),
-      // `?from=bundle` means it was opened from that task's bundle screen, so
-      // "View bundle" goes back instead of stacking another copy.
+      // `?from=bundle`: opened from its bundle, so "View bundle" goes back.
       GoRoute(
         path: '/jobs/:id',
         builder: (_, state) => JobDetailScreen(
@@ -87,9 +84,7 @@ GoRouter buildRouter(AuthController auth) {
         ),
       ),
 
-      // A bundled posting: the requestor's tasks, bids and award options, or a
-      // provider's read-only view. `?fromTask=<jobId>` names the task it was
-      // opened from, so tapping that task goes back instead of stacking.
+      // `?fromTask=<jobId>`: opened from that task, so tapping it goes back.
       GoRoute(
         path: '/bundles/:id',
         builder: (_, state) => BundleDetailScreen(
@@ -98,42 +93,34 @@ GoRouter buildRouter(AuthController auth) {
         ),
       ),
 
-      // Admin - the verification review screen, pushed from the queue with the
-      // selected applicant passed as `extra`.
+      // Admin screens take the selected item as `extra`.
       GoRoute(
         path: '/admin/verify',
         builder: (_, state) => VerificationDetailScreen(
             verification: state.extra as PendingVerification),
       ),
 
-      // Admin - the dispute ruling screen, pushed from the disputes queue with
-      // the selected dispute passed as `extra`.
       GoRoute(
         path: '/admin/dispute',
         builder: (_, state) =>
             DisputeDetailScreen(dispute: state.extra as Dispute),
       ),
 
-      // Chat thread - pushed full-screen (outside the tab shell) with a back
-      // button. `/messages` (no id) stays a tab inside the shell below.
+      // `/messages` (no id) is a tab in the shell below.
       GoRoute(
         path: '/messages/:id',
         builder: (_, state) => ConversationThreadScreen(
             conversationId: state.pathParameters['id']!),
       ),
 
-      // Notification centre - pushed from the app bar bell; also the landing
-      // point for tapped push notifications.
+      // Also the landing point for tapped push notifications.
       GoRoute(
           path: '/notifications',
           builder: (_, _) => const NotificationsScreen()),
 
-      // Shown when an admin has suspended the account (router redirects every
-      // other route here for a suspended non-admin user).
       GoRoute(
           path: '/suspended', builder: (_, _) => const SuspendedScreen()),
 
-      // Profile - pushed full-screen (outside the tab shell) with a back button.
       GoRoute(
           path: '/profile/edit', builder: (_, _) => const EditProfileScreen()),
       GoRoute(
@@ -146,9 +133,7 @@ GoRouter buildRouter(AuthController auth) {
           path: '/profile/security',
           builder: (_, _) => const SecurityScreen()),
 
-      // Public profile - pushed full-screen (outside the tab shell) with a
-      // back button, matching /jobs/:id. Viewing your own uid redirects to
-      // the canonical /profile screen instead of a second copy of it.
+      // Your own uid redirects to /profile.
       GoRoute(
         path: '/users/:uid',
         redirect: (context, state) {
@@ -164,7 +149,6 @@ GoRouter buildRouter(AuthController auth) {
             UserReviewsScreen(uid: state.pathParameters['uid']!),
       ),
 
-      // The four main tabs live in a persistent bottom-nav shell.
       StatefulShellRoute.indexedStack(
         builder: (_, _, navigationShell) =>
             AppShell(navigationShell: navigationShell),
@@ -189,16 +173,4 @@ GoRouter buildRouter(AuthController auth) {
       ),
     ],
   );
-}
-
-/// Shown while the app determines whether someone is already signed in.
-class SplashScreen extends StatelessWidget {
-  const SplashScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
-    );
-  }
 }

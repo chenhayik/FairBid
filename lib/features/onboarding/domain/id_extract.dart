@@ -4,12 +4,7 @@ enum IdVerdict {
   needsReview,
   rejected;
 
-  static IdVerdict? fromStorage(String? value) => switch (value) {
-    'passed' => IdVerdict.passed,
-    'needsReview' => IdVerdict.needsReview,
-    'rejected' => IdVerdict.rejected,
-    _ => null,
-  };
+  static IdVerdict? fromStorage(String? value) => values.asNameMap()[value];
 }
 
 /// Short friendly text for a failure code written by `extractIdDocument`.
@@ -31,9 +26,10 @@ String idFailureLabel(String code) => switch (code) {
   _ => code,
 };
 
-/// The server's reading of an uploaded ID, from the owner+admin-only
-/// `users/{uid}/private/idExtract` document (written only by Cloud Functions).
-/// Holds a masked IC and booleans only - never the name, DOB or full number.
+/// What:   The server's reading of an uploaded ID.
+/// Input:  Owner+admin-only `private/idExtract`, written by `extractIdDocument`.
+/// Output: Verdict, failure codes, masked IC and three-valued checks (null = could not tell).
+/// Notes:  Never holds the name, DOB or full number.
 class IdExtract {
   const IdExtract({
     required this.verdict,
@@ -42,18 +38,15 @@ class IdExtract {
     this.ageOk,
     this.nameMatches,
     this.genderConsistent,
-    this.storagePath,
   });
 
   final IdVerdict verdict;
   final List<String> failures;
   final String? maskedIc;
 
-  /// Three-valued: null means "could not tell", which is not "no".
   final bool? ageOk;
   final bool? nameMatches;
   final bool? genderConsistent;
-  final String? storagePath;
 
   static IdExtract? fromMap(Map<String, dynamic>? map) {
     if (map == null) return null;
@@ -67,7 +60,6 @@ class IdExtract {
       ageOk: map['ageOk'] as bool?,
       nameMatches: map['nameMatches'] as bool?,
       genderConsistent: map['genderConsistent'] as bool?,
-      storagePath: map['storagePath'] as String?,
     );
   }
 }

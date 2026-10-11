@@ -1,11 +1,34 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
+const {FieldValue, Timestamp} = require("firebase-admin/firestore");
+const {defineSecret} = require("firebase-functions/params");
+const {GoogleGenAI, Type, ThinkingLevel, MediaResolution} =
+    require("@google/genai");
+const {computeTrust} = require("./trust");
+const {
+  callerUid, docId, assertAdmin, throwIfSuspended, assertCanPay, jobRole,
+  counterpartyUid, notifyUser, logJobEvent, ESCROW, appendLedger,
+  writeFundedMilestone, IMG_PREFIX,
+} = require("./common");
+const {
+  disputeRefundPlan, canCancelFunded, cancellationPlan, planIncrease,
+  planDecrease, finishedByDecrease,
+} = require("./payouts");
+const {completesJob, validatePriceChange} = require("./price_change");
+const bundles = require("./bundles");
+const bundleAward = require("./bundle_award");
+const scheduling = require("./scheduling");
+const payoutMethod = require("./payout_method");
+const ssm = require("./ssm");
+const idcheck = require("./idcheck");
 
 admin.initializeApp();
 
 /**
- * When an Auth account is deleted, remove its Firestore profile.
- * Auth triggers are 1st-gen only, so this uses firebase-functions/v1.
+ * What:   Auth trigger that removes a deleted account's data.
+ * Input:  The deleted Auth user (1st-gen only, so firebase-functions/v1).
+ * Output: Profile tree and ID photos deleted; the IC reservation too unless
+ *         the user was suspended.
  */
 exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
   const db = admin.firestore();
@@ -18,7 +41,6 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
     functions.logger.warn("suspended read failed", {uid: user.uid});
   }
   await db.recursiveDelete(ref);
-  // Best-effort: leftover ID photos, and the IC reservation unless banned.
   try {
     const [files] = await admin.storage().bucket()
         .getFiles({prefix: `verification/${user.uid}/`});
@@ -34,19 +56,16 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
   functions.logger.info(`Deleted Firestore profile for ${user.uid}`);
 });
 
-// Trust Score. The math is in trust.js; only the consumer below
-// writes the score.
-
-const {computeTrust} = require("./trust");
-
 /**
- * Recomputes a user's trust breakdown whenever the user doc is written.
- * It skips the write if nothing changed, which stops a trigger loop.
+ * What:   Trigger that keeps a user's Trust Score current.
+ * Input:  Every write to `users/{uid}`.
+ * Output: `trustScore` and `trust` updated via trust.js; skipped when nothing
+ *         changed, which stops a trigger loop.
  */
 exports.recomputeTrustOnUserWrite = functions.firestore
     .document("users/{uid}")
     .onWrite(async (change) => {
-      if (!change.after.exists) return; // deletion - nothing to score
+      if (!change.after.exists) return;
       const user = change.after.data();
       const trust = computeTrust(user);
 
@@ -59,46 +78,38 @@ exports.recomputeTrustOnUserWrite = functions.firestore
 
       await change.after.ref.update({
         trustScore: trust.composite,
-        trust: {
-          ...trust,
-          computedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
+        trust: {...trust, computedAt: FieldValue.serverTimestamp()},
       });
     });
 
 /**
- * A new review adds its rating to the reviewee's totals (server-side).
- * A `countedInTrust` flag on the review stops retries counting twice.
+ * What:   Trigger that adds a new review's rating to the reviewee's totals.
+ * Input:  A new `users/{revieweeId}/reviews/{reviewId}` doc.
+ * Output: `ratingSum` and `ratingCount` bumped once; `countedInTrust` on the
+ *         review stops retries counting twice.
  */
 exports.recomputeTrustScore = functions.firestore
     .document("users/{revieweeId}/reviews/{reviewId}")
     .onCreate(async (snapshot, context) => {
-      const revieweeId = context.params.revieweeId;
       const rating = snapshot.data().rating;
-      const userRef = admin.firestore().doc(`users/${revieweeId}`);
+      const userRef = admin.firestore().doc(`users/${context.params.revieweeId}`);
       const reviewRef = snapshot.ref;
 
       await admin.firestore().runTransaction(async (tx) => {
-        // All reads before any writes.
-        const [userSnap, reviewSnap] = await Promise.all([
-          tx.get(userRef),
-          tx.get(reviewRef),
-        ]);
-        if (reviewSnap.data()?.countedInTrust === true) return; // retried event
-        const data = userSnap.data() || {};
+        if ((await tx.get(reviewRef)).data()?.countedInTrust === true) return;
         tx.update(userRef, {
-          ratingSum: (data.ratingSum || 0) + rating,
-          ratingCount: (data.ratingCount || 0) + 1,
+          ratingSum: FieldValue.increment(rating),
+          ratingCount: FieldValue.increment(1),
         });
         tx.update(reviewRef, {countedInTrust: true});
       });
     });
 
-const {uidsToCount} = require("./bundles");
-
 /**
- * When a job completes, both people get +1 completed job.
- * A bundle counts once per person; `completionCounted` blocks retries.
+ * What:   Trigger that credits both people when a job completes.
+ * Input:  A `jobs/{jobId}` update to status "completed".
+ * Output: +1 `jobsCompleted` each; a bundle counts once per person (markers in
+ *         `bundles/{id}/completionCounts`) and `completionCounted` blocks retries.
  */
 exports.onJobCompleted = functions.firestore
     .document("jobs/{jobId}")
@@ -119,23 +130,17 @@ exports.onJobCompleted = functions.firestore
           [];
 
       await db.runTransaction(async (tx) => {
-        // All reads before any writes.
         const [jobSnap, ...markerSnaps] =
             await tx.getAll(jobRef, ...markerRefs);
-        if (jobSnap.data()?.completionCounted === true) return; // retried event
+        if (jobSnap.data()?.completionCounted === true) return;
 
-        const alreadyCounted = bundleId ?
-            participants.filter((uid, i) => markerSnaps[i].exists) :
-            [];
-        const bump = {
-          jobsCompleted: admin.firestore.FieldValue.increment(1),
-        };
-        uidsToCount(participants, alreadyCounted).forEach((uid) => {
-          tx.update(db.doc(`users/${uid}`), bump);
+        participants.filter((uid, i) => !markerSnaps[i]?.exists).forEach((uid) => {
+          tx.update(db.doc(`users/${uid}`),
+              {jobsCompleted: FieldValue.increment(1)});
           if (bundleId) {
             tx.set(db.doc(`bundles/${bundleId}/completionCounts/${uid}`), {
               jobId: jobRef.id,
-              at: admin.firestore.FieldValue.serverTimestamp(),
+              at: FieldValue.serverTimestamp(),
             });
           }
         });
@@ -143,18 +148,16 @@ exports.onJobCompleted = functions.firestore
       });
     });
 
-// Requestor counters (jobsPosted, hireRate), written only by the server.
-
 /**
- * Adds the deltas to a user's job counters and recalculates `hireRate`.
- * With no jobs posted, `hireRate` is removed instead of showing 0%.
+ * Adds the deltas to a user's job counters and recalculates `hireRate`
+ * (removed while no jobs are posted, instead of showing 0%).
  */
 async function bumpRequestorCounters(uid, {postedDelta = 0, assignedDelta = 0}) {
   const db = admin.firestore();
   const ref = db.doc(`users/${uid}`);
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
-    if (!snap.exists) return; // defensive: shouldn't happen in practice
+    if (!snap.exists) return;
     const data = snap.data() || {};
     const jobsPosted = (data.jobsPosted || 0) + postedDelta;
     const jobsAssigned = (data.jobsAssigned || 0) + assignedDelta;
@@ -163,12 +166,16 @@ async function bumpRequestorCounters(uid, {postedDelta = 0, assignedDelta = 0}) 
       jobsAssigned,
       hireRate: jobsPosted > 0 ?
           Math.round((jobsAssigned / jobsPosted) * 100) :
-          admin.firestore.FieldValue.delete(),
+          FieldValue.delete(),
     });
   });
 }
 
-/** Adds 1 to the requestor's `jobsPosted` when a job is created. */
+/**
+ * What:   Trigger that counts a posted job.
+ * Input:  A new `jobs/{jobId}` doc.
+ * Output: The requestor's `jobsPosted` +1 and `hireRate` recalculated.
+ */
 exports.bumpJobsPostedOnCreate = functions.firestore
     .document("jobs/{jobId}")
     .onCreate(async (snap) => {
@@ -177,7 +184,11 @@ exports.bumpJobsPostedOnCreate = functions.firestore
       await bumpRequestorCounters(requestorId, {postedDelta: 1});
     });
 
-/** Adds 1 to the requestor's `jobsAssigned` when a bid is accepted. */
+/**
+ * What:   Trigger that counts an assigned job.
+ * Input:  A `jobs/{jobId}` update from "open" to "in_progress".
+ * Output: The requestor's `jobsAssigned` +1 and `hireRate` recalculated.
+ */
 exports.bumpJobsAssignedOnAccept = functions.firestore
     .document("jobs/{jobId}")
     .onUpdate(async (change) => {
@@ -191,18 +202,6 @@ exports.bumpJobsAssignedOnAccept = functions.firestore
 // Wallet and escrow. Clients can't write money fields, so only these
 // callables (using the admin SDK) move money.
 
-const {ESCROW, appendLedger, writeFundedMilestone} = require("./common");
-const {normaliseMobile} = require("./payout_method");
-
-/** Rejects unauthenticated calls; returns the caller's uid. */
-function callerUid(context) {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-        "unauthenticated", "You must be signed in.");
-  }
-  return context.auth.uid;
-}
-
 /** Validates a client-supplied sen amount. */
 function checkAmount(amountSen) {
   if (!Number.isInteger(amountSen) || amountSen <= 0) {
@@ -212,74 +211,44 @@ function checkAmount(amountSen) {
   return amountSen;
 }
 
-/** Validates a client-supplied document id. */
-function checkId(value, name) {
-  if (typeof value !== "string" || value === "") {
-    throw new functions.https.HttpsError(
-        "invalid-argument", `Missing ${name}.`);
-  }
-  return value;
-}
-
-/** Throws unless `users/{uid}` has role 'admin'. Read inside [tx]. */
-async function assertAdmin(tx, db, uid) {
-  const snap = await tx.get(db.doc(`users/${uid}`));
-  if (snap.data()?.role !== "admin") {
-    throw new functions.https.HttpsError(
-        "permission-denied", "Only an admin can do this.");
-  }
-}
-
 /**
- * Throws if the user is suspended. Read inside [tx], before any writes.
- * Suspended users can read, but can't take money or work actions.
+ * Reads `users/{uid}` in [tx] and throws if suspended. Call it before any
+ * write; suspended users can read, but can't take money or work actions.
  */
-async function assertNotSuspended(tx, db, uid) {
-  const snap = await tx.get(db.doc(`users/${uid}`));
-  if (snap.data()?.suspended === true) {
-    throw new functions.https.HttpsError(
-        "permission-denied",
-        "Your account is suspended. Contact support if you think this is " +
-        "a mistake.");
-  }
+async function assertNotSuspended(tx, uid) {
+  throwIfSuspended(
+      (await tx.get(admin.firestore().doc(`users/${uid}`))).data());
 }
 
-const {completesJob} = require("./price_change");
-
-/** Turns a milestones query snapshot into rows for [completesJob]. */
+/** Turns a milestones query snapshot into rows for the payout rules. */
 const milestoneRows = (snap) => snap.docs.map((d) => ({id: d.id, ...d.data()}));
 
 /**
- * Requestor accepts a bid; other pending bids are rejected.
- * The bid amount moves from the wallet into escrow as one funded stage.
+ * What:   Callable for the requestor to accept one bid on an open job.
+ * Input:  {jobId, providerId} from bid_repository.dart.
+ * Output: Bid accepted, other pending bids rejected, the amount moved to
+ *         escrow as stage m0; job in_progress.
+ * Notes:  Throws failed-precondition with reason "race" or "insufficient_balance".
  */
 exports.acceptBid = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const providerId = checkId(data.providerId, "providerId");
+  const jobId = docId(data.jobId, "jobId");
+  const providerId = docId(data.providerId, "providerId");
   const db = admin.firestore();
   const jobRef = db.doc(`jobs/${jobId}`);
   const bidsRef = jobRef.collection("bids");
   const winnerRef = bidsRef.doc(providerId);
   const walletRef = db.doc(`users/${uid}`);
 
-  // Queries can't run inside a transaction, so fetch pending bid refs first.
-  // Each is re-read inside the transaction to stay safe from races.
-  const candidates = await bidsRef.where("status", "==", "pending").get();
-  const otherRefs = candidates.docs
-      .map((d) => d.ref)
-      .filter((ref) => ref.id !== providerId);
-
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
-    // All reads before any writes.
-    const [jobSnap, winnerSnap, walletSnap, ...otherSnaps] =
-        await Promise.all([
-          tx.get(jobRef),
-          tx.get(winnerRef),
-          tx.get(walletRef),
-          ...otherRefs.map((ref) => tx.get(ref)),
-        ]);
+    const [jobSnap, winnerSnap, walletSnap, pendingBids] = await Promise.all([
+      tx.get(jobRef),
+      tx.get(winnerRef),
+      tx.get(walletRef),
+      tx.get(bidsRef.where("status", "==", "pending")),
+    ]);
+    const wallet = walletSnap.data() || {};
+    throwIfSuspended(wallet);
     const job = jobSnap.data();
     if (job?.requestorId !== uid) {
       throw new functions.https.HttpsError(
@@ -296,35 +265,16 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
           "failed-precondition", "This bid is no longer pending.",
           {reason: "race"});
     }
-    // Use the stored bid amount, never client input; re-check it before
-    // the wallet debit.
+    // Use the stored bid amount, never client input.
     const amount = checkAmount(winner.amountSen);
-    const wallet = walletSnap.data() || {};
-    const available =
-        (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
-    if (available < amount) {
-      throw new functions.https.HttpsError(
-          "failed-precondition",
-          "Insufficient available balance to accept this bid.", {
-            reason: "insufficient_balance",
-            shortfallSen: amount - available,
-            availableSen: available,
-            requiredSen: amount,
-          });
-    }
+    assertCanPay(wallet, amount,
+        "Insufficient available balance to accept this bid.");
 
-    // Writes.
     tx.update(winnerRef, {status: "accepted"});
-    for (let i = 0; i < otherRefs.length; i++) {
-      // Skip bids withdrawn or resolved since the pre-fetch.
-      if (otherSnaps[i].data()?.status === "pending") {
-        tx.update(otherRefs[i], {status: "rejected"});
-      }
-    }
-    // The full price goes into escrow now, so `escrowLockedSen` is unused.
-    tx.update(walletRef, {
-      walletBalanceSen: (wallet.walletBalanceSen || 0) - amount,
-    });
+    pendingBids.docs
+        .filter((bid) => bid.id !== providerId)
+        .forEach((bid) => tx.update(bid.ref, {status: "rejected"}));
+    tx.update(walletRef, {walletBalanceSen: FieldValue.increment(-amount)});
     writeFundedMilestone(tx, {
       jobRef, title: job.title, requestorId: uid, providerId, amountSen: amount,
     });
@@ -341,13 +291,14 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Requestor releases a delivered milestone and pays the provider.
- * If it was the last one, the job completes and reviews unlock.
+ * What:   Callable for the requestor to release a delivered stage.
+ * Input:  {jobId, milestoneId} from milestone_repository.dart.
+ * Output: Provider paid and notified; the last stage completes the job.
  */
 exports.releaseMilestone = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const milestoneId = checkId(data.milestoneId, "milestoneId");
+  const jobId = docId(data.jobId, "jobId");
+  const milestoneId = docId(data.milestoneId, "milestoneId");
   functions.logger.info("releaseMilestone requested",
       {uid, jobId, milestoneId});
   const db = admin.firestore();
@@ -355,7 +306,7 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
   const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
+    await assertNotSuspended(tx, uid);
     const [jobSnap, milestoneSnap, allMilestones] = await Promise.all([
       tx.get(jobRef),
       tx.get(milestoneRef),
@@ -381,14 +332,10 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError(
           "failed-precondition", "This milestone has not been delivered yet.");
     }
-    const providerRef = db.doc(`users/${job.acceptedProviderId}`);
-    const providerSnap = await tx.get(providerRef);
     const amountSen = milestoneSnap.data().amountSen;
 
-    tx.update(providerRef, {
-      walletBalanceSen:
-          (providerSnap.data()?.walletBalanceSen || 0) + amountSen,
-    });
+    tx.update(db.doc(`users/${job.acceptedProviderId}`),
+        {walletBalanceSen: FieldValue.increment(amountSen)});
     tx.update(milestoneRef, {status: "released"});
     const wasLast = completesJob(job, milestoneRows(allMilestones), milestoneId);
     if (wasLast) {
@@ -404,7 +351,7 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
       milestoneId,
       participantIds: [job.acceptedProviderId],
     });
-    notify(tx, job.acceptedProviderId, {
+    notifyUser(tx, job.acceptedProviderId, {
       type: "payment",
       title: "Payment released",
       body: `${rm(amountSen)} was released to your wallet for ` +
@@ -426,9 +373,22 @@ const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
 /** True only in the Firebase emulator; deployed functions never set this. */
 const isEmulator = () => process.env.FUNCTIONS_EMULATOR === "true";
 
+/** Throws if [amountSen] is over the per-top-up cap; [fn] names the caller. */
+function capTopUp(amountSen, fn, uid) {
+  if (amountSen > MAX_TOPUP_SEN) {
+    functions.logger.error(`${fn} rejected: over per-call cap`,
+        {uid, amountSen, capSen: MAX_TOPUP_SEN});
+    throw new functions.https.HttpsError(
+        "invalid-argument", "Top-ups are capped at RM 10,000.");
+  }
+}
+
 /**
- * Demo top-up with no real payment, so it only works in the emulator.
- * Real top-ups use toyyibPay. Matches PlatformConfig.demoTopUpEnabled.
+ * What:   Callable that tops up the wallet with no real payment.
+ * Input:  {amountSen} from wallet_repository.dart.
+ * Output: Wallet credited and a ledger entry written.
+ * Notes:  Emulator only; matches PlatformConfig.demoTopUpEnabled. Real top-ups
+ *         use toyyibPay.
  */
 exports.topUpWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -442,17 +402,12 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
   }
   const amountSen = checkAmount(data.amountSen);
   functions.logger.info("topUpWallet requested", {uid, amountSen});
-  if (amountSen > MAX_TOPUP_SEN) {
-    functions.logger.error("topUpWallet rejected: over per-call cap",
-        {uid, amountSen, capSen: MAX_TOPUP_SEN});
-    throw new functions.https.HttpsError(
-        "invalid-argument", "Top-ups are capped at RM 10,000.");
-  }
+  capTopUp(amountSen, "topUpWallet", uid);
   const db = admin.firestore();
   const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
+    await assertNotSuspended(tx, uid);
     const walletSnap = await tx.get(walletRef);
     const balance = walletSnap.data()?.walletBalanceSen || 0;
     if (balance + amountSen > MAX_WALLET_BALANCE_SEN) {
@@ -461,9 +416,7 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError(
           "failed-precondition", "Wallet balance is capped at RM 50,000.");
     }
-    tx.update(walletRef, {
-      walletBalanceSen: admin.firestore.FieldValue.increment(amountSen),
-    });
+    tx.update(walletRef, {walletBalanceSen: FieldValue.increment(amountSen)});
     appendLedger(tx, {
       fromUid: null,
       toUid: uid,
@@ -475,7 +428,12 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
   functions.logger.info("topUpWallet credited", {uid, amountSen});
 });
 
-/** Withdraws from the caller's available balance; rejects overdrafts. */
+/**
+ * What:   Callable that withdraws from the caller's available balance.
+ * Input:  {amountSen} from wallet_repository.dart.
+ * Output: Wallet debited, ledger entry and receipt written.
+ * Notes:  Needs a payout method past its 24-hour hold; rejects overdrafts.
+ */
 exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const amountSen = checkAmount(data.amountSen);
@@ -484,7 +442,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
   const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
+    await assertNotSuspended(tx, uid);
     const [walletSnap, methodSnap, payoutSnap] = await Promise.all([
       tx.get(walletRef),
       tx.get(walletRef.collection("private").doc("payoutMethod")),
@@ -502,7 +460,8 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
           "withdraw again 24 hours after the change.");
     }
     if (method.proxyType === "mobile" &&
-        normaliseMobile(payoutSnap.data()?.phone ?? walletSnap.data()?.phone) !==
+        payoutMethod.normaliseMobile(
+            payoutSnap.data()?.phone ?? walletSnap.data()?.phone) !==
             method.mobile) {
       throw new functions.https.HttpsError("failed-precondition",
           "Your profile phone number changed. Update your DuitNow payout " +
@@ -510,7 +469,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     }
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
-    // Use the available balance; money locked for a bid can't be withdrawn.
+    // `escrowLockedSen` is legacy (nothing writes it); old docs may hold it.
     const available = balance - (wallet.escrowLockedSen || 0);
     if (available < amountSen) {
       functions.logger.error("withdrawFromWallet rejected: insufficient balance",
@@ -526,8 +485,7 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
       type: "withdraw",
       participantIds: [uid],
     });
-    // Always send a receipt when money leaves the wallet.
-    notify(tx, uid, {
+    notifyUser(tx, uid, {
       type: "payment",
       title: "Withdrawal complete",
       body: `${rm(amountSen)} sent to ${method.masked} (demo: no real ` +
@@ -541,7 +499,6 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
 // toyyibPay top-up. Money only moves in `creditToyyibpayTopup`, which
 // re-checks the bill with toyyibPay and credits the amount we stored.
 
-const {defineSecret} = require("firebase-functions/params");
 const toyyibpaySecret = defineSecret("TOYYIBPAY_SECRET_KEY");
 const TOYYIBPAY_BASE = "https://dev.toyyibpay.com";
 const TOYYIBPAY_CATEGORY = "0zghdj8k";
@@ -550,31 +507,25 @@ const TOYYIBPAY_CALLBACK_URL =
     "https://us-central1-fairbid-c9340.cloudfunctions.net/toyyibpayCallback";
 
 /**
- * Creates a toyyibPay bill and returns its payment page URL.
- * Same caps as `topUpWallet`; no money moves until the bill is paid.
+ * What:   Callable that creates a toyyibPay bill.
+ * Input:  {amountSen} from wallet_repository.dart.
+ * Output: {billCode, paymentUrl}; a `topups/{billCode}` record is stored.
+ * Notes:  Same caps as topUpWallet; no money moves until the bill is paid.
  */
 exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     .https.onCall(async (data, context) => {
       const uid = callerUid(context);
       const amountSen = checkAmount(data.amountSen);
       functions.logger.info("createToyyibpayBill requested", {uid, amountSen});
-      if (amountSen > MAX_TOPUP_SEN) {
-        functions.logger.error("createToyyibpayBill rejected: over per-call cap",
-            {uid, amountSen, capSen: MAX_TOPUP_SEN});
-        throw new functions.https.HttpsError(
-            "invalid-argument", "Top-ups are capped at RM 10,000.");
-      }
+      capTopUp(amountSen, "createToyyibpayBill", uid);
       const db = admin.firestore();
       const userSnap = await db.doc(`users/${uid}`).get();
       const user = userSnap.data() || {};
       if (user.suspended === true) {
         functions.logger.error("createToyyibpayBill rejected: suspended user",
             {uid});
-        throw new functions.https.HttpsError(
-            "permission-denied",
-            "Your account is suspended. Contact support if you think this " +
-            "is a mistake.");
       }
+      throwIfSuspended(user);
       if ((user.walletBalanceSen || 0) + amountSen > MAX_WALLET_BALANCE_SEN) {
         functions.logger.error("createToyyibpayBill rejected: over wallet cap",
             {uid, amountSen, capSen: MAX_WALLET_BALANCE_SEN});
@@ -620,7 +571,7 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
         uid,
         amountSen,
         status: "pending",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       });
       functions.logger.info("createToyyibpayBill created",
           {uid, amountSen, billCode});
@@ -628,8 +579,8 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     });
 
 /**
- * Checks a bill with toyyibPay and credits the wallet at most once.
- * Used by the webhook and the reconcile call. Returns `{credited, reason}`.
+ * Checks a bill with toyyibPay and credits the wallet at most once. Used by
+ * the webhook and the reconcile call; returns `{credited, reason}`.
  */
 async function creditToyyibpayTopup(billCode) {
   const db = admin.firestore();
@@ -651,51 +602,42 @@ async function creditToyyibpayTopup(billCode) {
     return {credited: false, reason: "not_paid"};
   }
 
-  const topupRef = db.doc(`topups/${billCode}`);
-  const topupSnap = await topupRef.get();
-  if (!topupSnap.exists) {
-    functions.logger.error("creditToyyibpayTopup: unknown bill", {billCode});
-    return {credited: false, reason: "unknown_bill"};
-  }
-
   // toyyibPay gives the amount as ringgit text ("10.00"); convert to sen.
   const paidSen = Math.round(parseFloat(paid.billpaymentAmount) * 100);
-  if (paidSen !== topupSnap.data().amountSen) {
-    functions.logger.error("toyyibpay amount mismatch", {
-      billCode, expected: topupSnap.data().amountSen, got: paidSen,
-    });
-    return {credited: false, reason: "amount_mismatch"};
-  }
+  const topupRef = db.doc(`topups/${billCode}`);
 
   return db.runTransaction(async (tx) => {
-    const snap = await tx.get(topupRef);
-    const rec = snap.data();
+    const rec = (await tx.get(topupRef)).data();
     if (!rec) {
-      functions.logger.error("creditToyyibpayTopup: record vanished",
-          {billCode});
+      functions.logger.error("creditToyyibpayTopup: unknown bill", {billCode});
       return {credited: false, reason: "unknown_bill"};
+    }
+    if (paidSen !== rec.amountSen) {
+      functions.logger.error("toyyibpay amount mismatch",
+          {billCode, expected: rec.amountSen, got: paidSen});
+      return {credited: false, reason: "amount_mismatch"};
     }
     if (rec.status === "credited") {
       functions.logger.info("creditToyyibpayTopup: already credited",
           {billCode, uid: rec.uid, amountSen: rec.amountSen});
-      return {credited: true, reason: "already_credited"}; // idempotent no-op
+      return {credited: true, reason: "already_credited"};
     }
 
     const walletRef = db.doc(`users/${rec.uid}`);
     const walletSnap = await tx.get(walletRef);
-    const wallet = walletSnap.data() || {};
-    const newBalance = (wallet.walletBalanceSen || 0) + rec.amountSen;
+    const newBalance =
+        (walletSnap.data()?.walletBalanceSen || 0) + rec.amountSen;
     if (newBalance > MAX_WALLET_BALANCE_SEN) {
       // Paid money is always credited; the cap is only a pre-check.
       functions.logger.warn("toyyibpay credit exceeds wallet cap",
           {billCode, uid: rec.uid, newBalance});
     }
     tx.update(walletRef, {
-      walletBalanceSen: admin.firestore.FieldValue.increment(rec.amountSen),
+      walletBalanceSen: FieldValue.increment(rec.amountSen),
     });
     tx.update(topupRef, {
       status: "credited",
-      creditedAt: admin.firestore.FieldValue.serverTimestamp(),
+      creditedAt: FieldValue.serverTimestamp(),
       invoiceNo: paid.billpaymentInvoiceNo,
     });
     // Same ledger entry as topUpWallet, plus a `ref` to the bill.
@@ -714,8 +656,10 @@ async function creditToyyibpayTopup(billCode) {
 }
 
 /**
- * toyyibPay's webhook. Replies 200 once we have decided (credit or reject);
- * replies 500 only if toyyibPay's API can't be reached, so it retries.
+ * What:   toyyibPay's webhook (HTTP POST).
+ * Input:  Form body with `billcode`.
+ * Output: 200 once decided (credited or rejected); 500 only when toyyibPay's
+ *         API can't be reached, so it retries.
  */
 exports.toyyibpayCallback = functions.runWith({secrets: [toyyibpaySecret]})
     .https.onRequest(async (req, res) => {
@@ -747,14 +691,15 @@ exports.toyyibpayCallback = functions.runWith({secrets: [toyyibpaySecret]})
     });
 
 /**
- * Backup for a missed webhook: the client calls this after the WebView closes.
- * The caller must own the bill; it uses the same credit helper.
+ * What:   Callable backup for a missed webhook.
+ * Input:  {billCode} from wallet_repository.dart, after the payment WebView closes.
+ * Output: {credited}; the caller must own the bill.
  */
 exports.reconcileToyyibpayTopup =
     functions.runWith({secrets: [toyyibpaySecret]})
         .https.onCall(async (data, context) => {
           const uid = callerUid(context);
-          const billCode = checkId(data.billCode, "billCode");
+          const billCode = docId(data.billCode, "billCode");
           functions.logger.info("reconcileToyyibpayTopup requested",
               {uid, billCode});
           const topupSnap =
@@ -773,20 +718,22 @@ exports.reconcileToyyibpayTopup =
         });
 
 /**
- * Admin ruling on a flagged review. Hiding it also removes its rating from
- * the reviewee's totals; keeping it just clears the flag.
+ * What:   Admin callable that rules on a flagged review.
+ * Input:  {revieweeId, reviewId, hide} from moderation_repository.dart.
+ * Output: Hiding removes the rating from the reviewee's totals and notifies
+ *         them; keeping just clears the flag.
  */
 exports.moderateReview = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const revieweeId = checkId(data.revieweeId, "revieweeId");
-  const reviewId = checkId(data.reviewId, "reviewId");
+  const revieweeId = docId(data.revieweeId, "revieweeId");
+  const reviewId = docId(data.reviewId, "reviewId");
   const hide = data.hide === true;
   const db = admin.firestore();
   const userRef = db.doc(`users/${revieweeId}`);
   const reviewRef = userRef.collection("reviews").doc(reviewId);
 
   await db.runTransaction(async (tx) => {
-    await assertAdmin(tx, db, uid);
+    await assertAdmin(uid, tx);
     const [userSnap, reviewSnap] = await Promise.all([
       tx.get(userRef), tx.get(reviewRef),
     ]);
@@ -795,8 +742,8 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError("not-found", "Review not found.");
     }
 
+    // `!review.hidden` stops a double subtract if moderated twice.
     if (hide && !review.hidden) {
-      // The `!review.hidden` check stops a double subtract if moderated twice.
       tx.update(userRef, {
         ratingSum:
             Math.max(0, (userSnap.data()?.ratingSum || 0) - review.rating),
@@ -806,10 +753,10 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
     tx.update(reviewRef, {
       flagged: false,
       hidden: hide,
-      moderatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      moderatedAt: FieldValue.serverTimestamp(),
     });
     if (hide) {
-      notify(tx, revieweeId, {
+      notifyUser(tx, revieweeId, {
         type: "review",
         title: "A review was removed",
         body: "A review you reported was taken down after moderation, and " +
@@ -820,23 +767,22 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
   });
 });
 
-// Account suspension. Only admins can set `suspended` (rules block clients);
-// it blocks the app screens and the money callables.
-
 /**
- * Admin suspends (true) or reinstates (false) a user, with an optional reason.
- * The user is notified either way.
+ * What:   Admin callable that suspends or reinstates a user.
+ * Input:  {uid, suspended, reason?} from user_admin_repository.dart.
+ * Output: `suspended` fields set (blocks the app and money callables); the
+ *         user is notified either way.
  */
 exports.setUserSuspended = functions.https.onCall(async (data, context) => {
   const callerId = callerUid(context);
-  const targetUid = checkId(data.uid, "uid");
+  const targetUid = docId(data.uid, "uid");
   const suspend = data.suspended === true;
   const reason = typeof data.reason === "string" ? data.reason.trim() : "";
   const db = admin.firestore();
   const targetRef = db.doc(`users/${targetUid}`);
 
   await db.runTransaction(async (tx) => {
-    await assertAdmin(tx, db, callerId);
+    await assertAdmin(callerId, tx);
     const targetSnap = await tx.get(targetRef);
     if (!targetSnap.exists) {
       throw new functions.https.HttpsError("not-found", "User not found.");
@@ -853,7 +799,7 @@ exports.setUserSuspended = functions.https.onCall(async (data, context) => {
     tx.update(targetRef, suspend ? {
       suspended: true,
       suspensionReason: reason || null,
-      suspendedAt: admin.firestore.FieldValue.serverTimestamp(),
+      suspendedAt: FieldValue.serverTimestamp(),
       suspendedBy: callerId,
     } : {
       suspended: false,
@@ -861,7 +807,7 @@ exports.setUserSuspended = functions.https.onCall(async (data, context) => {
       suspendedAt: null,
       suspendedBy: null,
     });
-    notify(tx, targetUid, suspend ? {
+    notifyUser(tx, targetUid, suspend ? {
       type: "account",
       title: "Your account has been suspended",
       body: reason ?
@@ -881,19 +827,15 @@ exports.setUserSuspended = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Admin-only: removes all 2FA factors for a user who lost their authenticator.
- * Refresh tokens are revoked so the old session ends.
+ * What:   Admin callable that clears a user's 2FA.
+ * Input:  {uid} from user_admin_repository.dart.
+ * Output: All enrolled factors removed and refresh tokens revoked, so the old
+ *         session ends.
  */
 exports.adminClearMfa = functions.https.onCall(async (data, context) => {
   const callerId = callerUid(context);
-  const targetUid = checkId(data.uid, "uid");
-  const db = admin.firestore();
-
-  const callerSnap = await db.doc(`users/${callerId}`).get();
-  if (callerSnap.data()?.role !== "admin") {
-    throw new functions.https.HttpsError(
-        "permission-denied", "Only an admin can do this.");
-  }
+  const targetUid = docId(data.uid, "uid");
+  await assertAdmin(callerId);
 
   await admin.auth().updateUser(targetUid, {
     multiFactor: {enrolledFactors: null},
@@ -903,16 +845,19 @@ exports.adminClearMfa = functions.https.onCall(async (data, context) => {
 
 // Disputes. Raising one freezes the milestone; an admin ruling pays out escrow.
 
-const {disputeRefundPlan} = require("./payouts");
+/** `rulingNote` on disputes closed because another dispute ended the job. */
+const AUTO_CLOSED_NOTE = "Closed because the job ended after another dispute.";
 
 /**
- * A participant disputes a funded or delivered milestone, which freezes it.
- * No money moves until an admin rules.
+ * What:   Callable for a participant to dispute a funded or delivered stage.
+ * Input:  {jobId, milestoneId, statement, evidenceUrls?} from dispute_repository.dart.
+ * Output: Stage frozen as "disputed" and a dispute created; no money moves
+ *         until an admin rules.
  */
 exports.raiseDispute = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const milestoneId = checkId(data.milestoneId, "milestoneId");
+  const jobId = docId(data.jobId, "jobId");
+  const milestoneId = docId(data.milestoneId, "milestoneId");
   const statement =
       typeof data.statement === "string" ? data.statement.trim() : "";
   if (statement === "") {
@@ -928,13 +873,12 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
   const disputeRef = db.collection("disputes").doc();
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
+    await assertNotSuspended(tx, uid);
     const [jobSnap, milestoneSnap] =
         await Promise.all([tx.get(jobRef), tx.get(milestoneRef)]);
     const job = jobSnap.data();
-    const isRequestor = job?.requestorId === uid;
-    const isProvider = job?.acceptedProviderId === uid;
-    if (!isRequestor && !isProvider) {
+    const role = jobRole(job, uid);
+    if (!role) {
       throw new functions.https.HttpsError(
           "permission-denied",
           "Only the job's participants can raise a dispute.");
@@ -957,7 +901,7 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
       // Where the milestone goes back to if the dispute is withdrawn.
       milestoneStatusBefore: milestone.status,
       raisedByUid: uid,
-      raisedByRole: isRequestor ? "requestor" : "provider",
+      raisedByRole: role,
       requestorId: job.requestorId,
       providerId: job.acceptedProviderId,
       statement,
@@ -967,14 +911,14 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
       status: "open",
       resolution: null,
       rulingNote: null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       resolvedAt: null,
       ...(job.bundleId ? {bundleId: job.bundleId} : {}),
     });
-    notify(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
+    notifyUser(tx, counterpartyUid(job, role), {
       type: "dispute",
       title: "A dispute was raised",
-      body: `The ${isRequestor ? "client" : "provider"} disputed ` +
+      body: `The ${role === "requestor" ? "client" : "provider"} disputed ` +
           `"${milestone.description}" on "${job.title}". An admin will ` +
           "review it.",
       route: `/jobs/${jobId}`,
@@ -983,13 +927,15 @@ exports.raiseDispute = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * The person who raised an open dispute withdraws it. The milestone goes back
- * to where it was (in escrow, or delivered) and no money moves.
+ * What:   Callable for the raiser to withdraw an open dispute.
+ * Input:  {jobId, milestoneId} from dispute_repository.dart.
+ * Output: The stage returns to where it was (funded or delivered); no money
+ *         moves; the other party is notified.
  */
 exports.withdrawDispute = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
-  const milestoneId = checkId(data.milestoneId, "milestoneId");
+  const jobId = docId(data.jobId, "jobId");
+  const milestoneId = docId(data.milestoneId, "milestoneId");
   const db = admin.firestore();
   const jobRef = db.doc(`jobs/${jobId}`);
   const milestoneRef = jobRef.collection("milestones").doc(milestoneId);
@@ -1020,10 +966,10 @@ exports.withdrawDispute = functions.https.onCall(async (data, context) => {
     });
     tx.update(disputeDoc.ref, {
       status: "withdrawn",
-      resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      resolvedAt: FieldValue.serverTimestamp(),
     });
     const isRequestor = dispute.raisedByRole === "requestor";
-    notify(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
+    notifyUser(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
       type: "dispute",
       title: "Dispute withdrawn",
       body: `The ${isRequestor ? "client" : "provider"} withdrew their ` +
@@ -1034,12 +980,15 @@ exports.withdrawDispute = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Admin rules on a dispute. `release` pays the provider. `refund` gives the
- * client back all money still held and ends the job.
+ * What:   Admin callable that rules on an open dispute.
+ * Input:  {disputeId, resolution: "release"|"refund", rulingNote?} from
+ *         dispute_repository.dart.
+ * Output: release: provider paid. refund: every held stage refunded and the
+ *         job cancelled. Both parties are notified.
  */
 exports.resolveDispute = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const disputeId = checkId(data.disputeId, "disputeId");
+  const disputeId = docId(data.disputeId, "disputeId");
   const resolution = data.resolution;
   if (resolution !== "release" && resolution !== "refund") {
     throw new functions.https.HttpsError(
@@ -1052,7 +1001,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
   const disputeRef = db.doc(`disputes/${disputeId}`);
 
   await db.runTransaction(async (tx) => {
-    await assertAdmin(tx, db, uid);
+    await assertAdmin(uid, tx);
     const disputeSnap = await tx.get(disputeRef);
     const dispute = disputeSnap.data();
     if (dispute?.status !== "open") {
@@ -1065,17 +1014,15 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     const milestoneRef = milestonesRef.doc(dispute.milestoneId);
     const requestorRef = db.doc(`users/${dispute.requestorId}`);
     const providerRef = db.doc(`users/${dispute.providerId}`);
-    const [milestoneSnap, allMilestones, requestorSnap, providerSnap, jobSnap,
-      openOnJob] = await Promise.all([
-      tx.get(milestoneRef),
-      tx.get(milestonesRef),
-      tx.get(requestorRef),
-      tx.get(providerRef),
-      tx.get(jobRef),
-      tx.get(db.collection("disputes")
-          .where("jobId", "==", dispute.jobId)
-          .where("status", "==", "open")),
-    ]);
+    const [milestoneSnap, allMilestones, jobSnap, openOnJob] =
+        await Promise.all([
+          tx.get(milestoneRef),
+          tx.get(milestonesRef),
+          tx.get(jobRef),
+          tx.get(db.collection("disputes")
+              .where("jobId", "==", dispute.jobId)
+              .where("status", "==", "open")),
+        ]);
     if (milestoneSnap.data()?.status !== "disputed") {
       throw new functions.https.HttpsError(
           "failed-precondition", "This milestone is not under dispute.");
@@ -1087,10 +1034,8 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
 
     if (released) {
       // Provider is paid. If it was the last milestone, the job completes.
-      tx.update(providerRef, {
-        walletBalanceSen:
-            (providerSnap.data()?.walletBalanceSen || 0) + amountSen,
-      });
+      tx.update(providerRef,
+          {walletBalanceSen: FieldValue.increment(amountSen)});
       tx.update(milestoneRef, {status: "released", disputedBy: null});
       if (completesJob(job, milestoneRows(allMilestones),
           dispute.milestoneId)) {
@@ -1111,10 +1056,8 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
       // so it can't simply be funded again as if nothing happened.
       const plan = disputeRefundPlan(milestoneRows(allMilestones));
       refundedSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
-      const wallet = requestorSnap.data() || {};
-      tx.update(requestorRef, {
-        walletBalanceSen: (wallet.walletBalanceSen || 0) + refundedSen,
-      });
+      tx.update(requestorRef,
+          {walletBalanceSen: FieldValue.increment(refundedSen)});
       for (const refund of plan.refunds) {
         tx.update(milestonesRef.doc(refund.id),
             {status: "refunded", disputedBy: null});
@@ -1134,7 +1077,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
       tx.update(jobRef, {
         status: "cancelled",
         cancelledBy: "dispute",
-        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancelledAt: FieldValue.serverTimestamp(),
         cancellationReason: "Ended after an admin refunded the client",
         cancellationRequestedBy: null,
         cancellationRequestedAt: null,
@@ -1146,23 +1089,21 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
         tx.update(other.ref, {
           status: "resolved",
           resolution: "refund",
-          rulingNote: "Closed because the job ended after another dispute.",
-          resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+          rulingNote: AUTO_CLOSED_NOTE,
+          resolvedAt: FieldValue.serverTimestamp(),
         });
       }
       // A ruling against the provider counts against their track record.
-      tx.update(providerRef, {
-        disputesLost: admin.firestore.FieldValue.increment(1),
-      });
+      tx.update(providerRef, {disputesLost: FieldValue.increment(1)});
     }
     tx.update(disputeRef, {
       status: "resolved",
       resolution,
       rulingNote: rulingNote || null,
-      resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      resolvedAt: FieldValue.serverTimestamp(),
     });
     const note = rulingNote ? ` Admin's note: "${rulingNote}"` : "";
-    notify(tx, dispute.providerId, {
+    notifyUser(tx, dispute.providerId, {
       type: "dispute",
       title: released ? "Dispute decided: you were paid" :
           "Dispute decided: the client was refunded",
@@ -1173,7 +1114,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
           `"${dispute.jobTitle}" has ended.${note}`,
       route: `/jobs/${dispute.jobId}`,
     });
-    notify(tx, dispute.requestorId, {
+    notifyUser(tx, dispute.requestorId, {
       type: "dispute",
       title: released ? "Dispute decided: the provider was paid" :
           "Dispute decided: you were refunded",
@@ -1188,41 +1129,45 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Admin-only, safe to re-run: recounts each user's `jobsCompleted` and
- * `disputesLost` from the source data. The trust consumer rebuilds scores.
+ * What:   Admin callable that recounts every user's trust counters.
+ * Input:  None (stats_repository.dart); safe to re-run.
+ * Output: `jobsCompleted` and `disputesLost` rewritten from jobs and disputes
+ *         with the live rules (bundle once per person; auto-closed disputes
+ *         don't count); the trust trigger then rebuilds scores.
  */
 exports.backfillTrust = functions.https.onCall(async (data, context) => {
-  const uid = callerUid(context);
+  await assertAdmin(callerUid(context));
   const db = admin.firestore();
-  const callerSnap = await db.doc(`users/${uid}`).get();
-  if (callerSnap.data()?.role !== "admin") {
-    throw new functions.https.HttpsError(
-        "permission-denied", "Only an admin can do this.");
+  const [users, jobs, refunds] = await Promise.all([
+    db.collection("users").get(),
+    db.collection("jobs").where("status", "==", "completed").get(),
+    db.collection("disputes").where("resolution", "==", "refund").get(),
+  ]);
+
+  const completed = new Map(); // uid -> job ids (a bundle counts as one)
+  for (const doc of jobs.docs) {
+    const job = doc.data();
+    const key = job.bundleId ? `bundle:${job.bundleId}` : doc.id;
+    for (const uid of [job.acceptedProviderId, job.requestorId]) {
+      if (uid) completed.set(uid, (completed.get(uid) ?? new Set()).add(key));
+    }
+  }
+  const lost = new Map(); // providerId -> disputes ruled against them
+  for (const doc of refunds.docs) {
+    const {providerId, rulingNote} = doc.data();
+    if (rulingNote !== AUTO_CLOSED_NOTE) {
+      lost.set(providerId, (lost.get(providerId) ?? 0) + 1);
+    }
   }
 
-  const count = async (query) => (await query.count().get()).data().count;
-  const users = await db.collection("users").get();
-  let updated = 0;
+  // Always write: it fixes the counters and re-triggers the trust recompute.
   for (const doc of users.docs) {
-    const [asProvider, asRequestor, refunds] = await Promise.all([
-      count(db.collection("jobs")
-          .where("acceptedProviderId", "==", doc.id)
-          .where("status", "==", "completed")),
-      count(db.collection("jobs")
-          .where("requestorId", "==", doc.id)
-          .where("status", "==", "completed")),
-      count(db.collection("disputes")
-          .where("providerId", "==", doc.id)
-          .where("resolution", "==", "refund")),
-    ]);
-    // Always write: it fixes the counters and re-triggers the trust recompute.
     await doc.ref.update({
-      jobsCompleted: asProvider + asRequestor,
-      disputesLost: refunds,
+      jobsCompleted: completed.get(doc.id)?.size ?? 0,
+      disputesLost: lost.get(doc.id) ?? 0,
     });
-    updated++;
   }
-  return {users: users.size, updated};
+  return {users: users.size};
 });
 
 // Job cancellation: one side asks, the other accepts (an admin can override).
@@ -1231,14 +1176,6 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
 const STAGE_DELIVERED_MESSAGE =
     "A delivered or disputed stage must be released or resolved before " +
     "this job can be cancelled.";
-
-const {
-  canCancelFunded,
-  cancellationPlan,
-  planIncrease,
-  planDecrease,
-  finishedByDecrease,
-} = require("./payouts");
 
 /** Returns why the job can't be cancelled now, or null if it can. */
 function cancellationBlocker(milestonesSnap) {
@@ -1250,18 +1187,15 @@ function cancellationBlocker(milestonesSnap) {
  * Cancels the job and settles money: unfunded milestones are deleted and
  * funded stages refunded. Caller checks authority and [cancellationBlocker].
  */
-function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy,
-    requestorWalletRef, requestorWalletSnap) {
-  const wallet = requestorWalletSnap.data() || {};
+function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy) {
   const plan = cancellationPlan(milestoneRows(milestonesSnap));
   for (const id of plan.deleteIds) {
     tx.delete(jobRef.collection("milestones").doc(id));
   }
   const refundSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
   if (refundSen > 0) {
-    tx.update(requestorWalletRef, {
-      walletBalanceSen: (wallet.walletBalanceSen || 0) + refundSen,
-    });
+    tx.update(admin.firestore().doc(`users/${job.requestorId}`),
+        {walletBalanceSen: FieldValue.increment(refundSen)});
   }
   for (const refund of plan.refunds) {
     appendLedger(tx, {
@@ -1278,7 +1212,7 @@ function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy,
   tx.update(jobRef, {
     status: "cancelled",
     cancelledBy,
-    cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+    cancelledAt: FieldValue.serverTimestamp(),
     cancellationRequestedBy: null,
     cancellationRequestedAt: null,
     priceChangeRequest: null,
@@ -1286,13 +1220,15 @@ function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy,
 }
 
 /**
- * Either party asks to cancel an in-progress job; the other side must accept.
- * Refused while escrow is held.
+ * What:   Callable for either party to ask to cancel an in-progress job.
+ * Input:  {jobId, reason?} from job_repository.dart.
+ * Output: `cancellationRequestedBy` set and the other side notified.
+ * Notes:  Refused while a stage is delivered or disputed.
  */
 exports.requestJobCancellation =
   functions.https.onCall(async (data, context) => {
     const uid = callerUid(context);
-    const jobId = checkId(data.jobId, "jobId");
+    const jobId = docId(data.jobId, "jobId");
     const reason = typeof data.reason === "string" ? data.reason.trim() : "";
     const db = admin.firestore();
     const jobRef = db.doc(`jobs/${jobId}`);
@@ -1304,9 +1240,8 @@ exports.requestJobCancellation =
         tx.get(milestonesRef),
       ]);
       const job = jobSnap.data();
-      const isRequestor = job?.requestorId === uid;
-      const isProvider = job?.acceptedProviderId === uid;
-      if (!isRequestor && !isProvider) {
+      const role = jobRole(job, uid);
+      if (!role) {
         throw new functions.https.HttpsError(
             "permission-denied",
             "Only the job's participants can cancel it.");
@@ -1329,28 +1264,30 @@ exports.requestJobCancellation =
         throw new functions.https.HttpsError("failed-precondition", blocker);
       }
       tx.update(jobRef, {
-        cancellationRequestedBy: isRequestor ? "requestor" : "provider",
+        cancellationRequestedBy: role,
         cancellationReason: reason || null,
-        cancellationRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancellationRequestedAt: FieldValue.serverTimestamp(),
       });
-      notify(tx, isRequestor ? job.acceptedProviderId : job.requestorId, {
+      notifyUser(tx, counterpartyUid(job, role), {
         type: "cancellation",
         title: "Cancellation requested",
-        body: `The ${isRequestor ? "client" : "provider"} asked to cancel ` +
-            `"${job.title}". Accept or decline from the job page.`,
+        body: `The ${role === "requestor" ? "client" : "provider"} asked to ` +
+            `cancel "${job.title}". Accept or decline from the job page.`,
         route: `/jobs/${jobId}`,
       });
     });
   });
 
 /**
- * The other party accepts or declines a cancellation request.
- * Accepting re-checks the escrow guard and cancels the job.
+ * What:   Callable for the other party to accept or decline a cancellation.
+ * Input:  {jobId, accept} from job_repository.dart.
+ * Output: Accept re-checks the escrow guard, refunds held stages and cancels
+ *         the job; decline clears the request. The requester is notified.
  */
 exports.respondToJobCancellation =
   functions.https.onCall(async (data, context) => {
     const uid = callerUid(context);
-    const jobId = checkId(data.jobId, "jobId");
+    const jobId = docId(data.jobId, "jobId");
     const accept = data.accept === true;
     const db = admin.firestore();
     const jobRef = db.doc(`jobs/${jobId}`);
@@ -1366,29 +1303,25 @@ exports.respondToJobCancellation =
         throw new functions.https.HttpsError(
             "failed-precondition", "There is no pending cancellation request.");
       }
-      // The responder must be the party that did NOT raise the request.
-      const responderRole = job.requestorId === uid ? "requestor" :
-          job.acceptedProviderId === uid ? "provider" : null;
-      if (!responderRole) {
+      const role = jobRole(job, uid);
+      if (!role) {
         throw new functions.https.HttpsError(
             "permission-denied", "Only the job's participants can respond.");
       }
-      if (responderRole === job.cancellationRequestedBy) {
+      if (role === job.cancellationRequestedBy) {
         throw new functions.https.HttpsError(
             "failed-precondition",
             "You raised this request; the other party must respond.");
       }
 
-      // The requester gets told the outcome.
-      const requesterUid = responderRole === "requestor" ?
-          job.acceptedProviderId : job.requestorId;
+      const requesterUid = counterpartyUid(job, role);
       if (!accept) {
         tx.update(jobRef, {
           cancellationRequestedBy: null,
           cancellationReason: null,
           cancellationRequestedAt: null,
         });
-        notify(tx, requesterUid, {
+        notifyUser(tx, requesterUid, {
           type: "cancellation",
           title: "Cancellation declined",
           body: `The other party declined to cancel "${job.title}". The ` +
@@ -1401,11 +1334,8 @@ exports.respondToJobCancellation =
       if (blocker) {
         throw new functions.https.HttpsError("failed-precondition", blocker);
       }
-      const requestorWalletRef = db.doc(`users/${job.requestorId}`);
-      const requestorWalletSnap = await tx.get(requestorWalletRef);
-      finaliseCancellation(tx, jobRef, job, milestones, uid, requestorWalletRef,
-          requestorWalletSnap);
-      notify(tx, requesterUid, {
+      finaliseCancellation(tx, jobRef, job, milestones, uid);
+      notifyUser(tx, requesterUid, {
         type: "cancellation",
         title: "Job cancelled",
         body: `Both parties agreed: "${job.title}" has been cancelled.`,
@@ -1417,23 +1347,15 @@ exports.respondToJobCancellation =
 // Price change. Either party proposes a new price; the other accepts or declines.
 // `acceptedBidAmountSen` is the live price; checks are in price_change.js.
 
-const {validatePriceChange} = require("./price_change");
-
-/** Which side of [job] [uid] is on, or null. */
-function jobRole(job, uid) {
-  if (job?.requestorId === uid) return "requestor";
-  if (job?.acceptedProviderId === uid) return "provider";
-  return null;
-}
-
-/** The uid of the other participant. */
-const counterpartyUid = (job, role) =>
-  role === "requestor" ? job.acceptedProviderId : job.requestorId;
-
-/** Proposes a new price; nothing changes until the other party accepts. */
+/**
+ * What:   Callable for either party to propose a new job price.
+ * Input:  {jobId, newAmountSen, reason} from job_repository.dart.
+ * Output: `priceChangeRequest` set and the other side notified; nothing else
+ *         changes until they accept.
+ */
 exports.requestPriceChange = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
+  const jobId = docId(data.jobId, "jobId");
   const newAmountSen = checkAmount(data.newAmountSen);
   const reason = typeof data.reason === "string" ? data.reason.trim() : "";
   if (reason === "" || reason.length > 500) {
@@ -1445,7 +1367,7 @@ exports.requestPriceChange = functions.https.onCall(async (data, context) => {
   const jobRef = db.doc(`jobs/${jobId}`);
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, db, uid);
+    await assertNotSuspended(tx, uid);
     const [jobSnap, milestones] = await Promise.all([
       tx.get(jobRef),
       tx.get(jobRef.collection("milestones")),
@@ -1477,10 +1399,10 @@ exports.requestPriceChange = functions.https.onCall(async (data, context) => {
         by: role,
         newAmountSen,
         reason,
-        requestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        requestedAt: FieldValue.serverTimestamp(),
       },
     });
-    notify(tx, counterpartyUid(job, role), {
+    notifyUser(tx, counterpartyUid(job, role), {
       type: "price_change",
       title: "Price change requested",
       body: `The ${role === "requestor" ? "client" : "provider"} proposed ` +
@@ -1496,15 +1418,14 @@ exports.requestPriceChange = functions.https.onCall(async (data, context) => {
  * Increase: wallet to escrow. Decrease: refund. True means the job is done.
  */
 function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
-  wallet, delta}) {
-  const balance = wallet.walletBalanceSen || 0;
+  delta}) {
   const ledger = {
     jobId: jobRef.id,
     jobTitle: job.title || null,
     participantIds: [job.requestorId],
   };
   if (delta > 0) {
-    tx.update(walletRef, {walletBalanceSen: balance - delta});
+    tx.update(walletRef, {walletBalanceSen: FieldValue.increment(-delta)});
     const plan = planIncrease(rows, delta);
     if (plan.grow) {
       tx.update(milestonesRef.doc(plan.grow.id),
@@ -1524,7 +1445,7 @@ function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
   }
   const refundSen = -delta;
   const plan = planDecrease(rows, refundSen);
-  tx.update(walletRef, {walletBalanceSen: balance + refundSen});
+  tx.update(walletRef, {walletBalanceSen: FieldValue.increment(refundSen)});
   for (const {id, amountSen} of plan.updates) {
     tx.update(milestonesRef.doc(id), {amountSen});
   }
@@ -1537,20 +1458,23 @@ function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
 }
 
 /**
- * The other party accepts or declines a price change. Accepting re-checks it,
- * moves the money.
+ * What:   Callable for the other party to accept or decline a price change.
+ * Input:  {jobId, accept} from job_repository.dart.
+ * Output: Accept re-checks the change, moves the money, updates the price and
+ *         logs it; decline clears the request. Both sides are notified.
+ * Notes:  Throws failed-precondition with reason "insufficient_balance".
  */
 exports.respondToPriceChange =
   functions.https.onCall(async (data, context) => {
     const uid = callerUid(context);
-    const jobId = checkId(data.jobId, "jobId");
+    const jobId = docId(data.jobId, "jobId");
     const accept = data.accept === true;
     const db = admin.firestore();
     const jobRef = db.doc(`jobs/${jobId}`);
     const milestonesRef = jobRef.collection("milestones");
 
     await db.runTransaction(async (tx) => {
-      await assertNotSuspended(tx, db, uid);
+      await assertNotSuspended(tx, uid);
       const [jobSnap, milestones] = await Promise.all([
         tx.get(jobRef),
         tx.get(milestonesRef),
@@ -1575,7 +1499,7 @@ exports.respondToPriceChange =
 
       if (!accept) {
         tx.update(jobRef, {priceChangeRequest: null});
-        notify(tx, requesterUid, {
+        notifyUser(tx, requesterUid, {
           type: "price_change",
           title: "Price change declined",
           body: `The other party declined the new price for "${job.title}". ` +
@@ -1596,27 +1520,15 @@ exports.respondToPriceChange =
       if (problem) {
         throw new functions.https.HttpsError("failed-precondition", problem);
       }
-      const wallet = walletSnap.data() || {};
       const delta = newSen - oldSen;
       if (delta > 0) {
-        const available =
-            (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
-        if (available < delta) {
-          throw new functions.https.HttpsError(
-              "failed-precondition",
-              "Insufficient available balance to accept this price change.", {
-                reason: "insufficient_balance",
-                shortfallSen: delta - available,
-                availableSen: available,
-                requiredSen: delta,
-              });
-        }
+        assertCanPay(walletSnap.data() || {}, delta,
+            "Insufficient available balance to accept this price change.");
       }
 
-      // Writes.
       const completed = repriceFundedStages(tx, {
         job, jobRef, milestonesRef, rows: milestoneRows(milestones),
-        walletRef, wallet, delta,
+        walletRef, delta,
       });
       const count = (job.priceChangeCount || 0) + 1;
       tx.update(jobRef, {
@@ -1626,30 +1538,31 @@ exports.respondToPriceChange =
         priceChangeRequest: null,
         ...(completed ? {status: "completed"} : {}),
       });
-      tx.set(jobRef.collection("events").doc(`price_change_${count}`), {
-        type: "price_changed",
-        title: `Price changed: ${rm(oldSen)} → ${rm(newSen)}`,
-        at: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      logJobEvent(jobId, `price_change_${count}`, "price_changed",
+          `Price changed: ${rm(oldSen)} → ${rm(newSen)}`, tx);
       const body = `The price of "${job.title}" is now ${rm(newSen)}. ` +
           (delta > 0 ?
               "The extra amount has been moved into escrow." :
               "The difference was refunded to the client.");
-      notify(tx, requesterUid, {
+      notifyUser(tx, requesterUid, {
         type: "price_change", title: "Price change accepted", body,
         route: `/jobs/${jobId}`,
       });
-      notify(tx, uid, {
+      notifyUser(tx, uid, {
         type: "price_change", title: "Price changed", body,
         route: `/jobs/${jobId}`,
       });
     });
   });
 
-/** The party that raised a price change takes it back. */
+/**
+ * What:   Callable for the proposer to take back a price change.
+ * Input:  {jobId} from job_repository.dart.
+ * Output: `priceChangeRequest` cleared and the other party notified.
+ */
 exports.withdrawPriceChange = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
-  const jobId = checkId(data.jobId, "jobId");
+  const jobId = docId(data.jobId, "jobId");
   const db = admin.firestore();
   const jobRef = db.doc(`jobs/${jobId}`);
 
@@ -1666,7 +1579,7 @@ exports.withdrawPriceChange = functions.https.onCall(async (data, context) => {
           "permission-denied", "Only the party that asked can withdraw it.");
     }
     tx.update(jobRef, {priceChangeRequest: null});
-    notify(tx, counterpartyUid(job, role), {
+    notifyUser(tx, counterpartyUid(job, role), {
       type: "price_change",
       title: "Price change withdrawn",
       body: `The price change request for "${job.title}" was withdrawn.`,
@@ -1675,29 +1588,31 @@ exports.withdrawPriceChange = functions.https.onCall(async (data, context) => {
   });
 });
 
-// Bidding deadline. Rules block late bids, so this sweep cancels open jobs
-// whose deadline passed with no accepted bid.
-
 /**
- * Every 6 hours, cancels open jobs whose bidding deadline has passed.
- * Needs the Blaze plan, Cloud Scheduler, and the index in firestore.indexes.json.
+ * What:   Scheduled sweep (every 6 hours) for open jobs past their deadline.
+ * Input:  Jobs with status "open" and `deadline` in the past (needs the index
+ *         in firestore.indexes.json, Cloud Scheduler and the Blaze plan).
+ * Output: Each is cancelled with cancelledBy "system".
  */
 exports.closeExpiredJobs = functions.pubsub
     .schedule("every 6 hours")
     .onRun(async () => {
-      const now = admin.firestore.Timestamp.now();
-      const snap = await admin.firestore().collection("jobs")
+      const db = admin.firestore();
+      const snap = await db.collection("jobs")
           .where("status", "==", "open")
-          .where("deadline", "<=", now)
+          .where("deadline", "<=", Timestamp.now())
           .get();
-      const batch = admin.firestore().batch();
-      snap.docs.forEach((doc) => batch.update(doc.ref, {
-        status: "cancelled",
-        cancelledBy: "system",
-        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
-        cancellationReason: "Bidding deadline passed, no bid was accepted.",
-      }));
-      if (!snap.empty) await batch.commit();
+      // A batch holds at most 500 writes.
+      for (let i = 0; i < snap.docs.length; i += 500) {
+        const batch = db.batch();
+        snap.docs.slice(i, i + 500).forEach((doc) => batch.update(doc.ref, {
+          status: "cancelled",
+          cancelledBy: "system",
+          cancelledAt: FieldValue.serverTimestamp(),
+          cancellationReason: "Bidding deadline passed, no bid was accepted.",
+        }));
+        await batch.commit();
+      }
       functions.logger.info(`closeExpiredJobs: closed ${snap.size} job(s)`);
     });
 
@@ -1705,8 +1620,10 @@ exports.closeExpiredJobs = functions.pubsub
 const CHAT_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
- * Sets a conversation's `chatClosesAt` 14 days after its job ends.
- * Never creates the conversation or deletes messages.
+ * What:   Trigger that closes a job's chat 14 days after the job ends.
+ * Input:  A `jobs/{jobId}` update that moves it to or from completed/cancelled.
+ * Output: The conversation's `chatClosesAt` set (or cleared); it never creates
+ *         a conversation or deletes messages.
  */
 exports.closeChatOnJobEnd = functions.firestore
     .document("jobs/{jobId}")
@@ -1716,22 +1633,21 @@ exports.closeChatOnJobEnd = functions.firestore
       const ended = after.status === "completed" || after.status === "cancelled";
       const wasEnded =
           before.status === "completed" || before.status === "cancelled";
-      if (ended === wasEnded) return; // no relevant status change
-      if (!after.acceptedProviderId) return; // no conversation to gate
+      if (ended === wasEnded) return;
+      if (!after.acceptedProviderId) return;
 
-      const db = admin.firestore();
-      const convRef = db.doc(
+      const convRef = admin.firestore().doc(
           `conversations/${context.params.jobId}_${after.acceptedProviderId}`);
       const snap = await convRef.get();
       if (!snap.exists) return;
       await convRef.update({
         chatClosesAt: ended ?
-            admin.firestore.Timestamp.fromMillis(Date.now() + CHAT_GRACE_MS) :
+            Timestamp.fromMillis(Date.now() + CHAT_GRACE_MS) :
             null,
       });
     });
 
-// Notifications. Code calls `notify()` inside its transaction; a trigger
+// Notifications. Code queues them with notifyUser (common.js); a trigger
 // then sends the FCM push.
 
 /** Formats sen as `RM 1,234.50` for notification copy. */
@@ -1740,27 +1656,16 @@ function rm(sen) {
       {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
 }
 
-/**
- * Queues a notification for [uid] in the caller's transaction or batch, so it
- * commits together with the event. A trigger sends the push later.
- */
-function notify(txOrBatch, uid, {type, title, body, route = null}) {
-  if (!uid) return; // defensive: never write to users/undefined
-  const ref = admin.firestore()
-      .collection("users").doc(uid).collection("notifications").doc();
-  txOrBatch.set(ref, {
-    type,
-    title,
-    body,
-    route,
-    read: false,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-}
+const DEAD_TOKEN_CODES = [
+  "messaging/registration-token-not-registered",
+  "messaging/invalid-registration-token",
+];
 
 /**
- * Sends a new notification as an FCM push to the user's devices.
- * Dead tokens are removed. Delivery is best-effort; the in-app list is the truth.
+ * What:   Trigger that sends a new notification as an FCM push.
+ * Input:  A new `users/{uid}/notifications/{id}` doc.
+ * Output: A push to the user's devices; dead tokens are removed.
+ * Notes:  Best-effort; the in-app list is the source of truth.
  */
 exports.onNotificationCreated = functions.firestore
     .document("users/{uid}/notifications/{notificationId}")
@@ -1768,9 +1673,8 @@ exports.onNotificationCreated = functions.firestore
       const {uid} = context.params;
       const n = snap.data();
       const userRef = admin.firestore().doc(`users/${uid}`);
-      const userSnap = await userRef.get();
-      const tokens = userSnap.data()?.fcmTokens || [];
-      if (tokens.length === 0) return; // no device registered
+      const tokens = (await userRef.get()).data()?.fcmTokens || [];
+      if (tokens.length === 0) return;
 
       const res = await admin.messaging().sendEachForMulticast({
         tokens,
@@ -1783,22 +1687,18 @@ exports.onNotificationCreated = functions.firestore
         },
       });
 
-      const dead = [];
-      res.responses.forEach((r, i) => {
-        const code = r.error?.code;
-        if (code === "messaging/registration-token-not-registered" ||
-            code === "messaging/invalid-registration-token") {
-          dead.push(tokens[i]);
-        }
-      });
+      const dead = tokens.filter((_, i) =>
+        DEAD_TOKEN_CODES.includes(res.responses[i].error?.code));
       if (dead.length > 0) {
-        await userRef.update({
-          fcmTokens: admin.firestore.FieldValue.arrayRemove(...dead),
-        });
+        await userRef.update({fcmTokens: FieldValue.arrayRemove(...dead)});
       }
     });
 
-/** New bid: tell the requestor. A trigger because bids are client writes. */
+/**
+ * What:   Trigger that tells the requestor about a new bid.
+ * Input:  A new `jobs/{jobId}/bids/{bidId}` doc (a client write).
+ * Output: A "bid_received" notification.
+ */
 exports.onBidCreated = functions.firestore
     .document("jobs/{jobId}/bids/{bidId}")
     .onCreate(async (snap, context) => {
@@ -1807,18 +1707,20 @@ exports.onBidCreated = functions.firestore
           .doc(`jobs/${context.params.jobId}`).get();
       const job = jobSnap.data();
       if (!job?.requestorId) return;
-      const batch = admin.firestore().batch();
-      notify(batch, job.requestorId, {
+      await notifyUser(null, job.requestorId, {
         type: "bid_received",
         title: "New bid on your job",
         body: `${bid.providerName || "A provider"} bid ` +
             `${rm(bid.amountSen || 0)} on "${job.title}".`,
         route: `/jobs/${context.params.jobId}`,
       });
-      await batch.commit();
     });
 
-/** Bid accepted: tell the winner. Losers aren't notified, to avoid noise. */
+/**
+ * What:   Trigger that tells the winning provider their bid was accepted.
+ * Input:  A bid update whose status became "accepted".
+ * Output: A "bid_accepted" notification; losers aren't notified.
+ */
 exports.onBidAccepted = functions.firestore
     .document("jobs/{jobId}/bids/{bidId}")
     .onUpdate(async (change, context) => {
@@ -1827,8 +1729,7 @@ exports.onBidAccepted = functions.firestore
       if (before.status === after.status || after.status !== "accepted") return;
       const jobSnap = await admin.firestore()
           .doc(`jobs/${context.params.jobId}`).get();
-      const batch = admin.firestore().batch();
-      notify(batch, context.params.bidId, {
+      await notifyUser(null, context.params.bidId, {
         type: "bid_accepted",
         title: "Your bid was accepted!",
         body: `You won "${jobSnap.data()?.title || "a job"}" for ` +
@@ -1836,10 +1737,13 @@ exports.onBidAccepted = functions.firestore
             "- you can get started.",
         route: `/jobs/${context.params.jobId}`,
       });
-      await batch.commit();
     });
 
-/** Work delivered: tell the requestor to review and release. */
+/**
+ * What:   Trigger that tells the requestor work was delivered.
+ * Input:  A milestone update whose status became "submitted".
+ * Output: A "milestone" notification asking them to review and release.
+ */
 exports.onMilestoneDelivered = functions.firestore
     .document("jobs/{jobId}/milestones/{milestoneId}")
     .onUpdate(async (change, context) => {
@@ -1852,8 +1756,7 @@ exports.onMilestoneDelivered = functions.firestore
           .doc(`jobs/${context.params.jobId}`).get();
       const job = jobSnap.data();
       if (!job?.requestorId) return;
-      const batch = admin.firestore().batch();
-      notify(batch, job.requestorId, {
+      await notifyUser(null, job.requestorId, {
         type: "milestone",
         title: "Work delivered",
         body: `${job.acceptedProviderName || "Your provider"} marked ` +
@@ -1861,10 +1764,13 @@ exports.onMilestoneDelivered = functions.firestore
             `and release ${rm(after.amountSen || 0)}.`,
         route: `/jobs/${context.params.jobId}`,
       });
-      await batch.commit();
     });
 
-/** New chat message → tell the other participant, never the sender. */
+/**
+ * What:   Trigger that notifies the other chat participant.
+ * Input:  A new message in `conversations/{id}/messages`.
+ * Output: A "message" notification to everyone but the sender.
+ */
 exports.onMessageCreated = functions.firestore
     .document("conversations/{conversationId}/messages/{messageId}")
     .onCreate(async (snap, context) => {
@@ -1878,20 +1784,21 @@ exports.onMessageCreated = functions.firestore
       if (!recipientId) return;
       const senderName = message.senderId === conv.requestorId ?
           conv.requestorName : conv.providerName;
-      const batch = admin.firestore().batch();
-      notify(batch, recipientId, {
+      await notifyUser(null, recipientId, {
         type: "message",
         title: senderName || "New message",
         body: (message.text || "").length > 80 ?
             `${message.text.slice(0, 77)}...` : (message.text || ""),
         route: `/messages/${context.params.conversationId}`,
       });
-      await batch.commit();
     });
 
 /**
- * Verification decided: tell the applicant, only when the status changes.
- * Other profile edits don't send a push.
+ * What:   Trigger that tells the applicant their verification was decided.
+ * Input:  A `users/{uid}` update that changed `verificationStatus` to
+ *         "approved" or "rejected".
+ * Output: A "verification" notification; the uploaded ID and SSM documents are
+ *         deleted now that a human has ruled.
  */
 exports.onVerificationDecided = functions.firestore
     .document("users/{uid}")
@@ -1901,8 +1808,7 @@ exports.onVerificationDecided = functions.firestore
       if (before === after) return;
       if (after !== "approved" && after !== "rejected") return;
       const approved = after === "approved";
-      const batch = admin.firestore().batch();
-      notify(batch, context.params.uid, {
+      await notifyUser(null, context.params.uid, {
         type: "verification",
         title: approved ? "You're verified!" : "Verification rejected",
         body: approved ?
@@ -1912,19 +1818,20 @@ exports.onVerificationDecided = functions.firestore
             "profile to unlock the marketplace.",
         route: "/home",
       });
-      await batch.commit();
-      // Uploaded ID/SSM documents are deleted once a human has ruled on them.
-      await require("./ssm").deleteSsmDocument(context.params.uid);
-      await require("./idcheck").deleteIdDocuments(context.params.uid);
+      await ssm.deleteSsmDocument(context.params.uid);
+      await idcheck.deleteIdDocuments(context.params.uid);
     });
 
-/** New review → tell the reviewee. */
+/**
+ * What:   Trigger that tells a user they received a review.
+ * Input:  A new `users/{revieweeId}/reviews/{id}` doc.
+ * Output: A "review" notification.
+ */
 exports.onReviewCreated = functions.firestore
     .document("users/{revieweeId}/reviews/{reviewId}")
     .onCreate(async (snap, context) => {
       const review = snap.data();
-      const batch = admin.firestore().batch();
-      notify(batch, context.params.revieweeId, {
+      await notifyUser(null, context.params.revieweeId, {
         type: "review",
         title: "You received a review",
         body: `${review.reviewerName || "Someone"} rated you ` +
@@ -1932,20 +1839,25 @@ exports.onReviewCreated = functions.firestore
                 ` on "${review.jobTitle}"` : ""}.`,
         route: "/profile",
       });
-      await batch.commit();
     });
 
 // Job timeline: server-written events at `jobs/{jobId}/events/{eventId}`.
 // Fixed event ids make trigger retries safe (overwrite, not duplicate).
 
-const {logJobEvent} = require("./common");
-
-/** A job posting starts its timeline. */
+/**
+ * What:   Trigger that starts a job's timeline.
+ * Input:  A new `jobs/{jobId}` doc.
+ * Output: A "Job posted" event.
+ */
 exports.logJobPosted = functions.firestore.document("jobs/{jobId}")
     .onCreate((snap, ctx) =>
       logJobEvent(ctx.params.jobId, "posted", "posted", "Job posted"));
 
-/** Logs job status changes on the timeline; other writes are ignored. */
+/**
+ * What:   Trigger that logs job status changes on the timeline.
+ * Input:  A `jobs/{jobId}` update; only assigned, completed and cancelled count.
+ * Output: One timeline event for the change.
+ */
 exports.logJobStatusChange = functions.firestore
     .document("jobs/{jobId}")
     .onUpdate((change, ctx) => {
@@ -1969,13 +1881,17 @@ exports.logJobStatusChange = functions.firestore
       return null;
     });
 
-/** Logs milestone status changes on the timeline. */
+/**
+ * What:   Trigger that logs milestone status changes on the timeline.
+ * Input:  A write to `jobs/{jobId}/milestones/{milestoneId}`.
+ * Output: One timeline event per status change; deletions are ignored.
+ */
 exports.logMilestoneStatusChange = functions.firestore
     .document("jobs/{jobId}/milestones/{milestoneId}")
     .onWrite((change, ctx) => {
       const before = change.before.exists ? change.before.data() : null;
       const after = change.after.exists ? change.after.data() : null;
-      if (!after || before?.status === after.status) return null; // deletion
+      if (!after || before?.status === after.status) return null;
       const jobId = ctx.params.jobId;
       const milestoneId = ctx.params.milestoneId;
       const d = after.description;
@@ -2018,10 +1934,7 @@ exports.logMilestoneStatusChange = functions.firestore
 // Gemini posting assistant. The API key stays server-side in Secret Manager.
 // Every failure returns null so the post-job form keeps working.
 
-const {GoogleGenAI, Type, ThinkingLevel, MediaResolution} =
-    require("@google/genai");
 const geminiKey = defineSecret("GEMINI_KEY");
-// Gemini Flash-Lite model id.
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
 /** System instruction for the fair-price guide. */
@@ -2052,7 +1965,7 @@ const DRAFT_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     title: {type: Type.STRING},
-    category: {type: Type.STRING, enum: require("./bundles").CATEGORIES},
+    category: {type: Type.STRING, enum: bundles.CATEGORIES},
     description: {type: Type.STRING},
     minRm: {type: Type.NUMBER},
     maxRm: {type: Type.NUMBER},
@@ -2074,7 +1987,7 @@ const PRICE_SCHEMA = {
 
 /**
  * Parses the model's price reply into `{minSen, maxSen}`, or null if bad.
- * Wrapped in try/catch because a cut-off reply can still throw.
+ * try/catch because a cut-off reply can still throw.
  */
 function parsePriceJson(text) {
   try {
@@ -2095,7 +2008,7 @@ function parseDraftJson(text) {
     const description = String(draft.description || "").trim();
     const category = String(draft.category || "").trim();
     if (title === "" || description === "") return null;
-    if (!require("./bundles").CATEGORIES.includes(category)) return null;
+    if (!bundles.CATEGORIES.includes(category)) return null;
     const range = parsePriceJson(text); // same minRm/maxRm sanity checks
     return {
       title,
@@ -2109,7 +2022,6 @@ function parseDraftJson(text) {
   }
 }
 
-const {IMG_PREFIX} = require("./common");
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** Fetches a job photo as base64, or null; only our own bucket is allowed. */
@@ -2131,8 +2043,10 @@ async function fetchInlineImage(photoUrl) {
 }
 
 /**
- * Serves the post-a-job assists by `kind` ('price' or 'draft').
- * Returns the suggestion or null; the client treats null as a soft miss.
+ * What:   Callable for the post-a-job assists.
+ * Input:  {kind: "price"|"draft", roughText, category?, photoUrl?} from
+ *         assist_repository.dart.
+ * Output: The parsed suggestion, or null; the client treats null as a soft miss.
  */
 exports.suggestJobDetails = functions
     .runWith({secrets: [geminiKey]})
@@ -2154,23 +2068,17 @@ exports.suggestJobDetails = functions
       try {
         const ai = new GoogleGenAI({apiKey: geminiKey.value()});
 
-        const config = kind === "draft" ? {
-          systemInstruction: DRAFT_SYSTEM,
-          temperature: 0.4,
-          maxOutputTokens: 768,
+        const draft = kind === "draft";
+        const config = {
+          systemInstruction: draft ? DRAFT_SYSTEM : PRICE_SYSTEM,
+          temperature: draft ? 0.4 : 0.2,
+          maxOutputTokens: draft ? 768 : 256,
           responseMimeType: "application/json",
-          responseSchema: DRAFT_SCHEMA,
-          thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
-        } : {
-          systemInstruction: PRICE_SYSTEM,
-          temperature: 0.2,
-          maxOutputTokens: 256,
-          responseMimeType: "application/json",
-          responseSchema: PRICE_SCHEMA,
+          responseSchema: draft ? DRAFT_SCHEMA : PRICE_SCHEMA,
           thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL},
         };
         // A draft has no category yet; the model picks it.
-        const text = kind === "draft" ?
+        const text = draft ?
             `Customer's note: ${roughText}` :
             `Category: ${category}\nJob description: ${roughText}`;
 
@@ -2188,9 +2096,8 @@ exports.suggestJobDetails = functions
           contents,
           config,
         });
-        const responseText = response.text;
-        if (kind === "draft") return parseDraftJson(responseText);
-        return parsePriceJson(responseText);
+        return draft ? parseDraftJson(response.text) :
+            parsePriceJson(response.text);
       } catch (err) {
         const status = typeof err?.status === "number" ? err.status :
             (typeof err?.code === "number" ? err.code : null);
@@ -2203,29 +2110,27 @@ exports.suggestJobDetails = functions
           functions.logger.info("assist soft-miss (quota/offline/transient)",
               {status, kind});
         }
-        return null; // advisory only - never a hard failure
+        return null;
       }
     });
 
-// Triggers defined in other modules, re-exported so the Firebase CLI
-// finds them.
+// Functions defined in other modules, re-exported so the Firebase CLI finds them.
 
-exports.extractSsmDocument = require("./ssm").extractSsmDocument;
-exports.savePayoutMethod = require("./payout_method").savePayoutMethod;
-exports.extractIdDocument = require("./idcheck").extractIdDocument;
+exports.extractSsmDocument = ssm.extractSsmDocument;
+exports.extractIdDocument = idcheck.extractIdDocument;
+exports.savePayoutMethod = payoutMethod.savePayoutMethod;
 
-exports.createBundle = require("./bundles").createBundle;
-exports.submitBundleBid = require("./bundles").submitBundleBid;
-exports.withdrawBundleBid = require("./bundles").withdrawBundleBid;
-exports.cancelBundle = require("./bundles").cancelBundle;
-exports.previewBundleAward = require("./bundle_award").previewBundleAward;
-exports.awardBundle = require("./bundle_award").awardBundle;
-exports.closeExpiredBundles = require("./bundles").closeExpiredBundles;
+exports.createBundle = bundles.createBundle;
+exports.submitBundleBid = bundles.submitBundleBid;
+exports.withdrawBundleBid = bundles.withdrawBundleBid;
+exports.cancelBundle = bundles.cancelBundle;
+exports.closeExpiredBundles = bundles.closeExpiredBundles;
+exports.previewBundleAward = bundleAward.previewBundleAward;
+exports.awardBundle = bundleAward.awardBundle;
 
-exports.proposeAppointment = require("./scheduling").proposeAppointment;
-exports.respondToAppointment = require("./scheduling").respondToAppointment;
-exports.withdrawAppointmentProposal =
-    require("./scheduling").withdrawAppointmentProposal;
-exports.markOnTheWay = require("./scheduling").markOnTheWay;
-exports.markArrived = require("./scheduling").markArrived;
-exports.sendVisitReminders = require("./scheduling").sendVisitReminders;
+exports.proposeAppointment = scheduling.proposeAppointment;
+exports.respondToAppointment = scheduling.respondToAppointment;
+exports.withdrawAppointmentProposal = scheduling.withdrawAppointmentProposal;
+exports.markOnTheWay = scheduling.markOnTheWay;
+exports.markArrived = scheduling.markArrived;
+exports.sendVisitReminders = scheduling.sendVisitReminders;

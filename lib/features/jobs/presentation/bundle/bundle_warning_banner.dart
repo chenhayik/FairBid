@@ -2,15 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_theme.dart';
 
-/// Tinted warning row: icon + message, with enough contrast to read as a
-/// warning rather than small amber-only text. Used on the bundle detail
-/// screen for the "bids changed" notice and uncovered-task/warning notes.
+/// What:   Tinted warning row: icon, message and optional action.
+/// Input:  [message]; [trailing] such as a Refresh button.
+/// Output: Rendered banner.
 class WarningBanner extends StatelessWidget {
   const WarningBanner(this.message, {super.key, this.trailing});
 
   final String message;
 
-  /// Optional action, e.g. a "Refresh" button, placed after the text.
   final Widget? trailing;
 
   @override
@@ -26,9 +25,7 @@ class WarningBanner extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // The icon keeps the amber tint; the body text uses onSurface -
-          // warningText on this fill sat at ~3.4:1, short of the 4.5:1 body
-          // text needs.
+          // Body text uses onSurface: warningText on this fill is ~3.4:1, below 4.5:1.
           Icon(Icons.warning_amber_rounded, color: accent, size: 20),
           const SizedBox(width: 8),
           Expanded(

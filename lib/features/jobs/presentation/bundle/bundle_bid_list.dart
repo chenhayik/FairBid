@@ -5,41 +5,12 @@ import '../../../../core/widgets/user_chip.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 import '../widgets/status_colors.dart';
+import 'bundle_pick_logic.dart';
 import 'bundle_task_section.dart';
 
-/// One card per package bid: price per task, bundle price, duration, message.
-class BundleBidList extends StatelessWidget {
-  const BundleBidList({
-    super.key,
-    required this.bids,
-    required this.tasks,
-  });
-
-  final List<BundleBid> bids;
-  final List<Job> tasks;
-
-  String _titleFor(String taskId) {
-    for (final task in tasks) {
-      if (task.id == taskId) return task.title;
-    }
-    return 'a task';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final bid in bids) ...[
-          _BundleBidCard(bid: bid, titleFor: _titleFor),
-          const SizedBox(height: 12),
-        ],
-      ],
-    );
-  }
-}
-
-/// Opens every bid in a tall, scrollable sheet.
+/// What:   Opens every package bid in a tall, scrollable sheet.
+/// Input:  [bids] from BundleBidRepository.watchBundleBids(); [tasks] for titles.
+/// Output: One card per bid: price per task, bundle price, duration, message.
 Future<void> showBundleBids(
   BuildContext context, {
   required List<BundleBid> bids,
@@ -62,7 +33,10 @@ Future<void> showBundleBids(
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 12),
-          BundleBidList(bids: bids, tasks: tasks),
+          for (final bid in bids) ...[
+            _BundleBidCard(bid: bid, titleFor: (id) => taskTitle(tasks, id)),
+            const SizedBox(height: 12),
+          ],
         ],
       ),
     ),
@@ -101,9 +75,7 @@ class _BundleBidCardState extends State<_BundleBidCard> {
                 : 'New provider, no score yet',
             subtitleMaxLines: 2,
           ),
-          // Meaningless while every bid is still pending (nothing has been
-          // decided), so it only appears once the award has moved this bid on.
-          // Its own line keeps the name and score at full width.
+          // Only once the award has moved the bid on; own line keeps the name full width.
           if (bid.status != BundleBidStatus.pending) ...[
             const SizedBox(height: 8),
             PillBadge(
@@ -161,9 +133,7 @@ class _BundleBidCardState extends State<_BundleBidCard> {
                   : TextOverflow.ellipsis,
               style: theme.textTheme.bodyMedium,
             ),
-            // A short, one-line message never actually overflows 2 lines, so
-            // the toggle only shows once it's long enough that it plausibly
-            // does - simpler than measuring the laid-out text.
+            // Length is a cheap stand-in for measuring whether it overflows.
             if (bid.message.length > 140)
               Align(
                 alignment: Alignment.centerLeft,

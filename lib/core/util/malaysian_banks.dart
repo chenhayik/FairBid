@@ -1,4 +1,6 @@
-/// A Malaysian bank a provider can be paid into.
+/// What:   A Malaysian bank a provider can be paid into.
+/// Input:  [kMalaysianBanks] (must match BANKS in functions/payout_method.js).
+/// Output: [swift] id and [checkAccount] length validation.
 class MalaysianBank {
   const MalaysianBank(this.name, this.swift, [this.lengths]);
 
@@ -29,7 +31,6 @@ class MalaysianBank {
   }
 }
 
-/// Must match BANKS in functions/payout_method.js.
 const kMalaysianBanks = [
   MalaysianBank('Maybank', 'MBBEMYKL', [12]),
   MalaysianBank('CIMB Bank', 'CIBBMYKL', [10, 14]),

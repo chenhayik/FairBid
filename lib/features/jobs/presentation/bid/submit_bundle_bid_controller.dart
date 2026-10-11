@@ -2,9 +2,9 @@ import 'package:flutter/foundation.dart';
 
 import '../../data/bundle_bid_repository.dart';
 
-/// ViewModel for the Submit-a-Bundle-Bid sheet: manages the busy flag and
-/// error message around the repository calls, mirroring
-/// `SubmitBidController` for the per-job sheet.
+/// What:   Busy flag and error message for the bundle-bid sheet.
+/// Input:  BundleBidRepository (bundle_bid_repository.dart).
+/// Output: submit()/withdraw() return true on success so the sheet can close.
 class SubmitBundleBidController extends ChangeNotifier {
   SubmitBundleBidController(this._bundleBids);
 
@@ -16,52 +16,40 @@ class SubmitBundleBidController extends ChangeNotifier {
   bool get isBusy => _busy;
   String? get errorMessage => _errorMessage;
 
-  /// Submits the bundle bid; returns true on success so the sheet can close.
   Future<bool> submit({
     required String bundleId,
     required Map<String, int> taskPrices,
     int? bundlePriceSen,
     required String estimatedDuration,
     String message = '',
-  }) async {
-    _busy = true;
-    _errorMessage = null;
-    notifyListeners();
-    try {
-      await _bundleBids.submit(
-        bundleId: bundleId,
-        taskPrices: taskPrices,
-        bundlePriceSen: bundlePriceSen,
-        estimatedDuration: estimatedDuration,
-        message: message,
-      );
-      return true;
-    } on BundleBidRejectedException catch (e) {
-      _errorMessage = e.message;
-      return false;
-    } catch (_) {
-      _errorMessage = 'Could not submit your bid. Please try again.';
-      return false;
-    } finally {
-      _busy = false;
-      notifyListeners();
-    }
-  }
+  }) => _run(
+    () => _bundleBids.submit(
+      bundleId: bundleId,
+      taskPrices: taskPrices,
+      bundlePriceSen: bundlePriceSen,
+      estimatedDuration: estimatedDuration,
+      message: message,
+    ),
+    'Could not submit your bid. Please try again.',
+  );
 
-  /// Withdraws the caller's bid on [bundleId]; returns true on success so the
-  /// sheet can close.
-  Future<bool> withdraw(String bundleId) async {
+  Future<bool> withdraw(String bundleId) => _run(
+    () => _bundleBids.withdraw(bundleId),
+    'Could not withdraw your bid. Please try again.',
+  );
+
+  Future<bool> _run(Future<void> Function() call, String failure) async {
     _busy = true;
     _errorMessage = null;
     notifyListeners();
     try {
-      await _bundleBids.withdraw(bundleId);
+      await call();
       return true;
     } on BundleBidRejectedException catch (e) {
       _errorMessage = e.message;
       return false;
     } catch (_) {
-      _errorMessage = 'Could not withdraw your bid. Please try again.';
+      _errorMessage = failure;
       return false;
     } finally {
       _busy = false;

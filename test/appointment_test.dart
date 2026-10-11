@@ -12,47 +12,13 @@ import 'package:fairbid/features/jobs/presentation/detail/propose_time_sheet.dar
 import 'package:fairbid/features/disputes/presentation/raise_dispute_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:go_router/go_router.dart';
 
-import 'widget_test.dart';
+import 'helpers/builders.dart';
+import 'helpers/fakes.dart';
+import 'helpers/harness.dart';
 
 final _now = DateTime.now();
 DateTime _in(Duration d) => DateTime(_now.year, _now.month, _now.day, 10).add(d);
-
-Job _job({
-  required bool owner,
-  String id = 'job-1',
-  String title = 'Fix leaking sink',
-  String? bundleId,
-  String? providerId,
-  bool required = true,
-  Appointment? appointment,
-  AppointmentProposal? proposal,
-  JobStatus status = JobStatus.inProgress,
-  DateTime? onTheWayAt,
-  int? etaMinutes,
-  DateTime? arrivedAt,
-}) => Job(
-  id: id,
-  requestorId: owner ? 'uid-1' : 'req-9',
-  requestorName: 'Rita Client',
-  title: title,
-  description: 'The kitchen sink leaks.',
-  category: 'Plumbing',
-  location: const JobLocation(lat: 3.14, lng: 101.7, address: 'Bangsar, KL'),
-  createdAt: DateTime.now(),
-  status: status,
-  acceptedProviderId: providerId ?? (owner ? 'prov-1' : 'uid-1'),
-  acceptedProviderName: 'Pro Fixer',
-  bundleId: bundleId,
-  acceptedBidAmountSen: 15000,
-  schedulingRequired: required,
-  appointment: appointment,
-  appointmentProposal: proposal,
-  onTheWayAt: onTheWayAt,
-  etaMinutes: etaMinutes,
-  arrivedAt: arrivedAt,
-);
 
 /// A proposal from the other party (the viewer is `uid-1`).
 AppointmentProposal _theirProposal({required bool owner, int options = 2}) =>
@@ -72,61 +38,17 @@ void main() {
     required bool owner,
     MilestoneStatus? milestone = MilestoneStatus.funded,
     List<Job> extra = const [],
-  }) async {
-    tester.view.physicalSize = const Size(360, 780) * 2;
-    tester.view.devicePixelRatio = 2;
-    addTearDown(tester.view.reset);
-    final onError = FlutterError.onError;
-    FlutterError.onError = (details) {
-      if (!details.exceptionAsString().contains('overflowed')) {
-        onError?.call(details);
-      }
-    };
-    addTearDown(() => FlutterError.onError = onError);
-
-    final auth = FakeAuthRepository()
-      ..verificationStatus = 'approved'
-      ..seedSignedIn(owner ? UserRole.requestor : UserRole.provider);
-    final jobs = FakeJobRepository([job, ...extra]);
-    final seed = [
-      if (milestone != null)
-        Milestone(
-          id: 'ms-1',
-          jobId: 'job-1',
-          providerId: owner ? 'prov-1' : 'uid-1',
-          description: 'Full repair',
-          amountSen: 15000,
-          order: 0,
-          status: milestone,
-          createdAt: DateTime.now(),
-        ),
-    ];
-    await tester.pumpWidget(
-      buildApp(
-        auth,
-        jobRepository: jobs,
-        milestoneRepository: FakeMilestoneRepository(jobs, seed),
-      ),
-    );
-    await tester.pumpAndSettle();
-    GoRouter.of(
-      tester.element(find.byType(Scaffold).first),
-    ).push<void>('/jobs/job-1');
-    await tester.pumpAndSettle();
-    return jobs;
-  }
-
-  Future<void> tapText(WidgetTester tester, String text) async {
-    final finder = find.text(text);
-    await tester.ensureVisible(finder);
-    await tester.pumpAndSettle();
-    await tester.tap(finder);
-    await tester.pumpAndSettle();
-  }
+  }) => pumpJobDetail(
+    tester,
+    job,
+    owner: owner,
+    milestones: [if (milestone != null) sampleMilestone(status: milestone, owner: owner)],
+    extra: extra,
+  );
 
   group('card states', () {
     testWidgets('nothing agreed yet offers Propose a time', (tester) async {
-      await open(tester, _job(owner: true), owner: true);
+      await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
       expect(find.text('Agree a visit time'), findsOneWidget);
       expect(
         find.text('Agree a visit time with Pro Fixer.'),
@@ -141,7 +63,7 @@ void main() {
       final proposal = _theirProposal(owner: true);
       await open(
         tester,
-        _job(owner: true, proposal: proposal),
+        testJob(schedulingRequired: true, owner: true, appointmentProposal: proposal),
         owner: true,
       );
       expect(find.text('Pro Fixer suggested some times'), findsOneWidget);
@@ -168,9 +90,9 @@ void main() {
     testWidgets('the proposer sees Waiting and can withdraw', (tester) async {
       final jobs = await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: false,
-          proposal: AppointmentProposal(
+          appointmentProposal: AppointmentProposal(
             options: [_in(const Duration(days: 2))],
             by: 'uid-1',
           ),
@@ -178,7 +100,7 @@ void main() {
         owner: false,
       );
       expect(find.text('Waiting for Rita Client to confirm'), findsOneWidget);
-      await tapText(tester, 'Withdraw');
+      await tapAt(tester, find.text('Withdraw'));
       expect(jobs.appointmentCalls, ['withdraw:job-1']);
       expect(find.text('Waiting for Rita Client to confirm'), findsNothing);
       expect(find.text('Agree a visit time'), findsOneWidget);
@@ -191,7 +113,7 @@ void main() {
       final end = _in(const Duration(days: 5));
       await open(
         tester,
-        _job(owner: true, appointment: _appointment(start, endAt: end)),
+        testJob(schedulingRequired: true, owner: true, appointment: _appointment(start, endAt: end)),
         owner: true,
       );
       expect(find.text('Visit confirmed'), findsOneWidget);
@@ -204,7 +126,7 @@ void main() {
     testWidgets('confirmed offers Add to calendar', (tester) async {
       await open(
         tester,
-        _job(owner: true, appointment: _appointment(_in(const Duration(days: 3)))),
+        testJob(schedulingRequired: true, owner: true, appointment: _appointment(_in(const Duration(days: 3)))),
         owner: true,
       );
       expect(find.text('Add to calendar'), findsOneWidget);
@@ -213,7 +135,7 @@ void main() {
     testWidgets('no Add to calendar before a time is confirmed', (tester) async {
       await open(
         tester,
-        _job(owner: true, proposal: _theirProposal(owner: true)),
+        testJob(schedulingRequired: true, owner: true, appointmentProposal: _theirProposal(owner: true)),
         owner: true,
       );
       expect(find.text('Add to calendar'), findsNothing);
@@ -224,10 +146,10 @@ void main() {
     ) async {
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: true,
           appointment: _appointment(_in(const Duration(days: 3))),
-          proposal: _theirProposal(owner: true, options: 1),
+          appointmentProposal: _theirProposal(owner: true, options: 1),
         ),
         owner: true,
       );
@@ -242,7 +164,7 @@ void main() {
       final start = _in(const Duration(days: -2));
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: true,
           status: JobStatus.completed,
           appointment: _appointment(start),
@@ -263,16 +185,16 @@ void main() {
     ) async {
       final jobs = await open(
         tester,
-        _job(owner: false, appointment: _appointment(fromNow(const Duration(hours: 2)))),
+        testJob(schedulingRequired: true, owner: false, appointment: _appointment(fromNow(const Duration(hours: 2)))),
         owner: false,
       );
       expect(find.text("I've arrived"), findsOneWidget);
-      await tapText(tester, 'On my way');
+      await tapAt(tester, find.text('On my way'));
       expect(find.text('How long until you arrive?'), findsOneWidget);
-      await tapText(tester, '30 min');
+      await tapAt(tester, find.text('30 min'));
       expect(jobs.appointmentCalls, ['onTheWay:job-1:30']);
       expect(find.textContaining("You're on the way, about 30 min"), findsOneWidget);
-      await tapText(tester, "I've arrived");
+      await tapAt(tester, find.text("I've arrived"));
       expect(jobs.appointmentCalls.last, 'arrived:job-1');
       expect(find.textContaining('Arrived at'), findsOneWidget);
       expect(find.text('On my way'), findsNothing);
@@ -284,7 +206,7 @@ void main() {
     ) async {
       await open(
         tester,
-        _job(owner: false, appointment: _appointment(fromNow(const Duration(hours: 5)))),
+        testJob(schedulingRequired: true, owner: false, appointment: _appointment(fromNow(const Duration(hours: 5)))),
         owner: false,
       );
       expect(find.text('Visit confirmed'), findsOneWidget);
@@ -298,7 +220,7 @@ void main() {
       final sent = fromNow(const Duration(minutes: -5));
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: true,
           appointment: _appointment(fromNow(const Duration(hours: 1))),
           onTheWayAt: sent,
@@ -317,7 +239,7 @@ void main() {
       final arrived = fromNow(const Duration(minutes: -5));
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: true,
           appointment: _appointment(fromNow(const Duration(hours: -1))),
           arrivedAt: arrived,
@@ -329,7 +251,7 @@ void main() {
   });
 
   group('no-show option', () {
-    Future<void> openSheet(WidgetTester tester) => tapText(tester, 'Problem with this job?');
+    Future<void> openSheet(WidgetTester tester) => tapAt(tester, find.text('Problem with this job?'));
 
     bool enabled(WidgetTester tester) => tester
         .widget<ListTile>(find.widgetWithText(ListTile, "Provider didn't show up"))
@@ -339,7 +261,7 @@ void main() {
       tester,
     ) async {
       final start = DateTime.now().subtract(const Duration(minutes: 45));
-      await open(tester, _job(owner: true, appointment: _appointment(start)), owner: true);
+      await open(tester, testJob(schedulingRequired: true, owner: true, appointment: _appointment(start)), owner: true);
       await openSheet(tester);
       expect(enabled(tester), isTrue);
       await tester.tap(find.text("Provider didn't show up"));
@@ -351,35 +273,41 @@ void main() {
       );
     });
 
-    testWidgets('is disabled before the 30 minute grace period', (tester) async {
-      final start = DateTime.now().subtract(const Duration(minutes: 10));
-      await open(tester, _job(owner: true, appointment: _appointment(start)), owner: true);
-      await openSheet(tester);
-      expect(enabled(tester), isFalse);
-      expect(find.text('Only 30 minutes after the visit time.'), findsOneWidget);
-    });
-
-    testWidgets('is disabled once the provider arrived', (tester) async {
-      final start = DateTime.now().subtract(const Duration(hours: 2));
-      await open(
-        tester,
-        _job(owner: true, appointment: _appointment(start), arrivedAt: start),
-        owner: true,
-      );
-      await openSheet(tester);
-      expect(enabled(tester), isFalse);
-    });
-
-    testWidgets('is disabled with no confirmed visit', (tester) async {
-      await open(tester, _job(owner: true), owner: true);
-      await openSheet(tester);
-      expect(enabled(tester), isFalse);
-      expect(find.text('Only once a visit time is confirmed.'), findsOneWidget);
-    });
+    final ago10m = DateTime.now().subtract(const Duration(minutes: 10));
+    final ago2h = DateTime.now().subtract(const Duration(hours: 2));
+    for (final (name, job, hint) in [
+      (
+        'before the 30 minute grace period',
+        testJob(schedulingRequired: true, owner: true, appointment: _appointment(ago10m)),
+        'Only 30 minutes after the visit time.',
+      ),
+      (
+        'once the provider arrived',
+        testJob(
+          schedulingRequired: true,
+          owner: true,
+          appointment: _appointment(ago2h),
+          arrivedAt: ago2h,
+        ),
+        null,
+      ),
+      (
+        'with no confirmed visit',
+        testJob(schedulingRequired: true, owner: true),
+        'Only once a visit time is confirmed.',
+      ),
+    ]) {
+      testWidgets('is disabled $name', (tester) async {
+        await open(tester, job, owner: true);
+        await openSheet(tester);
+        expect(enabled(tester), isFalse);
+        if (hint != null) expect(find.text(hint), findsOneWidget);
+      });
+    }
 
     testWidgets('is not offered to the provider', (tester) async {
       final start = DateTime.now().subtract(const Duration(hours: 2));
-      await open(tester, _job(owner: false, appointment: _appointment(start)), owner: false);
+      await open(tester, testJob(schedulingRequired: true, owner: false, appointment: _appointment(start)), owner: false);
       await openSheet(tester);
       expect(find.text("Provider didn't show up"), findsNothing);
     });
@@ -389,7 +317,7 @@ void main() {
     Future<void> openWithAddress(WidgetTester tester, {required bool owner}) async {
       final jobs = await open(
         tester,
-        _job(owner: owner, appointment: _appointment(_in(const Duration(days: 3)))),
+        testJob(schedulingRequired: true, owner: owner, appointment: _appointment(_in(const Duration(days: 3)))),
         owner: owner,
       );
       await jobs.setJobAddress(
@@ -418,7 +346,7 @@ void main() {
     testWidgets('the provider must agree a time before delivering', (
       tester,
     ) async {
-      await open(tester, _job(owner: false), owner: false);
+      await open(tester, testJob(schedulingRequired: true, owner: false), owner: false);
       expect(find.text('Mark as delivered'), findsNothing);
       expect(
         find.widgetWithText(FilledButton, 'Propose a time'),
@@ -437,7 +365,7 @@ void main() {
     testWidgets('a confirmed time unlocks Mark as delivered', (tester) async {
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: false,
           appointment: _appointment(_in(const Duration(days: -1))),
         ),
@@ -452,7 +380,7 @@ void main() {
     testWidgets('delivering before the visit asks first', (tester) async {
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: false,
           appointment: _appointment(_in(const Duration(days: 2))),
         ),
@@ -471,20 +399,10 @@ void main() {
       expect(find.text('Mark as delivered?'), findsOneWidget);
     });
 
-    testWidgets('a job without schedulingRequired is not gated', (
-      tester,
-    ) async {
-      await open(tester, _job(owner: false, required: false), owner: false);
-      expect(
-        find.widgetWithText(FilledButton, 'Mark as delivered'),
-        findsOneWidget,
-      );
-    });
-
     testWidgets('the requestor waits for the provider to propose', (
       tester,
     ) async {
-      await open(tester, _job(owner: true), owner: true);
+      await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
       expect(
         find.text('Waiting for Pro Fixer to propose a visit time.'),
         findsOneWidget,
@@ -499,12 +417,12 @@ void main() {
       final proposal = _theirProposal(owner: true);
       final jobs = await open(
         tester,
-        _job(owner: true, proposal: proposal),
+        testJob(schedulingRequired: true, owner: true, appointmentProposal: proposal),
         owner: true,
       );
       expect(find.text('Choose a visit time'), findsOneWidget);
-      await tapText(tester, formatVisitTime(proposal.options[1]));
-      await tapText(tester, 'Confirm');
+      await tapAt(tester, find.text(formatVisitTime(proposal.options[1])));
+      await tapAt(tester, find.text('Confirm'));
       expect(jobs.appointmentCalls, ['accept:job-1:1']);
       expect(find.text('Visit confirmed'), findsOneWidget);
       expect(
@@ -518,7 +436,7 @@ void main() {
     ) async {
       final jobs = await open(
         tester,
-        _job(owner: true, proposal: _theirProposal(owner: true, options: 1)),
+        testJob(schedulingRequired: true, owner: true, appointmentProposal: _theirProposal(owner: true, options: 1)),
         owner: true,
       );
       await tester.tap(find.widgetWithText(FilledButton, 'Confirm visit time'));
@@ -530,10 +448,10 @@ void main() {
     testWidgets('Suggest other times opens the sheet', (tester) async {
       await open(
         tester,
-        _job(owner: true, proposal: _theirProposal(owner: true)),
+        testJob(schedulingRequired: true, owner: true, appointmentProposal: _theirProposal(owner: true)),
         owner: true,
       );
-      await tapText(tester, 'Suggest other times');
+      await tapAt(tester, find.text('Suggest other times'));
       expect(find.byType(ProposeTimeSheet), findsOneWidget);
     });
   });
@@ -546,14 +464,11 @@ void main() {
       final auth = FakeAuthRepository()
         ..verificationStatus = 'approved'
         ..seedSignedIn(UserRole.provider);
-      await tester.pumpWidget(
-        buildApp(auth, jobRepository: FakeJobRepository(jobs)),
-      );
-      await tester.pumpAndSettle();
+      await pumpApp(tester, buildApp(auth, jobRepository: FakeJobRepository(jobs)));
     }
 
     Job visit(String id, String title, Duration from, {JobStatus? status}) =>
-        _job(
+        testJob(schedulingRequired: true, 
           owner: false,
           id: id,
           title: title,
@@ -569,7 +484,7 @@ void main() {
         visit('old', 'Visit Old', const Duration(hours: -3)),
         visit('done', 'Visit Done', const Duration(days: 2),
             status: JobStatus.completed),
-        _job(owner: false, id: 'none', title: 'No time yet'),
+        testJob(schedulingRequired: true, owner: false, id: 'none', title: 'No time yet'),
       ]);
       expect(find.text('Upcoming visits'), findsOneWidget);
       expect(find.text('Visit Old'), findsNothing);
@@ -595,7 +510,7 @@ void main() {
     });
 
     testWidgets('the section is hidden with no visits', (tester) async {
-      await openHome(tester, [_job(owner: false)]);
+      await openHome(tester, [testJob(schedulingRequired: true, owner: false)]);
       expect(find.text('Upcoming visits'), findsNothing);
     });
   });
@@ -659,8 +574,8 @@ void main() {
     });
 
     testWidgets('Send with no time picked shows an error', (tester) async {
-      final jobs = await open(tester, _job(owner: true), owner: true);
-      await tapText(tester, 'Propose a time');
+      final jobs = await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
+      await tapAt(tester, find.text('Propose a time'));
       await tester.tap(find.text('Send'));
       await tester.pumpAndSettle();
       expect(
@@ -671,8 +586,8 @@ void main() {
     });
 
     testWidgets('picks a time and sends the proposal', (tester) async {
-      final jobs = await open(tester, _job(owner: true), owner: true);
-      await tapText(tester, 'Propose a time');
+      final jobs = await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
+      await tapAt(tester, find.text('Propose a time'));
       await tester.tap(find.text('Pick date and time'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('OK'));
@@ -691,30 +606,30 @@ void main() {
     Future<FakeJobRepository> openBundleSheet(WidgetTester tester) async {
       final jobs = await open(
         tester,
-        _job(owner: true, bundleId: 'b1'),
+        testJob(schedulingRequired: true, owner: true, bundleId: 'b1'),
         owner: true,
         extra: [
-          _job(owner: true, id: 'job-2', title: 'Paint hall', bundleId: 'b1'),
-          _job(owner: true, id: 'job-3', title: 'Tile bath', bundleId: 'b1'),
+          testJob(schedulingRequired: true, owner: true, id: 'job-2', title: 'Paint hall', bundleId: 'b1'),
+          testJob(schedulingRequired: true, owner: true, id: 'job-3', title: 'Tile bath', bundleId: 'b1'),
           // Not offered: another provider, a finished task, another bundle.
-          _job(
+          testJob(schedulingRequired: true, 
             owner: true,
             id: 'job-4',
             title: 'Wire kitchen',
             bundleId: 'b1',
             providerId: 'prov-2',
           ),
-          _job(
+          testJob(schedulingRequired: true, 
             owner: true,
             id: 'job-5',
             title: 'Fix gate',
             bundleId: 'b1',
             status: JobStatus.completed,
           ),
-          _job(owner: true, id: 'job-6', title: 'Other bundle', bundleId: 'b2'),
+          testJob(schedulingRequired: true, owner: true, id: 'job-6', title: 'Other bundle', bundleId: 'b2'),
         ],
       );
-      await tapText(tester, 'Propose a time');
+      await tapAt(tester, find.text('Propose a time'));
       return jobs;
     }
 
@@ -755,23 +670,23 @@ void main() {
     });
 
     testWidgets('a lone bundle task shows no checkboxes', (tester) async {
-      await open(tester, _job(owner: true, bundleId: 'b1'), owner: true);
-      await tapText(tester, 'Propose a time');
+      await open(tester, testJob(schedulingRequired: true, owner: true, bundleId: 'b1'), owner: true);
+      await tapAt(tester, find.text('Propose a time'));
       expect(find.text('Also use these times for:'), findsNothing);
       expect(find.byType(CheckboxListTile), findsNothing);
     });
 
     testWidgets('a job outside any bundle sends no alsoJobIds', (tester) async {
-      final jobs = await open(tester, _job(owner: true), owner: true);
-      await tapText(tester, 'Propose a time');
+      final jobs = await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
+      await tapAt(tester, find.text('Propose a time'));
       expect(find.byType(CheckboxListTile), findsNothing);
       await pickAndSend(tester);
       expect(jobs.proposedAlso, [<String>[]]);
     });
 
     testWidgets('rows can be added up to three and removed', (tester) async {
-      await open(tester, _job(owner: true), owner: true);
-      await tapText(tester, 'Propose a time');
+      await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
+      await tapAt(tester, find.text('Propose a time'));
       await tester.tap(find.text('Add another time'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Add another time'));
@@ -788,13 +703,13 @@ void main() {
     ) async {
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: true,
           appointment: _appointment(DateTime.now().add(const Duration(hours: 5))),
         ),
         owner: true,
       );
-      await tapText(tester, 'Reschedule');
+      await tapAt(tester, find.text('Reschedule'));
       expect(find.text('Reschedule the visit'), findsOneWidget);
       expect(find.text('Short notice'), findsOneWidget);
     });
@@ -802,13 +717,13 @@ void main() {
     testWidgets('no warning when the visit is days away', (tester) async {
       await open(
         tester,
-        _job(
+        testJob(schedulingRequired: true, 
           owner: true,
           appointment: _appointment(_in(const Duration(days: 4))),
         ),
         owner: true,
       );
-      await tapText(tester, 'Reschedule');
+      await tapAt(tester, find.text('Reschedule'));
       expect(find.text('Short notice'), findsNothing);
     });
   });

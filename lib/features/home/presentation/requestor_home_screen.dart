@@ -11,8 +11,9 @@ import '../../jobs/domain/job.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
 import 'home_app_bar.dart';
 
-/// Requestor Home: greeting, a prominent "Post a job" call to action, and the
-/// requestor's active jobs.
+/// What:   Requestor Home: greeting, "Post a job" button and active jobs.
+/// Input:  JobRepository.watchMyJobs(uid) (job_repository.dart).
+/// Output: Up to 5 active (not completed or cancelled) job cards.
 class RequestorHomeScreen extends StatelessWidget {
   const RequestorHomeScreen({super.key});
 

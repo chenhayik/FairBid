@@ -10,9 +10,9 @@ import '../../domain/bundle.dart';
 import '../../domain/job.dart';
 import '../../domain/service_address.dart';
 
-/// ViewModel for the Post-a-Job form: holds the category, picked location and
-/// uploaded photo URLs, creates the job, and runs the optional Gemini
-/// assists (description helper, fair-price guide).
+/// What:   State and actions for the Post-a-Job form (single job or bundle).
+/// Input:  JobRepository, DocumentStorageRepository, AssistRepository, BundleRepository.
+/// Output: submit()/submitBundle() return the new id or null; errors in [errorMessage].
 class PostJobController extends ChangeNotifier {
   PostJobController(
     this._jobs,
@@ -31,8 +31,7 @@ class PostJobController extends ChangeNotifier {
   String? category;
   PickedLocation? location;
 
-  /// The precise service address to attach once the job is created, if the
-  /// requestor added one - entirely optional (see `setAddress`).
+  /// Optional service address, attached after the job is created.
   ServiceAddress? pendingAddress;
   final List<String> photoUrls = [];
 
@@ -40,57 +39,40 @@ class PostJobController extends ChangeNotifier {
   Set<String> skipForAssist = {};
 
   /// The photo the AI assists read: the first one that shows task 1.
-  String? get _assistPhoto {
-    for (final url in photoUrls) {
-      if (!skipForAssist.contains(url)) return url;
-    }
-    return null;
-  }
+  String? get _assistPhoto =>
+      photoUrls.where((u) => !skipForAssist.contains(u)).firstOrNull;
 
   // Separate flags so the submit overlay and the photo spinner never mix.
   bool _isSubmitting = false;
   bool _uploadingPhoto = false;
   String? _errorMessage;
 
-  // Assist state. Separate busy flags so a pending suggestion never blocks
-  // the Post Job button, and vice versa. Failures never touch
-  // [_errorMessage] - a missing suggestion is not a form error.
+  // Assist state. A price lookup never blocks posting; a draft does (see [isBusy]).
+  // Failures leave [_errorMessage] alone: a missing suggestion is not a form error.
   bool assistingPrice = false;
   bool assistingDraft = false;
 
-  /// Set once [dispose] has run. Checked by [_notify] so a suggestion that
-  /// completes after the screen was closed never calls `notifyListeners()`
-  /// on a disposed controller.
   bool _disposed = false;
 
   /// The last suggested fair-price range, shown beside the budget fields.
   ({int minSen, int maxSen})? priceHint;
 
-  /// True while the job itself is being created - drives the full-screen
-  /// blocking overlay, so submit feedback is visible regardless of scroll
-  /// position.
+  /// True while the job is being created; drives the blocking overlay.
   bool get isSubmitting => _isSubmitting;
 
-  /// True while a photo is being picked/uploaded - drives the in-place
-  /// spinner on the photo UploadBox only.
+  /// True while a photo uploads; drives the photo box spinner.
   bool get uploadingPhoto => _uploadingPhoto;
 
-  /// Any of the above in flight. Used to gate actions - like the AI assists -
-  /// that shouldn't run concurrently with a submit or an upload; the submit
-  /// button and each UploadBox use their own specific flag above instead.
-  bool get isBusy =>
-      _isSubmitting || _uploadingPhoto || assistingDraft;
+  /// A submit, upload or draft is in flight; gates actions that must not overlap.
+  bool get isBusy => _isSubmitting || _uploadingPhoto || assistingDraft;
 
   String? get errorMessage => _errorMessage;
 
-  /// Set when the job was created but its service address write failed. Not a
-  /// form error (the post succeeded), so it is reported after the pop rather
-  /// than in the banner.
+  /// Set when the job posted but its address didn't save; reported after the pop.
   String? _addressWarning;
   String? get addressWarning => _addressWarning;
 
-  /// Drafts a whole post from [roughText], or null when none is available.
-  /// The screen decides which fields to fill.
+  /// Drafts a post from [roughText], or null when none is available.
   Future<JobDraft?> suggestDraft(String roughText) async {
     assistingDraft = true;
     _notify();
@@ -104,8 +86,7 @@ class PostJobController extends ChangeNotifier {
     }
   }
 
-  /// Fetches a fair-price range for [description] into [priceHint] (null on
-  /// a miss).
+  /// Fetches a fair-price range for [description] into [priceHint].
   Future<void> suggestPrice(String description) async {
     final selectedCategory = category;
     if (selectedCategory == null) return;
@@ -132,14 +113,8 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Seeds the location before the first build, without notifying.
-  ///
-  /// Called from `initState` to pre-fill "Where" from the requestor's saved
-  /// default. [setLocation] cannot be used there: notifying while the owning
-  /// `ChangeNotifierProvider` is still building trips a framework assertion
-  /// (`'!_dirty': is not true`), so opening Post-a-Job threw for every
-  /// requestor who had completed onboarding. No notification is needed here
-  /// anyway, since the first build reads this straight after.
+  /// Sets the location from initState without notifying; notifying during the
+  /// provider's build trips a framework assertion.
   void seedLocation(PickedLocation value) {
     location = value;
   }
@@ -158,7 +133,8 @@ class PostJobController extends ChangeNotifier {
         imageQuality: 85,
       );
     } catch (_) {
-      _fail('Could not open the photo picker.');
+      _errorMessage = 'Could not open the photo picker.';
+      _notify();
       return;
     }
     if (file == null) return;
@@ -179,9 +155,8 @@ class PostJobController extends ChangeNotifier {
     _storage.deleteByUrl(url).catchError((_) {});
   }
 
-  /// Creates the job and returns its new id, or null on failure. When an
-  /// optional [pendingAddress] was set, best-effort attaches it after the
-  /// job is created - a failed address write never loses the created job.
+  /// Creates the job and returns its id, or null on failure. A failed
+  /// [pendingAddress] write never loses the job; it sets [addressWarning].
   Future<String?> submit(Job job) async {
     _isSubmitting = true;
     _errorMessage = null;
@@ -194,11 +169,8 @@ class PostJobController extends ChangeNotifier {
         try {
           await _jobs.setJobAddress(id, address);
         } catch (_) {
-          // Best-effort only - the job itself was created successfully, so
-          // this must not fail the post. But it can't be silent either: the
-          // requestor typed a full address and access notes, and would
-          // otherwise only find out it was lost when the hired provider
-          // could not find them.
+          // Must not fail the post, but can't be silent: the requestor would
+          // only learn the address was lost when the provider couldn't find them.
           _addressWarning =
               "Job posted, but the service address didn't save. Add it "
               'again from the job page.';
@@ -214,9 +186,7 @@ class PostJobController extends ChangeNotifier {
     }
   }
 
-  /// Posts several related tasks as ONE bundled posting via `createBundle`,
-  /// returning the new bundle's id (null on failure). The precise service
-  /// address has no bundle equivalent, so the form hides it.
+  /// Posts [tasks] as one bundle via `createBundle`; returns its id, or null on failure.
   Future<String?> submitBundle({
     required String title,
     required String description,
@@ -238,8 +208,7 @@ class PostJobController extends ChangeNotifier {
         deadline: deadline,
       );
     } on BundleRejectedException catch (e) {
-      // The server writes these to be read by a requestor ("Task 2 has no
-      // valid category."), so they are shown as they are.
+      // Server-written for requestors, so shown as-is.
       _errorMessage = e.message;
       return null;
     } catch (_) {
@@ -256,14 +225,7 @@ class PostJobController extends ChangeNotifier {
     _notify();
   }
 
-  void _fail(String message) {
-    _errorMessage = message;
-    _notify();
-  }
-
-  /// notifyListeners(), skipped once this controller has been disposed - a
-  /// suggestion or upload that completes after the screen was closed must
-  /// not touch a disposed ChangeNotifier.
+  /// notifyListeners(), skipped after dispose so late async results are safe.
   void _notify() {
     if (!_disposed) notifyListeners();
   }

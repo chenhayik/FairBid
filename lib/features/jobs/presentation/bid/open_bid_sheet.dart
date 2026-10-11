@@ -11,9 +11,9 @@ import '../../domain/job.dart';
 import 'submit_bid_sheet.dart';
 import 'submit_bundle_bid_sheet.dart';
 
-/// Opens the right bid sheet for [job]: the bundle package sheet for a live
-/// bundle task (rules refuse a per-job bid there), otherwise [SubmitBidSheet].
-/// Shared by the job detail screen and the bundle screen.
+/// What:   Opens the bid sheet that fits [job].
+/// Input:  [job] and [bidder] from the job detail or bundle screen.
+/// Output: Package sheet for a live bundle task (rules refuse a per-job bid), else [SubmitBidSheet].
 Future<void> openBidSheet(BuildContext context, Job job, AppUser bidder) async {
   if (!job.isLiveBundleTask) {
     SubmitBidSheet.show(context, job: job, bidder: bidder);
@@ -22,18 +22,19 @@ Future<void> openBidSheet(BuildContext context, Job job, AppUser bidder) async {
   await openBundleBidSheet(context, job.bundleId!, bidder);
 }
 
-/// Opens [SubmitBundleBidSheet] for [bundleId], prefilled with [bidder]'s
-/// existing bid when they have one. Reads the bundle/tasks/bid one-shot and
-/// concurrently, to avoid a partially-cached task list; failures are caught
-/// here and shown as a snackbar.
+/// What:   Opens [SubmitBundleBidSheet] for [bundleId], prefilled with [bidder]'s bid if any.
+/// Input:  Bundle, tasks and own bid read once, concurrently (bundle/job/bundle-bid repositories).
+/// Output: The sheet, or a snackbar when bidding is closed, tasks are missing or a read fails.
 Future<void> openBundleBidSheet(
   BuildContext context,
   String bundleId,
   AppUser bidder,
 ) async {
+  void snack(String message) => ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(message)));
   try {
-    // A single `Future.wait` keeps exactly one `await`/`context.mounted`
-    // check before every `context` use below, satisfying the linter's gap check.
+    // One await, so one mounted check covers every context use below.
     final results = await Future.wait<Object?>([
       context.read<BundleRepository>().getById(bundleId),
       context.read<JobRepository>().getBundleTasks(bundleId),
@@ -45,22 +46,14 @@ Future<void> openBundleBidSheet(
     final existing = results[2] as BundleBid?;
 
     if (bundle == null || !bundle.biddingOpen) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('This bundle is no longer accepting bids.'),
-        ),
-      );
+      snack('This bundle is no longer accepting bids.');
       return;
     }
     final taskIds = tasks.map((t) => t.id).toSet();
     if (!bundle.taskIds.every(taskIds.contains)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Couldn't load every task in this bundle. Check your "
-            'connection and try again.',
-          ),
-        ),
+      snack(
+        "Couldn't load every task in this bundle. Check your "
+        'connection and try again.',
       );
       return;
     }
@@ -73,10 +66,6 @@ Future<void> openBundleBidSheet(
     );
   } catch (_) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Couldn't open the bid form. Please try again."),
-      ),
-    );
+    snack("Couldn't open the bid form. Please try again.");
   }
 }

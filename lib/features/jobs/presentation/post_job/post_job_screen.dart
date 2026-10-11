@@ -26,12 +26,13 @@ import '../../data/bundle_repository.dart';
 import '../../data/job_repository.dart';
 import '../../domain/bundle.dart';
 import '../../domain/job.dart';
-import '../../domain/service_address.dart';
 import '../detail/service_address_sheet.dart';
+import '../widgets/deadline_picker.dart';
 import 'post_job_controller.dart';
 
-/// Requestor form for posting a new job. Owns a scoped [PostJobController] so
-/// state resets each time the screen is opened.
+/// What:   Requestor form for posting a job, or a bundle once a second task is added.
+/// Input:  User defaults from AuthController; a PostJobController scoped to this screen.
+/// Output: Creates the job/bundle through the controller, then pops home.
 class PostJobScreen extends StatelessWidget {
   const PostJobScreen({super.key});
 
@@ -64,24 +65,18 @@ class _PostJobViewState extends State<_PostJobView> {
   final _budgetMin = TextEditingController();
   final _budgetMax = TextEditingController();
   // Bidding closes in 14 days unless changed, so old jobs leave the feed.
-  DateTime? _deadline = () {
-    final d = DateTime.now().add(const Duration(days: 14));
-    return DateTime(d.year, d.month, d.day, 23, 59, 59);
-  }();
+  DateTime? _deadline = endOfDay(DateTime.now().add(const Duration(days: 14)));
 
-  /// Task 1's own field keys, so a failed submit can find and scroll to the
-  /// first field with an error - mirrors each added task's own keys.
+  // Task 1's field keys, so a failed submit can scroll to the first error.
   final _task1CategoryKey = GlobalKey<FormFieldState<String>>();
   final _task1TitleKey = GlobalKey<FormFieldState<String>>();
   final _task1DescriptionKey = GlobalKey<FormFieldState<String>>();
   final _postingTitleKey = GlobalKey<FormFieldState<String>>();
 
-  /// The tasks beyond the first, added with "Add another task". Empty for an
-  /// ordinary single-task job, keeping that path unchanged until it isn't.
+  /// Tasks beyond the first; empty for an ordinary single job.
   final List<_TaskFields> _extraTasks = [];
 
-  /// The bundled posting's own title and summary, asked for only in bundle
-  /// mode - what a provider reads atop the bid sheet, above the tasks.
+  /// The bundle's own title and summary (bundle mode only).
   final _postingTitle = TextEditingController();
   final _postingSummary = TextEditingController();
 
@@ -94,14 +89,11 @@ class _PostJobViewState extends State<_PostJobView> {
 
   List<Object> get _taskTags => [_task1Tag, ..._extraTasks];
 
-  /// True while the location shown is still the requestor's saved default
-  /// (from onboarding) and hasn't been overridden by picking a new one.
+  /// True while the location is still the saved default.
   bool _locationDefaulted = false;
 
-  /// The location [_seededHint] was resolved for, and the pending lookup
-  /// itself. A fresh pick already carries its own hint (the picker geocodes
-  /// on confirm); a location seeded from the requestor's saved default has
-  /// none, so `_addressHint` resolves one and caches it here.
+  /// A fresh pick carries its own hint; a seeded default has none, so
+  /// `_addressHint` resolves and caches one here.
   PickedLocation? _hintFor;
   Future<AddressHint?>? _seededHint;
 
@@ -125,8 +117,7 @@ class _PostJobViewState extends State<_PostJobView> {
     ));
     _address.text = region.label;
     _locationDefaulted = true;
-    // Warm the pin's reverse geocode now rather than on the tap, so the
-    // address sheet opens already filled in.
+    // Warm the geocode so the address sheet opens pre-filled.
     _addressHint(controller.location);
   }
 
@@ -160,8 +151,7 @@ class _PostJobViewState extends State<_PostJobView> {
     setState(() => _locationDefaulted = false);
   }
 
-  /// The street-level suggestion for [location] - its own if it came from a
-  /// fresh pick, otherwise a cached reverse geocode of its coordinates.
+  /// The street-level suggestion for [location]: its own, else a cached reverse geocode.
   Future<AddressHint?> _addressHint(PickedLocation? location) {
     if (location == null) return Future.value();
     if (location.addressHint != null) return Future.value(location.addressHint);
@@ -172,15 +162,11 @@ class _PostJobViewState extends State<_PostJobView> {
     return _seededHint!;
   }
 
-  /// Opens the address sheet, pre-filling the town from the picked map
-  /// location if any, else the requestor's saved default town, plus the
-  /// street/postcode reverse-geocoded from the pin. Fully optional - posting
-  /// still works without one.
+  /// Opens the address sheet, pre-filled from the pin and town. Optional.
   Future<void> _pickAddress() async {
     final controller = context.read<PostJobController>();
     final user = context.read<AuthController>().user;
-    // Only worth resolving when adding an address from scratch - one the
-    // requestor already entered always wins over the geocoder's guess.
+    // An address already entered beats the geocoder's guess.
     final hint = controller.pendingAddress == null
         ? await _addressHint(controller.location)
         : null;
@@ -195,31 +181,15 @@ class _PostJobViewState extends State<_PostJobView> {
     controller.setAddress(result);
   }
 
-  /// Opens a date picker for the optional bidding deadline (tomorrow through
-  /// ~90 days out). The picked date is normalised to end-of-day (23:59:59) so
-  /// choosing "today" - the day after tomorrow's midnight boundary aside -
-  /// never reads as already expired.
   Future<void> _pickDeadline() async {
-    final tomorrow = DateTime.now().add(const Duration(days: 1));
-    final firstDate = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _deadline ?? firstDate,
-      firstDate: firstDate,
-      lastDate: firstDate.add(const Duration(days: 90)),
-    );
-    if (picked == null) return;
-    setState(() => _deadline =
-        DateTime(picked.year, picked.month, picked.day, 23, 59, 59));
+    final picked = await pickBiddingDeadline(context, initial: _deadline);
+    if (picked != null) setState(() => _deadline = picked);
   }
-
-  void _clearDeadline() => setState(() => _deadline = null);
 
   void _addTask() {
     final added = _TaskFields();
     setState(() => _extraTasks.add(added));
-    // The button sits halfway down a long form, so without this the tap has
-    // no visible result.
+    // The button is halfway down a long form; scroll so the tap shows a result.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final target = added.key.currentContext;
       if (target == null) return;
@@ -299,8 +269,7 @@ class _PostJobViewState extends State<_PostJobView> {
     return title.isEmpty ? 'Task ${index + 1}' : 'Task ${index + 1}: $title';
   }
 
-  /// The posting summary to send when the requestor leaves it blank: the
-  /// task titles, since `createBundle` requires a description regardless.
+  /// Summary sent when left blank, since `createBundle` requires a description.
   String _composedSummary() {
     final titles = [
       _title.text.trim(),
@@ -309,9 +278,7 @@ class _PostJobViewState extends State<_PostJobView> {
     return '${titles.length} tasks: ${titles.join(', ')}.';
   }
 
-  /// Scrolls the first invalid field into view and flags it with a snackbar -
-  /// otherwise a failed validate() on this long form gives no feedback at all
-  /// when every error lands off-screen.
+  /// Scrolls to the first invalid field; its error may be off-screen.
   void _scrollToFirstError() {
     final keys = [
       _task1CategoryKey,
@@ -339,8 +306,7 @@ class _PostJobViewState extends State<_PostJobView> {
     _snack('Some fields need attention');
   }
 
-  /// Soft check before posting with no photo: true to post anyway.
-  /// "Add a photo" opens the picker instead and cancels this submit.
+  /// True to post without photos; "Add a photo" opens the picker and cancels.
   Future<bool> _confirmNoMedia() async {
     final postAnyway = await showDialog<bool>(
       context: context,
@@ -423,8 +389,6 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
-  /// Posts every task as one bundle. Task 1 is the form's own fields, with
-  /// its budget in "When & budget"; each added task carries its own.
   Future<void> _submitBundle(
       PostJobController controller, JobLocation location) async {
     final summary = _postingSummary.text.trim();
@@ -468,8 +432,7 @@ class _PostJobViewState extends State<_PostJobView> {
   void _snack(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
 
-  /// One rough note becomes a whole draft: title, category, description and
-  /// a budget range, filled into whatever the form has left empty.
+  /// Asks for a rough note and drafts the empty fields from it.
   Future<void> _draftFromNote() async {
     final note = await showModalBottomSheet<String>(
       context: context,
@@ -491,8 +454,7 @@ class _PostJobViewState extends State<_PostJobView> {
     _applyDraft(draft);
   }
 
-  /// Fills only the fields the requestor has left empty, so a draft can never
-  /// overwrite something they typed themselves.
+  /// Fills only empty fields; never overwrites what the user typed.
   void _applyDraft(JobDraft draft) {
     final controller = context.read<PostJobController>();
     final filled = <String>[];
@@ -522,8 +484,7 @@ class _PostJobViewState extends State<_PostJobView> {
         : 'Filled in ${filled.join(', ')}. Check each one before posting.');
   }
 
-  /// Gemini fair-price guide: fetches an indicative RM range shown beside the
-  /// budget fields. Nothing is auto-filled - the user taps "Use this".
+  /// Fetches an indicative RM range; the user taps "Use this" to apply it.
   Future<void> _suggestPrice() async {
     final controller = context.read<PostJobController>();
     if (controller.category == null) {
@@ -542,32 +503,19 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
-  /// Task 1's category, title and description fields, shared by single-job
-  /// mode (flat) and bundle mode (inside its own card) so both stay in sync.
+  /// Task 1's category, title and description, flat in single mode or in a card in bundle mode.
   List<Widget> _task1Fields(PostJobController controller, ThemeData theme) {
     return [
-      Text('Category', style: theme.textTheme.labelLarge),
-      const SizedBox(height: 6),
-      DropdownButtonFormField<String>(
+      _categoryField(
+        theme,
         key: _task1CategoryKey,
-        // Without this the button takes the width of its widest item
-        // ("Moving & Delivery") and overflows a narrow phone.
-        isExpanded: true,
-        initialValue: controller.category,
-        hint: const Text('Select a category...'),
-        items: [
-          for (final c in kServiceCategories)
-            DropdownMenuItem(value: c, child: Text(c)),
-        ],
+        value: controller.category,
         onChanged: controller.setCategory,
-        validator: (v) => v == null ? 'Pick a category.' : null,
       ),
       const SizedBox(height: 16),
       AppTextField(
         fieldKey: _task1TitleKey,
         controller: _title,
-        // Bundle mode labels task 1 like every other task card ("Task 1
-        // title"); single-job mode keeps its own plain label.
         label: _isBundle ? 'Task 1 title' : 'Job title',
         hint: 'e.g. Fix leaking sink pipe',
         textInputAction: TextInputAction.next,
@@ -594,9 +542,7 @@ class _PostJobViewState extends State<_PostJobView> {
     return Stack(
       children: [
         _buildForm(context, controller, theme, uid),
-        // Always-visible submit feedback: a screen-wide blocking overlay, so
-        // it's obvious regardless of how far down the long form the user has
-        // scrolled (unlike the Post Job button's own spinner, at the bottom).
+        // Blocking overlay: the button's own spinner may be scrolled off-screen.
         if (controller.isSubmitting) _SubmitOverlay(isBundle: _isBundle),
       ],
     );
@@ -633,9 +579,7 @@ class _PostJobViewState extends State<_PostJobView> {
                   ErrorBanner(controller.errorMessage!),
 
                 // ---- The basics (required) ----
-                // Bundle mode wraps task 1 in a card, its own budget inside
-                // (like every other task's card); single mode keeps the
-                // original flat layout, budget included further down.
+                // Bundle mode wraps task 1 and its budget in a card.
                 if (_isBundle)
                   AppCard(
                     child: Column(
@@ -718,8 +662,6 @@ class _PostJobViewState extends State<_PostJobView> {
                 const SizedBox(height: 24),
                 const _SectionHeader('Photos (optional)'),
                 const SizedBox(height: 8),
-                // No optional toggle left to expand - tapping opens the
-                // photo picker directly, same as the "Add photo" box below.
                 _PhotoAssistHint(
                   hasPhoto: controller.photoUrls.isNotEmpty,
                   onAddPhoto: () => controller.addPhoto(uid),
@@ -785,9 +727,16 @@ class _PostJobViewState extends State<_PostJobView> {
                 ],
                 const SizedBox(height: 8),
                 if (!_isBundle)
-                  _AddressField(
-                    address: controller.pendingAddress,
+                  LocationField(
+                    icon: Icons.home_outlined,
+                    label: controller.pendingAddress?.summary,
+                    placeholder: 'Add address (only your hired provider sees it)',
                     onTap: _pickAddress,
+                    trailing: Icon(
+                      controller.pendingAddress == null
+                          ? Icons.chevron_right
+                          : Icons.edit_outlined,
+                    ),
                   )
                 else ...[
                   Text(
@@ -797,27 +746,48 @@ class _PostJobViewState extends State<_PostJobView> {
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
                   if (controller.pendingAddress != null)
-                    _DroppedField(
-                      message: 'The service address you added will not be '
-                          'posted.',
-                      actionLabel: 'Clear it',
-                      onAction: () => controller.setAddress(null),
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 16, color: context.fairbid.warningText),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'The service address you added will not be '
+                            'posted.',
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(color: context.fairbid.warningText),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => controller.setAddress(null),
+                          child: const Text('Clear it'),
+                        ),
+                      ],
                     ),
                 ],
 
                 // ---- When & budget ----
-                // Bundle mode's own budget lives in task 1's card now; only
-                // the deadline is shared across every task here, so the
-                // heading names just that rather than "budget" too.
+                // In bundle mode only the deadline is shared; budgets are per task.
                 const SizedBox(height: 24),
                 _SectionHeader(
                   _isBundle ? 'Bidding deadline (shared)' : 'Bidding deadline & price',
                 ),
                 const SizedBox(height: 12),
-                _DeadlineField(
-                  deadline: _deadline,
+                LocationField(
+                  icon: Icons.timer_outlined,
+                  label: _deadline == null
+                      ? null
+                      : 'Bidding closes ${DateFormat.yMMMd().format(_deadline!)}',
+                  placeholder: 'Set a bidding deadline',
                   onTap: _pickDeadline,
-                  onClear: _clearDeadline,
+                  trailing: _deadline == null
+                      ? null
+                      : IconButton(
+                          tooltip: 'Remove deadline',
+                          icon: const Icon(Icons.close),
+                          onPressed: () => setState(() => _deadline = null),
+                        ),
                 ),
                 if (!_isBundle) ...[
                   const SizedBox(height: 16),
@@ -830,8 +800,7 @@ class _PostJobViewState extends State<_PostJobView> {
                 ],
 
                 // ---- Naming the posting (bundle mode only) ----
-                // Last, not first: nothing required may land off-screen when
-                // a task is added, and naming is easier once tasks exist.
+                // Last, so no required field lands off-screen when a task is added.
                 if (_isBundle) ...[
                   const SizedBox(height: 24),
                   const _SectionHeader('Name this posting'),
@@ -855,10 +824,7 @@ class _PostJobViewState extends State<_PostJobView> {
                 const SizedBox(height: 24),
                 PrimaryButton(
                   label: _isBundle ? 'Post bundle' : 'Post job',
-                  // Its own spinner reflects submitting only - the screen-wide
-                  // overlay already covers that - but stays disabled during a
-                  // photo upload too, so the job can't be created before
-                  // an in-flight upload finishes.
+                  // Disabled during an upload too, so the job can't post before it finishes.
                   busy: controller.isSubmitting,
                   onPressed: controller.isBusy ? null : _submit,
                 ),
@@ -871,37 +837,9 @@ class _PostJobViewState extends State<_PostJobView> {
   }
 }
 
-/// A field a bundled posting cannot carry, with the tap that clears it.
-class _DroppedField extends StatelessWidget {
-  const _DroppedField({
-    required this.message,
-    required this.actionLabel,
-    required this.onAction,
-  });
-
-  final String message;
-  final String actionLabel;
-  final VoidCallback onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Icon(Icons.info_outline, size: 16, color: context.fairbid.warningText),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(message,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: context.fairbid.warningText)),
-        ),
-        TextButton(onPressed: onAction, child: Text(actionLabel)),
-      ],
-    );
-  }
-}
-
-/// The assist entry point: one note in, a whole draft post out.
+/// What:   Entry card for the AI draft: one note in, a draft post out.
+/// Input:  [isBundle] (the assist only fills task 1), [busy], [onTap].
+/// Output: Tappable card with a spinner while drafting.
 class _DraftCard extends StatelessWidget {
   const _DraftCard({
     required this.isBundle,
@@ -909,7 +847,6 @@ class _DraftCard extends StatelessWidget {
     required this.onTap,
   });
 
-  /// True in bundle mode, where the assist only ever fills task 1.
   final bool isBundle;
   final bool busy;
   final VoidCallback? onTap;
@@ -955,7 +892,7 @@ class _DraftCard extends StatelessWidget {
   }
 }
 
-/// Collects the rough note, and hands it back to the form.
+// Collects the rough note and returns it to the form.
 class _DraftSheet extends StatefulWidget {
   const _DraftSheet();
 
@@ -1005,11 +942,9 @@ class _DraftSheetState extends State<_DraftSheet> {
   }
 }
 
-/// The controllers behind one added task, kept in a class so adding/removing
-/// a task is a single list operation and every field is disposed with it.
+// The controllers behind one added task, so adding/removing is one list operation.
 class _TaskFields {
-  /// Identifies this card so adding one can scroll it into view.
-  final key = GlobalKey();
+  final key = GlobalKey(); // So a new card can be scrolled into view.
 
   final title = TextEditingController();
   final description = TextEditingController();
@@ -1017,8 +952,6 @@ class _TaskFields {
   final budgetMax = TextEditingController();
   String? category;
 
-  /// Field keys, so a failed submit can find and scroll to the first one
-  /// with an error.
   final categoryKey = GlobalKey<FormFieldState<String>>();
   final titleKey = GlobalKey<FormFieldState<String>>();
   final descriptionKey = GlobalKey<FormFieldState<String>>();
@@ -1031,8 +964,7 @@ class _TaskFields {
   }
 }
 
-/// One added task of a bundled posting ("Task 2" on, since Task 1 uses the
-/// form's own fields).
+// One added task of a bundle ("Task 2" on; Task 1 uses the form's own fields).
 class _TaskCard extends StatelessWidget {
   const _TaskCard({
     super.key,
@@ -1070,19 +1002,11 @@ class _TaskCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text('Category', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<String>(
+            _categoryField(
+              theme,
               key: fields.categoryKey,
-              isExpanded: true,
-              initialValue: fields.category,
-              hint: const Text('Select a category...'),
-              items: [
-                for (final c in kServiceCategories)
-                  DropdownMenuItem(value: c, child: Text(c)),
-              ],
+              value: fields.category,
               onChanged: onCategory,
-              validator: (v) => v == null ? 'Pick a category.' : null,
             ),
             const SizedBox(height: 16),
             AppTextField(
@@ -1104,31 +1028,7 @@ class _TaskCard extends StatelessWidget {
             Text('Likely price range (optional)',
                 style: theme.textTheme.labelLarge),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: AppTextField(
-                    controller: fields.budgetMin,
-                    label: 'From (RM)',
-                    hint: '0.00',
-                    prefixText: 'RM ',
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: AppTextField(
-                    controller: fields.budgetMax,
-                    label: 'To (RM)',
-                    hint: '0.00',
-                    prefixText: 'RM ',
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                  ),
-                ),
-              ],
-            ),
+            _rangeFields(fields.budgetMin, fields.budgetMax),
           ],
         ),
       ),
@@ -1136,11 +1036,61 @@ class _TaskCard extends StatelessWidget {
   }
 }
 
-/// Full-screen blocking overlay shown only while [PostJobController.submit]
-/// is running: a modal barrier (absorbing all input) plus a centred spinner
-/// and label, so submit feedback is immediate no matter where the user has
-/// scrolled on the long form. Distinct from the per-upload spinner on each
-/// UploadBox, which shows instead while a photo is uploading.
+Widget _categoryField(
+  ThemeData theme, {
+  required Key key,
+  required String? value,
+  required ValueChanged<String?> onChanged,
+}) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text('Category', style: theme.textTheme.labelLarge),
+      const SizedBox(height: 6),
+      DropdownButtonFormField<String>(
+        key: key,
+        // Without this the button takes its widest item's width and overflows.
+        isExpanded: true,
+        initialValue: value,
+        hint: const Text('Select a category...'),
+        items: [
+          for (final c in kServiceCategories)
+            DropdownMenuItem(value: c, child: Text(c)),
+        ],
+        onChanged: onChanged,
+        validator: (v) => v == null ? 'Pick a category.' : null,
+      ),
+    ],
+  );
+}
+
+Widget _rangeFields(TextEditingController min, TextEditingController max) {
+  return Row(
+    children: [
+      Expanded(
+        child: AppTextField(
+          controller: min,
+          label: 'From (RM)',
+          hint: '0.00',
+          prefixText: 'RM ',
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: AppTextField(
+          controller: max,
+          label: 'To (RM)',
+          hint: '0.00',
+          prefixText: 'RM ',
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        ),
+      ),
+    ],
+  );
+}
+
+// Blocking overlay while a submit runs.
 class _SubmitOverlay extends StatelessWidget {
   const _SubmitOverlay({required this.isBundle});
 
@@ -1180,8 +1130,6 @@ class _SubmitOverlay extends StatelessWidget {
   }
 }
 
-/// Section header shown above each of the form's four groups ("The basics",
-/// "Photos (optional)", "Where", "Bidding deadline & price").
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader(this.label);
   final String label;
@@ -1192,106 +1140,7 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-/// Optional bidding-deadline picker, modelled on [LocationField]'s tappable
-/// row: shows "Set a bidding deadline" or the chosen date, with a clear (×)
-/// affordance once one is set.
-class _DeadlineField extends StatelessWidget {
-  const _DeadlineField({
-    required this.deadline,
-    required this.onTap,
-    required this.onClear,
-  });
-
-  final DateTime? deadline;
-  final VoidCallback onTap;
-  final VoidCallback onClear;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: context.fairbid.borderSubtle),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.timer_outlined, color: context.fairbid.verified),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                deadline == null
-                    ? 'Set a bidding deadline'
-                    : 'Bidding closes ${DateFormat.yMMMd().format(deadline!)}',
-                style: theme.textTheme.bodyLarge,
-              ),
-            ),
-            if (deadline != null)
-              IconButton(
-                tooltip: 'Remove deadline',
-                icon: const Icon(Icons.close),
-                onPressed: onClear,
-              )
-            else
-              const Icon(Icons.chevron_right),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Optional precise service-address affordance, modelled on
-/// [_DeadlineField]'s tappable row: shows a prompt or the entered address's
-/// one-line summary. Fully optional - posting works without one.
-class _AddressField extends StatelessWidget {
-  const _AddressField({required this.address, required this.onTap});
-
-  final ServiceAddress? address;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: context.fairbid.borderSubtle),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.home_outlined, color: context.fairbid.verified),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                address == null
-                    ? 'Add address (only your hired provider sees it)'
-                    : address!.summary,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyLarge,
-              ),
-            ),
-            Icon(address == null ? Icons.chevron_right : Icons.edit_outlined),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// The likely price range: from/to RM inputs plus the "Suggest a fair range"
-/// assist with its "Use this" shortcut.
+// Price range inputs plus the "Suggest a fair range" assist and its "Use this" shortcut.
 class _BudgetFields extends StatelessWidget {
   const _BudgetFields({
     required this.controller,
@@ -1305,7 +1154,6 @@ class _BudgetFields extends StatelessWidget {
   final TextEditingController budgetMax;
   final VoidCallback? onSuggestPrice;
 
-  /// Sen → an editable field value, e.g. 12050 → "120.50".
   static String _senToField(int sen) => (sen / 100).toStringAsFixed(2);
 
   @override
@@ -1315,19 +1163,22 @@ class _BudgetFields extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Wrap, not Row: nested inside task 1's card (bundle mode) the
-        // available width is narrower than the old "When & budget" section,
-        // and "Suggest a fair range" no longer reliably fits beside the
-        // label.
+        // Wrap, not Row: in bundle mode the narrow card can't fit the button beside the label.
         Wrap(
           alignment: WrapAlignment.spaceBetween,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text('Likely price range', style: theme.textTheme.labelLarge),
-            _AssistButton(
-              label: 'Suggest a fair range',
-              busy: controller.assistingPrice,
-              onPressed: onSuggestPrice,
+            TextButton.icon(
+              onPressed: controller.assistingPrice ? null : onSuggestPrice,
+              icon: controller.assistingPrice
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_awesome, size: 18),
+              label: const Text('Suggest a fair range'),
             ),
           ],
         ),
@@ -1352,40 +1203,13 @@ class _BudgetFields extends StatelessWidget {
             ],
           ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: AppTextField(
-                controller: budgetMin,
-                label: 'From (RM)',
-                hint: '0.00',
-                prefixText: 'RM ',
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: AppTextField(
-                controller: budgetMax,
-                label: 'To (RM)',
-                hint: '0.00',
-                prefixText: 'RM ',
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-              ),
-            ),
-          ],
-        ),
+        _rangeFields(budgetMin, budgetMax),
       ],
     );
   }
 }
 
-/// Nudges the requestor to attach a photo so the Gemini assists (description
-/// and price) can analyse it - the assists pass the first photo to the model,
-/// so a photo of the actual problem yields a sharper draft and estimate. Once
-/// a photo is attached it flips to a confirmation.
+// Nudges the user to add a photo for the AI assists; flips to a confirmation once added.
 class _PhotoAssistHint extends StatelessWidget {
   const _PhotoAssistHint({required this.hasPhoto, required this.onAddPhoto});
   final bool hasPhoto;
@@ -1424,36 +1248,7 @@ class _PhotoAssistHint extends StatelessWidget {
   }
 }
 
-/// A small "✨ assist" text button that swaps its icon for a spinner while
-/// the suggestion call is in flight. Used by both Gemini assists.
-class _AssistButton extends StatelessWidget {
-  const _AssistButton({
-    required this.label,
-    required this.busy,
-    required this.onPressed,
-  });
-
-  final String label;
-  final bool busy;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton.icon(
-      onPressed: busy ? null : onPressed,
-      icon: busy
-          ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : const Icon(Icons.auto_awesome, size: 18),
-      label: Text(label),
-    );
-  }
-}
-
-/// Lets the requestor tick which bundle tasks a photo shows; none = all.
+// Lets the user tick which bundle tasks a photo shows; none = all.
 class _PhotoTasksSheet extends StatefulWidget {
   const _PhotoTasksSheet({required this.taskTitles, required this.selected});
   final List<String> taskTitles;
@@ -1514,7 +1309,6 @@ class _PhotoThumb extends StatelessWidget {
   final String url;
   final VoidCallback onRemove;
 
-  /// Bundle mode only: which tasks the photo shows, tappable to change.
   final String? tagLabel;
   final VoidCallback? onTag;
 
@@ -1529,7 +1323,6 @@ class _PhotoThumb extends StatelessWidget {
             url,
             width: 80,
             height: 80,
-            // Decode at display size, not the full upload size.
             cacheWidth: (80 * MediaQuery.devicePixelRatioOf(context)).round(),
             fit: BoxFit.cover,
             loadingBuilder: (context, child, loadingProgress) {

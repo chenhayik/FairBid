@@ -19,11 +19,13 @@ import '../domain/bid.dart';
 import '../domain/bundle.dart';
 import '../domain/bundle_bid.dart';
 import '../domain/job.dart';
+import 'bundle/bundle_header.dart';
 import 'widgets/job_card.dart';
 import 'widgets/status_colors.dart';
 
-/// The "My Jobs" tab. Requestors see the jobs they've posted; providers see
-/// the jobs they've won and their pending bids.
+/// What:   The My Jobs tab.
+/// Input:  Signed-in user from AuthController; jobs, bundles and bids from their repositories.
+/// Output: Requestor: posted jobs and bundles with a status filter. Provider: won jobs and pending bids.
 class MyJobsScreen extends StatelessWidget {
   const MyJobsScreen({super.key});
 
@@ -61,27 +63,6 @@ class MyJobsScreen extends StatelessWidget {
   }
 }
 
-/// The status filters offered on the requestor's job list - one per
-/// [JobStatus], plus "All", so no job is ever hidden.
-enum _JobFilter {
-  all('All'),
-  open('Open'),
-  inProgress('In progress'),
-  completed('Completed'),
-  cancelled('Cancelled');
-
-  const _JobFilter(this.label);
-  final String label;
-
-  bool matches(JobStatus status) => switch (this) {
-        _JobFilter.all => true,
-        _JobFilter.open => status == JobStatus.open,
-        _JobFilter.inProgress => status == JobStatus.inProgress,
-        _JobFilter.completed => status == JobStatus.completed,
-        _JobFilter.cancelled => status == JobStatus.cancelled,
-      };
-}
-
 class _RequestorJobs extends StatefulWidget {
   const _RequestorJobs({required this.uid});
   final String uid;
@@ -91,7 +72,7 @@ class _RequestorJobs extends StatefulWidget {
 }
 
 class _RequestorJobsState extends State<_RequestorJobs> {
-  _JobFilter _filter = _JobFilter.all;
+  JobStatus? _filter; // null means All
 
   @override
   Widget build(BuildContext context) {
@@ -100,9 +81,7 @@ class _RequestorJobsState extends State<_RequestorJobs> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Outside the builder: the filter row is part of the screen's chrome,
-        // so it must survive the loading, empty and error states instead of
-        // disappearing along with the list it controls.
+        // Outside the builder so it survives the loading, empty and error states.
         _JobFilterBar(
           selected: _filter,
           onSelected: (f) => setState(() => _filter = f),
@@ -130,8 +109,6 @@ class _RequestorJobsState extends State<_RequestorJobs> {
                   message: 'Post a job to start receiving bids.',
                 );
               }
-              // A bundle's own tasks group under one card below, so this
-              // stream only needs to exist once a job actually has a bundleId.
               return KeyedStreamBuilder<List<Bundle>>(
                 cacheKey: widget.uid,
                 create: () => bundles.watchMyBundles(widget.uid),
@@ -148,9 +125,7 @@ class _RequestorJobsState extends State<_RequestorJobs> {
     );
   }
 
-  /// Groups [allJobs] with a `bundleId` under their [bundles] card (falling
-  /// back to a plain [JobCard] if unloaded); the status filter only narrows
-  /// the standalone jobs, since a bundle's progress line covers its tasks.
+  /// Groups bundle tasks under their [bundles] card (a plain [JobCard] if it hasn't loaded).
   Widget _list(BuildContext context, List<Job> allJobs, List<Bundle> bundles) {
     final bundleById = {for (final b in bundles) b.id: b};
     final tasksByBundle = <String, List<Job>>{};
@@ -164,7 +139,7 @@ class _RequestorJobsState extends State<_RequestorJobs> {
       }
     }
     final filteredStandalone =
-        standalone.where((j) => _filter.matches(j.status)).toList();
+        standalone.where((j) => _filter == null || j.status == _filter).toList();
 
     final bundleCards = <Widget>[];
     for (final entry in tasksByBundle.entries) {
@@ -176,11 +151,10 @@ class _RequestorJobsState extends State<_RequestorJobs> {
         }
         continue;
       }
-      // With a filter active, hide the card unless a task matches it, and
-      // show only the matching tasks; the progress line still counts all.
-      final visibleTasks = _filter == _JobFilter.all
+      // Hide the card unless a task matches the filter; the progress line still counts all.
+      final visibleTasks = _filter == null
           ? entry.value
-          : entry.value.where((t) => _filter.matches(t.status)).toList();
+          : entry.value.where((t) => t.status == _filter).toList();
       if (visibleTasks.isEmpty) continue;
       bundleCards.add(BundleJobsCard(
           bundle: bundle, allTasks: entry.value, tasks: visibleTasks));
@@ -195,7 +169,7 @@ class _RequestorJobsState extends State<_RequestorJobs> {
     if (items.isEmpty) {
       return EmptyState(
         icon: Icons.filter_list_off,
-        title: 'No ${_filter.label.toLowerCase()} jobs',
+        title: 'No ${_filter?.label.toLowerCase() ?? 'matching'} jobs',
         message: 'Try a different filter to see your other jobs.',
       );
     }
@@ -208,12 +182,9 @@ class _RequestorJobsState extends State<_RequestorJobs> {
   }
 }
 
-/// One requestor bundle card: title (tapping opens the bundle screen), a
-/// progress line from its tasks' statuses, status pill, and a task row each.
-///
-/// [tasks] are the rows actually shown (narrowed by the active status
-/// filter); [allTasks] always covers every task so the progress line stays
-/// accurate regardless of the filter. Defaults to showing every task.
+/// What:   Requestor's bundle card: title, progress line, status pill, one row per task.
+/// Input:  [bundle]; [allTasks] for the progress line; [tasks] shown (filtered, default all).
+/// Output: Tappable card that opens the bundle screen.
 class BundleJobsCard extends StatelessWidget {
   const BundleJobsCard({
     super.key,
@@ -257,10 +228,6 @@ class BundleJobsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Bidding has quietly ended (past deadline, server sweep hasn't landed
-    // yet) - "Open" would otherwise mislead a requestor into thinking bids
-    // are still coming in.
-    final closed = bundle.status == BundleStatus.open && !bundle.biddingOpen;
     return AppCard(
       onTap: () => context.push('/bundles/${bundle.id}'),
       child: Column(
@@ -283,11 +250,7 @@ class BundleJobsCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              PillBadge(
-                  label: closed ? 'Closed' : bundle.status.label,
-                  color: closed
-                      ? theme.colorScheme.onSurfaceVariant
-                      : bundleStatusColor(context, bundle.status)),
+              BundleStatusPill(bundle: bundle),
             ],
           ),
           const SizedBox(height: 12),
@@ -302,8 +265,7 @@ class BundleJobsCard extends StatelessWidget {
   }
 }
 
-/// One task inside a [BundleJobsCard]: its title and status, tapping through
-/// to the task's own job detail screen.
+// One task row in a [BundleJobsCard]; taps through to the task.
 class _BundleTaskRow extends StatelessWidget {
   const _BundleTaskRow({required this.task, required this.onTap});
   final Job task;
@@ -342,11 +304,11 @@ class _BundleTaskRow extends StatelessWidget {
   }
 }
 
-/// Horizontally-scrollable single-select status filter for the job list.
+// Horizontally scrolling single-select status filter; null means All.
 class _JobFilterBar extends StatelessWidget {
   const _JobFilterBar({required this.selected, required this.onSelected});
-  final _JobFilter selected;
-  final ValueChanged<_JobFilter> onSelected;
+  final JobStatus? selected;
+  final ValueChanged<JobStatus?> onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -355,13 +317,13 @@ class _JobFilterBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
       child: Row(
         children: [
-          for (final f in _JobFilter.values)
+          for (final status in [null, ...JobStatus.values])
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
-                label: Text(f.label),
-                selected: selected == f,
-                onSelected: (_) => onSelected(f),
+                label: Text(status?.label ?? 'All'),
+                selected: selected == status,
+                onSelected: (_) => onSelected(status),
               ),
             ),
         ],
@@ -370,8 +332,7 @@ class _JobFilterBar extends StatelessWidget {
   }
 }
 
-/// Provider view: the jobs they've won, then their still-pending bids (both
-/// ordinary per-job bids and package bids on a bundle).
+// Provider view: won jobs, then pending per-job and package bids.
 class _ProviderJobs extends StatelessWidget {
   const _ProviderJobs({required this.uid});
   final String uid;
@@ -471,7 +432,7 @@ class _ProviderJobs extends StatelessWidget {
   }
 }
 
-/// A provider's pending bid: amount + when, tappable through to the job.
+// A pending per-job bid; taps through to the job.
 class _PendingBidTile extends StatelessWidget {
   const _PendingBidTile({required this.bid});
   final Bid bid;
@@ -489,9 +450,7 @@ class _PendingBidTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Scales down rather than wraps - beside the pill and
-                  // chevron, a plain wrapping Text split a large figure like
-                  // "RM 13,000.00" mid-number at larger text scales.
+                  // Scales down instead of wrapping mid-number at large text scales.
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
@@ -514,10 +473,8 @@ class _PendingBidTile extends StatelessWidget {
   }
 }
 
-/// A provider's pending package bid on a bundle: title, task count, quoted
-/// total. No provider-facing bundle screen, so tapping opens the covered
-/// task with the lowest [Job.bundleOrder] - not just `taskPrices.keys.first`,
-/// which is a Firestore map and carries no ordering guarantee.
+// A pending package bid. Opens the covered task with the lowest bundleOrder
+// (the taskPrices map has no ordering guarantee).
 class _PendingBundleBidTile extends StatelessWidget {
   const _PendingBundleBidTile({required this.bid});
   final BundleBid bid;
@@ -542,8 +499,6 @@ class _PendingBundleBidTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // The "(bundle price)" note moved to the caption line below - inline, it
-    // was one more reason the amount ran out of room and wrapped mid-number.
     final caption = [
       bid.bundleTitle,
       plural(bid.taskCount, 'task'),
@@ -555,8 +510,6 @@ class _PendingBundleBidTile extends StatelessWidget {
           children: [
             Icon(Icons.inventory_2_outlined, color: context.fairbid.verified),
             const SizedBox(width: 12),
-            // Same primary/secondary hierarchy as _PendingBidTile's amount +
-            // caption, so the two tile types read consistently in one list.
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

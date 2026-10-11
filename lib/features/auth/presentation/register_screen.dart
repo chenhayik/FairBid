@@ -5,13 +5,15 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/form_widgets.dart';
-import '../data/auth_config.dart';
+import '../../../core/widgets/icon_choice_card.dart';
 import '../domain/user_role.dart';
 import 'auth_controller.dart';
+import 'mfa_code_sheet.dart';
 import 'validators.dart';
 
-/// "Join FairBid" - create account with Hire / Work role cards, terms
-/// agreement, and Google sign-up, matching the design mock.
+/// What:   Sign-up screen: Hire / Work role cards, form, terms checkbox and Google sign-up.
+/// Input:  [AuthController] (auth_controller.dart).
+/// Output: Registers the account; the router redirect then continues the flow.
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
@@ -54,8 +56,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _google() async {
-    // Use the role picked above if this Google account is brand new.
-    await context.read<AuthController>().signInWithGoogle(roleIfNew: _role);
+    // The picked role applies only if this Google account is new.
+    final auth = context.read<AuthController>();
+    await auth.signInWithGoogle(roleIfNew: _role);
+    if (!mounted) return;
+    final challenge = auth.takePendingChallenge();
+    if (challenge != null) await MfaCodeSheet.show(context, challenge: challenge);
   }
 
   @override
@@ -92,7 +98,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ErrorBanner(auth.errorMessage!),
                   Text('I WANT TO...', style: theme.textTheme.labelMedium),
                   const SizedBox(height: 8),
-                  _RoleCard(
+                  IconChoiceCard(
                     icon: Icons.person_search_outlined,
                     title: 'Hire',
                     subtitle: 'Find talent for projects',
@@ -100,7 +106,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     onTap: () => setState(() => _role = UserRole.requestor),
                   ),
                   const SizedBox(height: 12),
-                  _RoleCard(
+                  IconChoiceCard(
                     icon: Icons.work_outline,
                     title: 'Work',
                     subtitle: 'Offer my services',
@@ -150,9 +156,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ],
                     ),
                   ),
-                  _TermsCheckbox(
+                  CheckboxListTile(
                     value: _agreedToTerms,
-                    onChanged: (v) => setState(() => _agreedToTerms = v),
+                    onChanged: (v) => setState(() => _agreedToTerms = v!),
+                    activeColor: context.fairbid.verified,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'I agree to the Terms of Service and Privacy Policy.',
+                      style: theme.textTheme.bodyMedium,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   PrimaryButton(
@@ -162,7 +175,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                   const OrDivider(),
                   GoogleButton(
-                    enabled: !auth.isBusy && isGoogleSignInConfigured,
+                    enabled: !auth.isBusy,
                     onPressed: _google,
                   ),
                   const SizedBox(height: 24),
@@ -192,86 +205,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// "Hire" / "Work" selectable card with a leading icon tile.
-class _RoleCard extends StatelessWidget {
-  const _RoleCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final brand = context.fairbid.verified;
-    return SelectableCard(
-      selected: selected,
-      onTap: onTap,
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: context.fairbid.subtleBlue,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: brand),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.titleLarge),
-                Text(subtitle,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant)),
-              ],
-            ),
-          ),
-          if (selected) Icon(Icons.check_circle, color: brand),
-        ],
-      ),
-    );
-  }
-}
-
-class _TermsCheckbox extends StatelessWidget {
-  const _TermsCheckbox({required this.value, required this.onChanged});
-
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Checkbox(
-          value: value,
-          onChanged: (v) => onChanged(v ?? false),
-          activeColor: context.fairbid.verified,
-        ),
-        Expanded(
-          child: Text(
-            'I agree to the Terms of Service and Privacy Policy.',
-            style: theme.textTheme.bodyMedium,
-          ),
-        ),
-      ],
     );
   }
 }

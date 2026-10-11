@@ -1,16 +1,6 @@
-/**
- * MyKad ID check (automated verification, advisory).
- *
- * Fires on every `verification/{uid}/id_document_*` upload: OCRs the card with
- * Cloud Vision, cross-checks it against the IC the applicant typed and their
- * account name, and writes a verdict to the owner+admin-only
- * `users/{uid}/private/idExtract`. An admin still makes the final decision.
- *
- * Privacy: the verdict never holds the name, DOB, full IC, religion or
- * address - only a masked IC and booleans. Duplicate detection stores only an
- * HMAC of the IC in `idRegistry` (server-only), never the number itself.
- * Mirrors ssm.js.
- */
+// MyKad ID check (advisory; an admin still decides). The verdict never holds
+// the name, DOB, full IC, religion or address - only a masked IC and booleans.
+// Duplicate detection stores only an HMAC of the IC in `idRegistry`.
 
 const crypto = require("node:crypto");
 const functions = require("firebase-functions/v1");
@@ -34,14 +24,22 @@ const HARD_FAILURES = [
   "duplicate-ic",
 ];
 
-/** passed / rejected (any hard failure) / needsReview. */
+/**
+ * What:   Verdict from a list of failure codes.
+ * Input:  [failures] (strings).
+ * Output: "passed", "rejected" (any hard failure) or "needsReview".
+ */
 function verdictFor(failures) {
   if (failures.length === 0) return "passed";
   return failures.some((f) => HARD_FAILURES.includes(f)) ?
       "rejected" : "needsReview";
 }
 
-/** Keyed hash of a 12-digit IC; the pepper keeps the registry unguessable. */
+/**
+ * What:   Registry key for an IC.
+ * Input:  An IC number and the secret [pepper].
+ * Output: Hex HMAC-SHA256 of the normalised IC; the pepper keeps it unguessable.
+ */
 function icKey(ic, pepper) {
   return crypto.createHmac("sha256", pepper).update(normalizeIc(ic))
       .digest("hex");
@@ -58,9 +56,9 @@ function vision() {
 }
 
 /**
- * Looks the IC up in `idRegistry` and, when `reserve` is set, claims it for
- * this uid (dropping any older claim). Returns true when another account
- * already holds the typed or OCR IC.
+ * Looks the IC up in `idRegistry`; with `reserve`, claims it for [uid] and
+ * drops any older claim. Returns true when another account holds the typed or
+ * OCR IC.
  */
 function checkRegistry(uid, typed, ocrIc, reserve, pepper) {
   const db = admin.firestore();
@@ -82,6 +80,12 @@ function checkRegistry(uid, typed, ocrIc, reserve, pepper) {
   });
 }
 
+/**
+ * What:   Storage trigger that checks an uploaded MyKad photo.
+ * Input:  verification/{uid}/id_document_* uploads.
+ * Output: Verdict in users/{uid}/private/idExtract from Cloud Vision OCR, the
+ *         typed IC, the account name and the duplicate registry.
+ */
 exports.extractIdDocument = functions
     .runWith({memory: "512MB", timeoutSeconds: 120, secrets: [icPepper]})
     .storage.object().onFinalize(async (object) => {
@@ -174,9 +178,11 @@ exports.extractIdDocument = functions
     });
 
 /**
- * Deletes the applicant's ID photo, selfie and typed IC once an admin has
- * ruled. Keeps `idExtract`, `idRegistry` and `idConsentAt` (proof of consent). Best-effort: never blocks a
- * decision that is already recorded.
+ * What:   Deletes the applicant's ID photo, selfie and typed IC.
+ * Input:  [uid]; called by onVerificationDecided.
+ * Output: Files and the private fields removed; `idExtract`, `idRegistry` and
+ *         `idConsentAt` (proof of consent) are kept.
+ * Notes:  Best-effort: never blocks a recorded decision.
  */
 exports.deleteIdDocuments = async (uid) => {
   try {
@@ -197,6 +203,6 @@ exports.deleteIdDocuments = async (uid) => {
   }
 };
 
-// Exported for unit testing.
+// Exported for tests.
 exports.verdictFor = verdictFor;
 exports.icKey = icKey;

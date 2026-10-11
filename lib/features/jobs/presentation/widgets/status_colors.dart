@@ -5,7 +5,7 @@ import '../../domain/bundle.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 
-/// Pill colour for a job status, shared by every job and task list.
+/// Pill colour for a job status.
 Color jobStatusColor(BuildContext context, JobStatus status) =>
     switch (status) {
       JobStatus.open => context.fairbid.verified,
@@ -14,7 +14,7 @@ Color jobStatusColor(BuildContext context, JobStatus status) =>
       JobStatus.cancelled => Theme.of(context).colorScheme.onSurfaceVariant,
     };
 
-/// Pill colour for a bundle status, matching [jobStatusColor].
+/// Pill colour for a bundle status.
 Color bundleStatusColor(BuildContext context, BundleStatus status) =>
     switch (status) {
       BundleStatus.open => context.fairbid.verified,
@@ -23,8 +23,7 @@ Color bundleStatusColor(BuildContext context, BundleStatus status) =>
       BundleStatus.expired => Theme.of(context).colorScheme.onSurfaceVariant,
     };
 
-/// Pill colour for a provider's own bundle bid once the award has decided it
-/// - accepted/partly accepted/rejected/closed - matching [jobStatusColor].
+/// Pill colour for a bundle bid status.
 Color bundleBidStatusColor(BuildContext context, BundleBidStatus status) =>
     switch (status) {
       BundleBidStatus.accepted => context.fairbid.successText,

@@ -12,7 +12,9 @@ import '../../home/presentation/home_app_bar.dart';
 import '../data/chat_repository.dart';
 import '../domain/conversation.dart';
 
-/// The "Messages" tab: the user's conversations, most recently active first.
+/// What:   The Messages tab: the user's conversations, most recently active first.
+/// Input:  ChatRepository.watchConversations(uid) (chat_repository.dart).
+/// Output: Tiles that open `/messages/{id}`, or an empty state.
 class MessagesScreen extends StatelessWidget {
   const MessagesScreen({super.key});
 
@@ -90,8 +92,7 @@ class _NoConversations extends StatelessWidget {
   }
 }
 
-/// One conversation: counterparty name, job title, last-message preview,
-/// relative time and an unread-count pill.
+/// One conversation row: counterparty, job title, preview, time and unread pill.
 class _ConversationTile extends StatelessWidget {
   const _ConversationTile({required this.conversation, required this.myUid});
   final Conversation conversation;

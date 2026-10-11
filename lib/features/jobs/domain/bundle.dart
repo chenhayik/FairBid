@@ -6,13 +6,6 @@ enum BundleStatus {
   cancelled,
   expired;
 
-  String get storage => switch (this) {
-    BundleStatus.open => 'open',
-    BundleStatus.awarded => 'awarded',
-    BundleStatus.cancelled => 'cancelled',
-    BundleStatus.expired => 'expired',
-  };
-
   String get label => switch (this) {
     BundleStatus.open => 'Open',
     BundleStatus.awarded => 'Awarded',
@@ -20,14 +13,13 @@ enum BundleStatus {
     BundleStatus.expired => 'Expired',
   };
 
-  static BundleStatus fromStorage(String? value) => switch (value) {
-    'awarded' => BundleStatus.awarded,
-    'cancelled' => BundleStatus.cancelled,
-    'expired' => BundleStatus.expired,
-    _ => BundleStatus.open,
-  };
+  static BundleStatus fromStorage(String? value) =>
+      values.asNameMap()[value] ?? BundleStatus.open;
 }
 
+/// What:   A bundled posting of several tasks (one doc in `bundles`).
+/// Input:  Firestore data via FirestoreBundleRepository (bundle_repository.dart).
+/// Output: Immutable model; tasks are jobs that carry its `bundleId`.
 class Bundle {
   const Bundle({
     required this.id,
@@ -40,8 +32,6 @@ class Bundle {
     this.photoUrls = const [],
     this.status = BundleStatus.open,
     this.taskIds = const [],
-    this.consolidationCapPct = 0,
-    this.consolidationCapSen = 0,
     this.createdAt,
     this.deadline,
   });
@@ -59,9 +49,6 @@ class Bundle {
 
   final List<String> taskIds;
 
-  final int consolidationCapPct;
-  final int consolidationCapSen;
-
   final DateTime? createdAt;
   final DateTime? deadline;
 
@@ -71,7 +58,6 @@ class Bundle {
       status == BundleStatus.open &&
       (deadline == null || DateTime.now().isBefore(deadline!));
 
-  // Builds a Bundle from its document id and data map.
   factory Bundle.fromMap(String id, Map<String, dynamic> m) => Bundle(
     id: id,
     requestorId: m['requestorId'] as String? ?? '',
@@ -84,13 +70,14 @@ class Bundle {
         (m['photoUrls'] as List?)?.whereType<String>().toList() ?? const [],
     status: BundleStatus.fromStorage(m['status'] as String?),
     taskIds: (m['taskIds'] as List?)?.whereType<String>().toList() ?? const [],
-    consolidationCapPct: (m['consolidationCapPct'] as num?)?.toInt() ?? 0,
-    consolidationCapSen: (m['consolidationCapSen'] as num?)?.toInt() ?? 0,
     createdAt: m['createdAt'] as DateTime?,
     deadline: m['deadline'] as DateTime?,
   );
 }
 
+/// What:   One task of a bundle being created.
+/// Input:  Post-a-Job form fields.
+/// Output: [toMap] for the `createBundle` callable.
 class BundleTaskDraft {
   const BundleTaskDraft({
     required this.title,

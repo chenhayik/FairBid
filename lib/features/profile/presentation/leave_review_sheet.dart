@@ -12,9 +12,9 @@ import '../../jobs/domain/job.dart';
 import '../data/review_repository.dart';
 import '../domain/review.dart';
 
-/// Bottom sheet where one party reviews the other after a completed [job]. A
-/// 1–5 star selector plus an optional comment; submitting recomputes the
-/// reviewee's Bayesian Trust Score inside the repository transaction.
+/// What:   Bottom sheet where one party reviews the other after a completed [job]: 1-5 stars plus an optional comment.
+/// Input:  [job], [reviewer], [revieweeId], [revieweeName], optional [bundleId]; ReviewRepository.leaveReview().
+/// Output: [show] resolves `true` once a review exists; a Cloud Function then recomputes the reviewee's Trust Score.
 class LeaveReviewSheet extends StatefulWidget {
   const LeaveReviewSheet({
     super.key,
@@ -30,12 +30,9 @@ class LeaveReviewSheet extends StatefulWidget {
   final String revieweeId;
   final String revieweeName;
 
-  /// The bundle to key the review by, when [job] is still a live bundle
-  /// task; null reviews it by job id as today.
+  /// The bundle to key the review by when [job] is a live bundle task; else keyed by job id.
   final String? bundleId;
 
-  /// Opens the sheet. Resolves to `true` once a review exists for this job
-  /// (freshly left, or already present), or `null`/`false` if dismissed.
   static Future<bool?> show(
     BuildContext context, {
     required Job job,
@@ -84,7 +81,7 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
       _error = null;
     });
     final review = Review(
-      id: '', // Doc id is derived from the job + reviewer in the repository.
+      id: '', // The repository derives the doc id.
       reviewerId: widget.reviewer.uid,
       reviewerName: widget.reviewer.displayName ?? 'User',
       reviewerPhotoUrl: widget.reviewer.profilePhotoUrl,
@@ -164,7 +161,7 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
   }
 }
 
-/// Tappable row of five stars driving the review rating (1–5).
+/// Tappable row of five stars.
 class _StarSelector extends StatelessWidget {
   const _StarSelector({required this.rating, required this.onChanged});
 

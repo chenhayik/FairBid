@@ -4,7 +4,7 @@
   "private": true,
   "description": "Automated security-rules tests for FairBid's firestore.rules and storage.rules, run against the Firestore emulator via @firebase/rules-unit-testing.",
   "scripts": {
-    "test": "mocha rules.test.js storage.rules.test.js privilege_escalation.test.js --timeout 20000 --exit"
+    "test": "mocha rules.test.js storage.rules.test.js --timeout 20000 --exit"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",

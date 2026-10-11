@@ -1,33 +1,18 @@
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
-/// Uploads images and returns their download URLs. Verification docs are
-/// owner-only; job photos and avatars are readable by signed-in users.
+/// What:   Storage upload API returning download URLs.
+/// Input:  Firebase Storage via FirebaseDocumentStorageRepository; a fake in tests.
+/// Output: URLs; verification docs are owner-only, job photos and avatars readable by signed-in users.
 abstract interface class DocumentStorageRepository {
-  /// Uploads a verification image (ID, selfie, certificate, portfolio).
-  /// [purpose] becomes part of the file name.
+  /// Uploads a verification file; [purpose] becomes the file-name prefix (`ssm_document` and `ssm_profile` are matched by `extractSsmDocument`).
   Future<String> uploadVerificationImage({
     required String uid,
     required String purpose,
     required XFile file,
   });
 
-  /// Uploads an SSM document exactly as picked (re-encoding breaks its seal).
-  /// Keep the `ssm_document_` prefix; `extractSsmDocument` matches on it.
-  Future<String> uploadSsmDocument({
-    required String uid,
-    required XFile file,
-  });
-
-  /// Uploads the optional SSM Business Profile. The server reads it once, then
-  /// deletes it because it holds an NRIC, birth date and home address.
-  Future<String> uploadSsmProfile({
-    required String uid,
-    required XFile file,
-  });
-
-  /// Uploads a profile photo under `avatars/{uid}/`. Signed-in users can read
-  /// (see `storage.rules`) because it shows on bids, jobs, chats and reviews.
+  /// Uploads a profile photo under `avatars/{uid}/`, readable by signed-in users.
   Future<String> uploadAvatar({
     required String uid,
     required XFile file,
@@ -39,25 +24,26 @@ abstract interface class DocumentStorageRepository {
     required XFile file,
   });
 
-  /// Uploads dispute photo evidence under owner+admin-only `disputes/{uid}/`.
+  /// Uploads dispute evidence under owner+admin-only `disputes/{uid}/`.
   Future<String> uploadDisputeEvidence({
     required String uid,
     required XFile file,
   });
 
-  /// Best-effort delete of a previously uploaded file (failures are non-fatal).
+  /// Deletes an uploaded file by URL.
   Future<void> deleteByUrl(String url);
 }
 
-/// Firebase Storage implementation.
+/// What:   Firebase Storage [DocumentStorageRepository].
+/// Input:  XFile from the pickers.
+/// Output: Upload with a 60s timeout; returns the download URL.
 class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   FirebaseDocumentStorageRepository({FirebaseStorage? storage})
       : _storage = storage ?? FirebaseStorage.instance;
 
   final FirebaseStorage _storage;
 
-  /// Fail instead of waiting forever if an upload stalls (flaky networks,
-  /// Android emulators).
+  /// Fail instead of hanging on a stalled upload.
   static const _uploadTimeout = Duration(seconds: 60);
 
   @override
@@ -65,37 +51,16 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
     required String uid,
     required String purpose,
     required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload('verification/$uid/${purpose}_$timestamp', file);
-  }
-
-  @override
-  Future<String> uploadSsmDocument({
-    required String uid,
-    required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload('verification/$uid/ssm_document_$timestamp', file);
-  }
-
-  @override
-  Future<String> uploadSsmProfile({
-    required String uid,
-    required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload('verification/$uid/ssm_profile_$timestamp', file);
-  }
+  }) =>
+      _upload('verification/$uid/${purpose}_', file);
 
   @override
   Future<String> uploadAvatar({
     required String uid,
     required XFile file,
   }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
     return _upload(
-      'avatars/$uid/$timestamp',
+      'avatars/$uid/',
       file,
       contentType: file.mimeType ?? 'image/jpeg',
     );
@@ -105,33 +70,30 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   Future<String> uploadJobPhoto({
     required String uid,
     required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload('jobs/$uid/$timestamp', file);
-  }
+  }) =>
+      _upload('jobs/$uid/', file);
 
   @override
   Future<String> uploadDisputeEvidence({
     required String uid,
     required XFile file,
-  }) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return _upload('disputes/$uid/$timestamp', file);
-  }
+  }) =>
+      _upload('disputes/$uid/', file);
 
   @override
   Future<void> deleteByUrl(String url) => _storage.refFromURL(url).delete();
 
-  /// Uploads [file] at [pathWithoutExt] and returns its download URL.
+  /// Uploads [file] at `[prefix]<timestamp><ext>` and returns its download URL.
   /// [contentType] overrides the mime type; [timeout] the default time limit.
   Future<String> _upload(
-    String pathWithoutExt,
+    String prefix,
     XFile file, {
     String? contentType,
     Duration? timeout,
   }) async {
     final effectiveTimeout = timeout ?? _uploadTimeout;
-    final ref = _storage.ref('$pathWithoutExt${_extensionOf(file.name)}');
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final ref = _storage.ref('$prefix$timestamp${_extensionOf(file.name)}');
     final bytes = await file.readAsBytes();
     await ref
         .putData(
@@ -142,8 +104,7 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
     return ref.getDownloadURL().timeout(effectiveTimeout);
   }
 
-  /// Content type: the override, else the file's mime type, else its extension.
-  /// file_picker gives no mimeType on Android/iOS, so the extension matters.
+  /// The override, else the mime type, else guessed from the extension (file_picker gives no mime on mobile).
   String _contentTypeFor(String? override, XFile file) {
     if (override != null) return override;
     final mime = file.mimeType;

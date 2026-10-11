@@ -16,6 +16,7 @@ import '../../../../core/util/time_ago.dart';
 import '../../../../core/util/visit_time.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
+import '../../../../core/widgets/keyed_stream_builder.dart';
 import '../../../../core/widgets/user_chip.dart';
 import '../../../auth/domain/app_user.dart';
 import '../../../auth/domain/user_role.dart';
@@ -47,9 +48,10 @@ import 'milestone_section.dart';
 import 'photo_strip.dart';
 import 'propose_time_sheet.dart';
 
-/// Job detail screen. Sections keep a fixed order; only which ones show varies.
-/// A pinned bottom bar holds the main action; rare ones go in the menu.
-class JobDetailScreen extends StatefulWidget {
+/// What:   Job detail screen for any viewer.
+/// Input:  Job via JobRepository.watchJob(jobId) (job_repository.dart); [fromBundle] from ?from=bundle.
+/// Output: Loading/error/not-found state, else _JobDetailBody.
+class JobDetailScreen extends StatelessWidget {
   const JobDetailScreen({
     super.key,
     required this.jobId,
@@ -58,23 +60,14 @@ class JobDetailScreen extends StatefulWidget {
 
   final String jobId;
 
-  /// Set when opened from the bundle screen, so "View bundle" goes back.
+  /// Makes "View bundle" pop back instead of pushing.
   final bool fromBundle;
 
   @override
-  State<JobDetailScreen> createState() => _JobDetailScreenState();
-}
-
-class _JobDetailScreenState extends State<JobDetailScreen> {
-  // Cached so rebuilds don't resubscribe to Firestore.
-  late final Stream<Job?> _job = context.read<JobRepository>().watchJob(
-    widget.jobId,
-  );
-
-  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<Job?>(
-      stream: _job,
+    return KeyedStreamBuilder<Job?>(
+      cacheKey: jobId,
+      create: () => context.read<JobRepository>().watchJob(jobId),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return Scaffold(
@@ -83,7 +76,6 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
           );
         }
         // A failed stream also emits null; don't mistake it for a removed job.
-        // Ask the user to reopen, since a retry would not work.
         if (snapshot.hasError) {
           return Scaffold(
             appBar: AppBar(title: const Text('Job details')),
@@ -111,20 +103,13 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
             ),
           );
         }
-        return _JobDetailBody(job: job, fromBundle: widget.fromBundle);
+        return _JobDetailBody(job: job, fromBundle: fromBundle);
       },
     );
   }
 }
 
-/// Whether [status] is a terminal escrow state - money has finished moving.
-bool _isMilestoneTerminal(MilestoneStatus status) =>
-    status == MilestoneStatus.released ||
-    status == MilestoneStatus.resolved ||
-    status == MilestoneStatus.refunded;
-
-/// Opens (or creates) the job's chat thread. Used by the message tile
-/// and by the bottom bar button.
+/// Opens (or creates) the job's chat thread.
 Future<void> _openJobChat(BuildContext context, Job job) async {
   try {
     final id = await context.read<ChatRepository>().openConversation(job);
@@ -132,7 +117,6 @@ Future<void> _openJobChat(BuildContext context, Job job) async {
     context.push('/messages/$id');
   } catch (_) {
     if (!context.mounted) return;
-    // Clear old snackbars so the same error isn't shown twice.
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -149,27 +133,14 @@ Future<void> _withdrawBid(
   String jobId,
   String uid,
 ) async {
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Withdraw your bid?'),
-      content: const Text(
-        'Your bid will be removed from this job. You can bid again while '
+  final confirmed = await showConfirmDialog(
+    context,
+    title: 'Withdraw your bid?',
+    body: 'Your bid will be removed from this job. You can bid again while '
         'the job is still open.',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('Withdraw'),
-        ),
-      ],
-    ),
+    actionLabel: 'Withdraw',
   );
-  if (confirmed != true || !context.mounted) return;
+  if (!confirmed || !context.mounted) return;
   try {
     await context.read<BidRepository>().withdrawBid(jobId, uid);
     if (!context.mounted) return;
@@ -191,7 +162,6 @@ Future<void> _withdrawBid(
   }
 }
 
-/// Icon shown against a timeline entry, keyed by [JobEvent.type].
 IconData _timelineIcon(String type) => switch (type) {
   'posted' => Icons.post_add,
   'assigned' => Icons.handshake_outlined,
@@ -212,7 +182,6 @@ IconData _timelineIcon(String type) => switch (type) {
   _ => Icons.circle,
 };
 
-/// Colour for a timeline entry, keyed by [JobEvent.type].
 Color _timelineColor(BuildContext context, String type) => switch (type) {
   'cancelled' || 'disputed' => context.fairbid.danger,
   'refunded' => context.fairbid.warningText,
@@ -222,11 +191,9 @@ Color _timelineColor(BuildContext context, String type) => switch (type) {
   _ => context.fairbid.verified,
 };
 
-/// Wraps [child] with [key] so a bottom-bar button can scroll to it.
-Widget _keyed(GlobalKey key, Widget child) =>
-    KeyedSubtree(key: key, child: child);
-
-/// The loaded job body: scroll content plus the pinned bottom bar.
+/// What:   Loaded job body: the sections plus the pinned bottom bar.
+/// Input:  [job] from JobDetailScreen; own bids and milestones via streams opened here.
+/// Output: Scaffold; the bar's actions open sheets, dialogs or chat.
 class _JobDetailBody extends StatefulWidget {
   const _JobDetailBody({required this.job, required this.fromBundle});
   final Job job;
@@ -237,15 +204,14 @@ class _JobDetailBody extends StatefulWidget {
 }
 
 class _JobDetailBodyState extends State<_JobDetailBody> {
-  final _bidsSectionKey = GlobalKey();
   final _bidListKey = GlobalKey<_BidsOrBidActionState>();
 
-  // Typed so the bottom bar can trigger actions in those sections.
+  // Typed so the bottom bar can call into those sections.
   final _milestonesKey = GlobalKey<MilestoneSectionState>();
   final _reviewKey = GlobalKey<_LeaveReviewCardState>();
   final _appointmentKey = GlobalKey<AppointmentCardState>();
 
-  /// True while a milestone action runs; drives the bottom bar's busy state.
+  /// True while a milestone action runs; the bar shows busy.
   final _actionBusy = ValueNotifier<bool>(false);
 
   @override
@@ -256,8 +222,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
 
   late final String? _myUid = context.read<AuthController>().user?.uid;
 
-  /// Only a provider viewing an open job that isn't theirs needs a bid
-  /// stream. Status only moves forward, so deciding once is enough.
+  /// Open jobs only; status only moves forward, so deciding once is enough.
   late final bool _tracksMyBid =
       _myUid != null && widget.job.status == JobStatus.open;
 
@@ -265,8 +230,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
       ? context.read<BidRepository>().watchMyBid(widget.job.id, _myUid!)
       : null;
 
-  /// Only a provider on an open bundle task needs the package-bid stream.
-  /// Such a task has no per-job bid of its own.
+  /// Providers on an open bundle task bid on the package, not the task.
   late final bool _tracksMyBundleBid =
       _myUid != null &&
       widget.job.isLiveBundleTask &&
@@ -279,8 +243,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         )
       : null;
 
-  /// Feeds the bottom bar's fund/release/deliver actions. Created on first
-  /// need, since a provider and milestones can appear while this is open.
+  /// Opened on first need: a provider can be awarded while this is open.
   Stream<List<Milestone>>? _milestoneStream;
   Stream<List<Milestone>>? get _milestones {
     if (widget.job.acceptedProviderId == null) return null;
@@ -312,7 +275,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         if (bids != null && bids.canCompare) {
           bids.openCompare();
         } else {
-          _scrollTo(_bidsSectionKey);
+          _scrollTo(_bidListKey);
         }
       case JobActionKind.editBid:
         if (me != null) {
@@ -328,7 +291,6 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
       case JobActionKind.message:
         _openJobChat(context, job);
       case JobActionKind.leaveReview:
-        // Opens the sheet when a review is due, else shows why not.
         final card = _reviewKey.currentState;
         if (card != null && card.canReview) {
           card.open();
@@ -353,8 +315,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     }
   }
 
-  /// Cancels [job]. A task in an open bundle cancels the whole bundle;
-  /// other jobs use [JobRepository.cancelOpenJob].
+  /// Cancels [job]; a task in an open bundle cancels the whole bundle.
   Future<void> _cancelJob(BuildContext context, Job job) async {
     final isBundleTask = job.isLiveBundleTask;
     final taskCount = job.bundleTaskCount;
@@ -363,32 +324,18 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
               'providers will no longer be able to bid. This cannot be undone.'
         : 'Every task in this bundle will be cancelled and providers will '
               'no longer be able to bid. This cannot be undone.';
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(isBundleTask ? 'Cancel this bundle?' : 'Cancel this job?'),
-        content: Text(
-          isBundleTask
-              ? bundleBody
-              : 'Your job posting will be closed and providers will no '
-                    'longer be able to bid. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text(isBundleTask ? 'Keep bundle' : 'Keep job'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: context.fairbid.danger,
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(isBundleTask ? 'Cancel bundle' : 'Cancel job'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: isBundleTask ? 'Cancel this bundle?' : 'Cancel this job?',
+      body: isBundleTask
+          ? bundleBody
+          : 'Your job posting will be closed and providers will no '
+                'longer be able to bid. This cannot be undone.',
+      cancelLabel: isBundleTask ? 'Keep bundle' : 'Keep job',
+      actionLabel: isBundleTask ? 'Cancel bundle' : 'Cancel job',
+      danger: true,
     );
-    if (confirmed != true || !context.mounted) return;
+    if (!confirmed || !context.mounted) return;
     try {
       if (isBundleTask) {
         await context.read<BundleRepository>().cancelBundle(job.bundleId!);
@@ -396,7 +343,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         await context.read<JobRepository>().cancelOpenJob(job.id);
       }
     } on BundleRejectedException catch (e) {
-      // Written by the server for requestors, so shown as-is.
+      // Server-written for requestors, so shown as-is.
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -453,26 +400,13 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     final text = reason.text.trim();
     reason.dispose();
     if (confirmed != true || !context.mounted) return;
-    try {
-      await context.read<JobRepository>().requestCancellation(
+    await _runCall(
+      context,
+      () => context.read<JobRepository>().requestCancellation(
         job.id,
         reason: text.isEmpty ? null : text,
-      );
-    } on FirebaseFunctionsException catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.message ?? 'Something went wrong. Please try again.'),
-        ),
-      );
-    } catch (_) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Something went wrong. Please try again.'),
-        ),
-      );
-    }
+      ),
+    );
   }
 
   /// Dialog to propose a new agreed price; sends it on confirm.
@@ -554,7 +488,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     amount.dispose();
     reason.dispose();
     if (confirmed != true || newSen == null || !context.mounted) return;
-    await _runPriceChangeCall(
+    await _runCall(
       context,
       () => context.read<JobRepository>().requestPriceChange(
         job.id,
@@ -701,102 +635,70 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
 
   @override
   Widget build(BuildContext context) {
-    final job = widget.job;
     final me = context.watch<AuthController>().user;
-    final bundleBidStream = _myBundleBid;
-
-    Widget withMyBundleBid(Bid? myBid) {
-      if (bundleBidStream == null) {
-        return _scaffold(context, job, me, myBid, null);
-      }
-      return StreamBuilder<BundleBid?>(
-        stream: bundleBidStream,
-        builder: (context, snapshot) =>
-            _scaffold(context, job, me, myBid, snapshot.data),
-      );
-    }
-
-    final bidStream = _myBid;
-    if (bidStream == null) {
-      return withMyBundleBid(null);
-    }
     return StreamBuilder<Bid?>(
-      stream: bidStream,
-      builder: (context, snapshot) => withMyBundleBid(snapshot.data),
+      stream: _myBid,
+      builder: (context, bidSnap) => StreamBuilder<BundleBid?>(
+        stream: _myBundleBid,
+        builder: (context, bundleSnap) =>
+            _scaffold(context, me, bidSnap.data, bundleSnap.data),
+      ),
     );
   }
 
   Widget _scaffold(
     BuildContext context,
-    Job job,
     AppUser? me,
     Bid? myBid,
     BundleBid? myBundleBid,
   ) {
+    final job = widget.job;
     final vm = buildJobDetailVm(job, me, myBid, myBundleBid: myBundleBid);
     final milestones = _milestones;
-    // In progress, milestone data changes the bottom bar action and the
-    // sections shown (e.g. skip a message tile the bar already offers).
-    if (milestones == null || !_milestoneAware(vm, job)) {
-      return _scaffoldWithBar(
-        context,
-        job,
-        me,
-        myBid,
-        myBundleBid,
-        vm,
-        _ResolvedBar(action: vm.primaryAction, waitingLine: vm.waitingLine),
-      );
-    }
+    // The guard is needed: old data survives a switch to a null stream.
+    final aware = milestones != null && _milestoneAware(vm, job);
     return StreamBuilder<List<Milestone>>(
-      stream: milestones,
-      builder: (context, snapshot) => _scaffoldWithBar(
-        context,
-        job,
-        me,
-        myBid,
-        myBundleBid,
-        vm,
-        _resolveMilestoneBar(vm, job, snapshot.data),
-      ),
-    );
-  }
-
-  Widget _scaffoldWithBar(
-    BuildContext context,
-    Job job,
-    AppUser? me,
-    Bid? myBid,
-    BundleBid? myBundleBid,
-    JobDetailViewModel vm,
-    _ResolvedBar bar,
-  ) {
-    return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            pinned: true,
-            title: const Text('Job details'),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-            // Built eagerly so the bottom bar can reach them
-            // through their GlobalKeys.
-            sliver: SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _slots(context, job, me, myBid, myBundleBid, vm, bar),
+      stream: aware ? milestones : null,
+      builder: (context, snapshot) {
+        final bar = aware
+            ? _resolveMilestoneBar(vm, job, snapshot.data)
+            : _ResolvedBar(action: vm.primaryAction, waitingLine: vm.waitingLine);
+        return Scaffold(
+          body: CustomScrollView(
+            slivers: [
+              SliverAppBar(
+                pinned: true,
+                title: const Text('Job details'),
               ),
-            ),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                // Built eagerly so the bottom bar can reach them
+                // through their GlobalKeys.
+                sliver: SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: _slots(
+                      context,
+                      job,
+                      me,
+                      myBid,
+                      myBundleBid,
+                      vm,
+                      bar,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
-      bottomNavigationBar: _Bar(
-        action: bar.action,
-        waitingLine: bar.waitingLine,
-        busy: _actionBusy,
-        onAction: (kind) => _handleAction(context, job, me, kind, myBid),
-      ),
+          bottomNavigationBar: _Bar(
+            action: bar.action,
+            waitingLine: bar.waitingLine,
+            busy: _actionBusy,
+            onAction: (kind) => _handleAction(context, job, me, kind, myBid),
+          ),
+        );
+      },
     );
   }
 
@@ -834,8 +736,7 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
           ? AppointmentCard(key: _appointmentKey, job: job, isOwner: isOwner)
           : null,
     );
-    // A never-awarded bundle task (e.g. bundle cancelled) shows nothing here;
-    // the owner's "View bundle" is in the bar, a provider's in the banner.
+    // An unawarded task in a cancelled bundle shows nothing.
     add(
       job.isBiddingAsBundle
           ? _BundleTaskBanner(
@@ -872,20 +773,16 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     add(_DescriptionAndMedia(job: job));
     add(
       vm.showBids
-          ? _keyed(
-              _bidsSectionKey,
-              _BidsOrBidAction(
-                key: _bidListKey,
-                job: job,
-                isOwner: isOwner,
-                me: me,
-                myBid: myBid,
-              ),
+          ? _BidsOrBidAction(
+              key: _bidListKey,
+              job: job,
+              isOwner: isOwner,
+              me: me,
+              myBid: myBid,
             )
           : null,
     );
-    // showBids is false here: a bundle task has no own bid, so we'd wrongly
-    // show "Submit a bid" to a provider whose package bid covers it.
+    // showBids is false here; the bundle task has no bid of its own.
     add(
       vm.role == JobViewerRole.browser &&
               me != null &&
@@ -893,9 +790,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
               myBundleBid != null &&
               myBundleBid.status == BundleBidStatus.pending &&
               myBundleBid.coversTask(job.id)
-          ? _keyed(
-              _bidsSectionKey,
-              _YourBundleBidCard(job: job, bid: myBundleBid),
+          ? KeyedSubtree(
+              key: _bidListKey,
+              child: _YourBundleBidCard(job: job, bid: myBundleBid),
             )
           : null,
     );
@@ -935,14 +832,17 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
             )
           : null,
     );
-    // An open job has only its lone "posted" event - not worth a card.
+    // An open job has only its "posted" event.
     add(job.status != JobStatus.open ? _ActivityTimeline(job: job) : null);
 
     return slots;
   }
 }
 
-/// One plain sentence saying whose turn it is.
+Widget? _viewBundleButton(VoidCallback? onTap) => onTap == null
+    ? null
+    : TextButton(onPressed: onTap, child: const Text('View bundle'));
+
 class _StatusHeadline extends StatelessWidget {
   const _StatusHeadline({required this.vm});
   final JobDetailViewModel vm;
@@ -963,13 +863,13 @@ class _StatusHeadline extends StatelessWidget {
   }
 }
 
-/// Explains how a bundle task bids and cancels differently.
+/// What:   Banner explaining that a bundle task is bid on as a package.
+/// Input:  [job]; [onViewBundle] from _JobDetailBodyState (null for the owner, whose bar has it).
+/// Output: InfoBanner with an optional "View bundle" button.
 class _BundleTaskBanner extends StatelessWidget {
   const _BundleTaskBanner({required this.job, this.onViewBundle});
   final Job job;
 
-  /// Adds a "View bundle" button; null for the owner, whose bottom bar
-  /// already has it.
   final VoidCallback? onViewBundle;
 
   @override
@@ -977,12 +877,7 @@ class _BundleTaskBanner extends StatelessWidget {
     final count = job.bundleTaskCount;
     return InfoBanner(
       icon: Icons.inventory_2_outlined,
-      bottom: onViewBundle == null
-          ? null
-          : TextButton(
-              onPressed: onViewBundle,
-              child: const Text('View bundle'),
-            ),
+      bottom: _viewBundleButton(onViewBundle),
       title: 'Part of a bundle',
       body: count != null && count > 1
           ? 'This is one of $count tasks in a bundle. Providers bid on the '
@@ -994,8 +889,9 @@ class _BundleTaskBanner extends StatelessWidget {
   }
 }
 
-/// Banner for an awarded bundle task: names the bundle it was awarded in.
-/// Replaces [_BundleTaskBanner] while the task is live.
+/// What:   Banner for an awarded bundle task, naming its bundle.
+/// Input:  [job]; bundle title via BundleRepository.getById() (bundle_repository.dart).
+/// Output: InfoBanner with an optional "View bundle" button.
 class _AwardedBundleTaskBanner extends StatefulWidget {
   const _AwardedBundleTaskBanner({required this.job, this.onViewBundle});
   final Job job;
@@ -1019,12 +915,7 @@ class _AwardedBundleTaskBannerState extends State<_AwardedBundleTaskBanner> {
         final title = snapshot.data?.title;
         return InfoBanner(
           icon: Icons.inventory_2_outlined,
-          bottom: widget.onViewBundle == null
-              ? null
-              : TextButton(
-                  onPressed: widget.onViewBundle,
-                  child: const Text('View bundle'),
-                ),
+          bottom: _viewBundleButton(widget.onViewBundle),
           title: 'Part of a bundle',
           body:
               'Awarded as part of '
@@ -1035,8 +926,9 @@ class _AwardedBundleTaskBannerState extends State<_AwardedBundleTaskBanner> {
   }
 }
 
-/// Banner for a task the bundle left unawarded; it now takes normal bids.
-/// Replaces [_BundleTaskBanner] once `job.releasedAt` is set.
+/// What:   Banner for a task released from its bundle (it takes ordinary bids).
+/// Input:  [onViewBundle] from _JobDetailBodyState.
+/// Output: InfoBanner with an optional "View bundle" button.
 class _ReleasedBundleTaskBanner extends StatelessWidget {
   const _ReleasedBundleTaskBanner({this.onViewBundle});
   final VoidCallback? onViewBundle;
@@ -1045,13 +937,7 @@ class _ReleasedBundleTaskBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return InfoBanner(
       icon: Icons.inventory_2_outlined,
-      // The owner can still see the bundle it came from.
-      bottom: onViewBundle == null
-          ? null
-          : TextButton(
-              onPressed: onViewBundle,
-              child: const Text('View bundle'),
-            ),
+      bottom: _viewBundleButton(onViewBundle),
       title: 'Released from its bundle',
       body:
           "This task wasn't awarded with the rest of its bundle, so it "
@@ -1060,8 +946,9 @@ class _ReleasedBundleTaskBanner extends StatelessWidget {
   }
 }
 
-/// A cancellation request waiting for this viewer's answer.
-/// Kept high up because it needs attention.
+/// What:   Card for a cancellation request waiting on this viewer.
+/// Input:  [job] and [role]; JobRepository.respondToCancellation() (job_repository.dart).
+/// Output: Agree/decline buttons; failures in a SnackBar.
 class _CancellationResponseCard extends StatefulWidget {
   const _CancellationResponseCard({required this.job, required this.role});
   final Job job;
@@ -1077,28 +964,14 @@ class _CancellationResponseCardState extends State<_CancellationResponseCard> {
 
   Future<void> _respond(bool accept) async {
     setState(() => _busy = true);
-    try {
-      await context.read<JobRepository>().respondToCancellation(
+    await _runCall(
+      context,
+      () => context.read<JobRepository>().respondToCancellation(
         widget.job.id,
         accept: accept,
-      );
-    } on FirebaseFunctionsException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.message ?? 'Something went wrong. Please try again.'),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Something went wrong. Please try again.'),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+      ),
+    );
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
@@ -1155,9 +1028,9 @@ class _CancellationResponseCardState extends State<_CancellationResponseCard> {
   }
 }
 
-/// Runs a price-change call and shows failures in a SnackBar. Low balance
+/// Runs a callable-backed action and shows failures in a SnackBar. Low balance
 /// for the requestor reuses the top-up dialog.
-Future<void> _runPriceChangeCall(
+Future<void> _runCall(
   BuildContext context,
   Future<void> Function() call, {
   bool isRequestor = true,
@@ -1188,8 +1061,9 @@ Future<void> _runPriceChangeCall(
   );
 }
 
-/// A pending price change: the responder accepts or declines;
-/// the proposer waits or withdraws.
+/// What:   Card for a pending price change.
+/// Input:  [job] and [role]; JobRepository.respondToPriceChange()/withdrawPriceChange().
+/// Output: Accept/decline for the responder, withdraw for the proposer.
 class _PriceChangeCard extends StatefulWidget {
   const _PriceChangeCard({required this.job, required this.role});
   final Job job;
@@ -1205,7 +1079,7 @@ class _PriceChangeCardState extends State<_PriceChangeCard> {
   Future<void> _run(Future<void> Function(JobRepository repo) call) async {
     setState(() => _busy = true);
     final repo = context.read<JobRepository>();
-    await _runPriceChangeCall(
+    await _runCall(
       context,
       () => call(repo),
       isRequestor: widget.role == JobViewerRole.owner,
@@ -1282,7 +1156,9 @@ class _PriceChangeCardState extends State<_PriceChangeCard> {
   }
 }
 
-/// Hero facts: category, status, budget, location and deadline as tiles.
+/// What:   Fact tiles: category, status, budget, location and deadline.
+/// Input:  [job].
+/// Output: Rendered tiles.
 class _HeroFacts extends StatelessWidget {
   const _HeroFacts({required this.job});
   final Job job;
@@ -1338,8 +1214,7 @@ class _HeroFacts extends StatelessWidget {
               label: 'Location',
               value: job.location.address,
             ),
-            // Only while bidding is live; afterwards it would be stale
-            // (e.g. "closes in 4 days" on a job already in progress).
+            // Only while bidding is live; later it would read stale.
             if (job.deadline != null && job.status == JobStatus.open)
               _FactTile(
                 icon: Icons.timer_outlined,
@@ -1407,8 +1282,9 @@ class _FactTile extends StatelessWidget {
   }
 }
 
-/// The other party: the poster (for providers) or the provider (for the
-/// owner). Taps through to `/users/:uid`.
+/// What:   Card for the other party: the client, or the assigned provider.
+/// Input:  [job]; [isOwnerView] picks which side.
+/// Output: UserChip that opens `/users/:uid`.
 class _CounterpartyCard extends StatelessWidget {
   const _CounterpartyCard({required this.job, required this.isOwnerView});
   final Job job;
@@ -1417,30 +1293,21 @@ class _CounterpartyCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final String label;
-    final String uid;
-    final String name;
-    final String? photoUrl;
-    final String? subtitle;
-    if (isOwnerView) {
-      label = 'Assigned provider';
-      uid = job.acceptedProviderId!;
-      name = job.acceptedProviderName ?? 'Provider';
-      photoUrl = null;
-      subtitle = job.acceptedBidAmountSen != null
-          ? (job.originalBidAmountSen != null &&
-                    job.originalBidAmountSen != job.acceptedBidAmountSen
-                ? 'Agreed price: ${formatRm(job.acceptedBidAmountSen!)} '
-                      '(was ${formatRm(job.originalBidAmountSen!)})'
-                : 'Accepted bid: ${formatRm(job.acceptedBidAmountSen!)}')
-          : null;
-    } else {
-      label = 'Client';
-      uid = job.requestorId;
-      name = job.requestorName;
-      photoUrl = job.requestorPhotoUrl;
-      subtitle = null;
-    }
+    final (label, uid, name, photoUrl, subtitle) = isOwnerView
+        ? (
+            'Assigned provider',
+            job.acceptedProviderId!,
+            job.acceptedProviderName ?? 'Provider',
+            null,
+            job.acceptedBidAmountSen != null
+                ? (job.originalBidAmountSen != null &&
+                          job.originalBidAmountSen != job.acceptedBidAmountSen
+                      ? 'Agreed price: ${formatRm(job.acceptedBidAmountSen!)} '
+                            '(was ${formatRm(job.originalBidAmountSen!)})'
+                      : 'Accepted bid: ${formatRm(job.acceptedBidAmountSen!)}')
+                : null,
+          )
+        : ('Client', job.requestorId, job.requestorName, job.requestorPhotoUrl, null);
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1460,7 +1327,9 @@ class _CounterpartyCard extends StatelessWidget {
   }
 }
 
-/// Description, then photos, then video.
+/// What:   Description, photos and video of a job.
+/// Input:  [job].
+/// Output: Rendered section.
 class _DescriptionAndMedia extends StatelessWidget {
   const _DescriptionAndMedia({required this.job});
   final Job job;
@@ -1491,8 +1360,9 @@ class _DescriptionAndMedia extends StatelessWidget {
   }
 }
 
-/// The description, bolding the section labels the AI helper writes.
-/// Other descriptions render unchanged.
+/// What:   Job description with the AI helper's section labels in bold.
+/// Input:  [text] from job.description.
+/// Output: Rich text; other text is unchanged.
 class _JobDescription extends StatelessWidget {
   const _JobDescription({required this.text});
   final String text;
@@ -1540,8 +1410,9 @@ double _compositeScore(Bid bid, int lowestSen) {
       PlatformConfig.trustWeight * trust;
 }
 
-/// The owner's bid list (sort, Accept) while open, or the provider's own
-/// bid action.
+/// What:   The owner's bid list (sort, Accept), or the provider's own bid action.
+/// Input:  [job], [me], [myBid] (passed down to avoid a second watchMyBid stream); BidRepository.
+/// Output: Bid cards or _BidAction; Accept runs BidRepository.acceptBid().
 class _BidsOrBidAction extends StatefulWidget {
   const _BidsOrBidAction({
     super.key,
@@ -1554,8 +1425,6 @@ class _BidsOrBidAction extends StatefulWidget {
   final bool isOwner;
   final AppUser? me;
 
-  /// The provider's own live bid on [job], passed down so this widget
-  /// doesn't open a second `watchMyBid` stream.
   final Bid? myBid;
 
   @override
@@ -1565,17 +1434,14 @@ class _BidsOrBidAction extends StatefulWidget {
 class _BidsOrBidActionState extends State<_BidsOrBidAction> {
   _BidSort _sort = _BidSort.bestValue;
 
-  /// Provider id of the bid being accepted, or null. Accepting takes a
-  /// moment, so this shows progress and stops double taps.
+  /// Provider id of the bid being accepted; shows progress and blocks double taps.
   String? _acceptingProviderId;
 
-  /// Live trust scores of bidders, by uid. Bid snapshots go stale, so
-  /// these are fetched once per set of bidders and cached.
+  /// Live trust by uid; bid snapshots go stale.
   Map<String, ProviderTrust> _liveTrust = const {};
   String? _trustFetchedFor;
 
-  /// Fetches live trust for [bids] unless already resolved.
-  /// Safe to call from build.
+  /// Fetches live trust for [bids] unless already resolved. Safe in build.
   void _resolveTrust(List<Bid> bids) {
     final key = (bids.map((b) => b.providerId).toList()..sort()).join(',');
     if (key.isEmpty || key == _trustFetchedFor) return;
@@ -1591,7 +1457,6 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
         });
   }
 
-  /// The bids as last shown, for the bottom bar's "Compare" sheet.
   List<Bid> _shownBids = const [];
   String? _bestValueId;
 
@@ -1609,41 +1474,28 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
     if (picked != null && mounted) await _accept(picked);
   }
 
-  // Cached so changing sort reorders locally without resubscribing.
+  // Cached so a sort change doesn't resubscribe.
   late final Stream<List<Bid>> _bids = context.read<BidRepository>().watchBids(
     widget.job.id,
   );
 
   Future<void> _accept(Bid bid) async {
     final available = context.read<AuthController>().user?.availableBalanceSen;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Accept this bid?'),
-        content: Text(
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Accept this bid?',
+      body:
           '${bid.providerName} will be assigned to "${widget.job.title}" '
           'for ${formatRm(bid.amountSen)}. Other bids will be declined.'
           '\n\nThe ${formatRm(bid.amountSen)} moves into escrow now and is '
           'paid to them when you release it after the work is done.'
           '${available != null ? '\n\nYour available balance: '
                     '${formatRm(available)}.' : ''}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Accept bid'),
-          ),
-        ],
-      ),
+      actionLabel: 'Accept bid',
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
-    // Capture the outcome and clear the busy state before reporting it,
-    // so the button doesn't spin behind the error dialog.
+    // Clear busy before reporting so the button doesn't spin behind the dialog.
     Object? failure;
     setState(() => _acceptingProviderId = bid.providerId);
     try {
@@ -1655,8 +1507,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
     setState(() => _acceptingProviderId = null);
 
     if (failure == null) {
-      // Haptic confirm for a big commitment. Not awaited so a haptic
-      // failure can't fail the accept.
+      // Not awaited: a haptic failure must not fail the accept.
       unawaited(HapticFeedback.mediumImpact());
       return;
     }
@@ -1719,8 +1570,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
             .where((b) => b.status == BidStatus.pending)
             .toList();
 
-        // Start (or skip) the live trust lookup and use what's resolved.
-        // Until then the bid's own snapshot is used, so the list shows now.
+        // Until live trust resolves, the bid's own snapshot is used.
         _resolveTrust(rawBids);
         final bids = [
           for (final bid in rawBids)
@@ -1746,7 +1596,7 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
           );
         }
 
-        // The composite needs the cheapest bid; compute once and share it.
+        // Best Value needs the cheapest bid.
         final lowestSen = bids.map((b) => b.amountSen).reduce(min);
         bids.sort(switch (_sort) {
           _BidSort.price => (a, b) => a.amountSen.compareTo(b.amountSen),
@@ -1802,8 +1652,9 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
   }
 }
 
-/// A table of all pending bids, marking the cheapest, most trusted and
-/// Best Value. Tapping a row starts its accept.
+/// What:   Sheet comparing all pending bids side by side.
+/// Input:  Bids, trust and Best Value from _BidsOrBidActionState.
+/// Output: Table marking cheapest, most trusted and Best Value; tapping a row starts its accept.
 class _CompareBidsSheet extends StatelessWidget {
   const _CompareBidsSheet({required this.bids, this.bestValueId});
   final List<Bid> bids;
@@ -1914,8 +1765,9 @@ class _CompareBidsSheet extends StatelessWidget {
   }
 }
 
-/// The provider's own bid card with Withdraw, or a "bidding closed" note.
-/// [myBid] is resolved by the parent, so no second subscription opens.
+/// What:   The provider's own bid card with Withdraw, or a "bidding closed" note.
+/// Input:  [myBid] from _BidsOrBidAction; BidRepository.withdrawBid().
+/// Output: Rendered card; Withdraw confirms then removes the bid.
 class _BidAction extends StatelessWidget {
   const _BidAction({
     required this.job,
@@ -1931,8 +1783,7 @@ class _BidAction extends StatelessWidget {
     final theme = Theme.of(context);
     final bid = myBid;
     if (bid == null) {
-      // The server may lag closing at the deadline, so check the deadline
-      // directly instead of trusting job.status alone.
+      // The server may lag at the deadline, so don't trust job.status alone.
       if (job.deadline != null && job.deadline!.isBefore(DateTime.now())) {
         return const InfoBanner(
           icon: Icons.timer_off_outlined,
@@ -1982,8 +1833,9 @@ class _BidAction extends StatelessWidget {
   }
 }
 
-/// For a provider whose package bid covers this task: shows their quote
-/// for it. Editing is the bottom bar's action.
+/// What:   A provider's package-bid quote for this task.
+/// Input:  [job] and [bid] (BundleBid).
+/// Output: Rendered card; editing is the bottom bar's action.
 class _YourBundleBidCard extends StatelessWidget {
   const _YourBundleBidCard({required this.job, required this.bid});
   final Job job;
@@ -2011,8 +1863,9 @@ class _YourBundleBidCard extends StatelessWidget {
   }
 }
 
-/// The private service-address card, plus the chat entry (unless
-/// [showMessage] is false because the bottom bar offers it).
+/// What:   Private service address plus the chat entry.
+/// Input:  [job]; [showMessage] is false when the bottom bar already offers chat.
+/// Output: JobAddressCard and message tile.
 class _WorkingDetails extends StatelessWidget {
   const _WorkingDetails({
     required this.job,
@@ -2088,8 +1941,9 @@ class _WorkingDetails extends StatelessWidget {
   }
 }
 
-/// Review status of a completed job: thanks, or why one isn't due yet.
-/// The bar's action calls [_LeaveReviewCardState.open].
+/// What:   Review status of a completed job: thanks, or why one isn't due yet.
+/// Input:  [job], [revieweeId], [revieweeName]; ReviewRepository.
+/// Output: Banner; the bar's action calls [_LeaveReviewCardState.open].
 class _LeaveReviewCard extends StatefulWidget {
   const _LeaveReviewCard({
     super.key,
@@ -2105,13 +1959,12 @@ class _LeaveReviewCard extends StatefulWidget {
   State<_LeaveReviewCard> createState() => _LeaveReviewCardState();
 }
 
-/// Whether a bundle task's review is ready, waiting, or already left.
 enum _ReviewGate { ready, waiting, alreadyReviewed }
 
 class _LeaveReviewCardState extends State<_LeaveReviewCard> {
   bool _submitted = false;
 
-  /// Any bundle task reviews by bundle id, so its gate must be resolved.
+  /// A bundle task's gate must resolve first.
   String? get _bundleId => widget.job.bundleId;
 
   /// Null for ordinary jobs (always ready) or while a gate is resolving.
@@ -2132,8 +1985,7 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
   Future<void> _resolveGate(String bundleId) async {
     final me = context.read<AuthController>().user;
     if (me == null) return;
-    // Read both repositories before the first await so `context` isn't
-    // used across an async gap.
+    // Read before the first await; `context` can't cross an async gap.
     final reviews = context.read<ReviewRepository>();
     final jobs = context.read<JobRepository>();
     try {
@@ -2160,7 +2012,7 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
         );
       }
     } catch (_) {
-      // The write is deduped server-side, so fail open on a failed lookup.
+      // Writes are deduped server-side, so fail open.
       if (mounted) setState(() => _gate = _ReviewGate.ready);
     }
   }
@@ -2206,26 +2058,19 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
   }
 }
 
-/// The job's activity log, newest first, in a collapsed [ExpansionTile]
-/// whose header shows the latest event.
-class _ActivityTimeline extends StatefulWidget {
+/// What:   Collapsed activity log whose header shows the latest event.
+/// Input:  Events via JobRepository.watchJobEvents() (job_repository.dart).
+/// Output: AppCard with an ExpansionTile, newest first.
+class _ActivityTimeline extends StatelessWidget {
   const _ActivityTimeline({required this.job});
   final Job job;
 
   @override
-  State<_ActivityTimeline> createState() => _ActivityTimelineState();
-}
-
-class _ActivityTimelineState extends State<_ActivityTimeline> {
-  late final Stream<List<JobEvent>> _events = context
-      .read<JobRepository>()
-      .watchJobEvents(widget.job.id);
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return StreamBuilder<List<JobEvent>>(
-      stream: _events,
+    return KeyedStreamBuilder<List<JobEvent>>(
+      cacheKey: job.id,
+      create: () => context.read<JobRepository>().watchJobEvents(job.id),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return const AppCard(
@@ -2241,12 +2086,8 @@ class _ActivityTimelineState extends State<_ActivityTimeline> {
         if (events.isEmpty) return const SizedBox.shrink();
         final latest = events.first;
 
-        return Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: context.fairbid.borderSubtle),
-          ),
+        return AppCard(
+          padding: EdgeInsets.zero,
           child: Theme(
             data: theme.copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
@@ -2317,8 +2158,7 @@ class _ActivityTimelineState extends State<_ActivityTimeline> {
   }
 }
 
-/// The bottom bar once resolved: one main button plus a short info line,
-/// or a muted waiting line when it's the other party's move.
+/// The bar's resolved action or waiting line.
 class _ResolvedBar {
   const _ResolvedBar({this.action, this.waitingLine});
   final NextAction? action;
@@ -2342,10 +2182,7 @@ _ResolvedBar _resolveMilestoneBar(
     return _ResolvedBar(action: vm.primaryAction, waitingLine: vm.waitingLine);
   }
 
-  final current = milestones.cast<Milestone?>().firstWhere(
-    (m) => !_isMilestoneTerminal(m!.status),
-    orElse: () => null,
-  );
+  final current = currentStage(milestones);
   if (current == null) {
     return _ResolvedBar(action: vm.primaryAction, waitingLine: vm.waitingLine);
   }
@@ -2438,8 +2275,9 @@ _ResolvedBar _visitTimeBar(JobDetailViewModel vm, Job job) {
   );
 }
 
-/// The pinned bottom bar; hidden when the viewer has no action or waiting
-/// line (e.g. a losing bidder).
+/// What:   Pinned bottom bar.
+/// Input:  [action] or [waitingLine] from _ResolvedBar; [busy] while a milestone action runs.
+/// Output: Main button calling [onAction]; hidden with neither.
 class _Bar extends StatelessWidget {
   const _Bar({
     required this.action,

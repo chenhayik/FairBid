@@ -5,17 +5,15 @@ import '../../../../core/util/time_ago.dart';
 import '../../../../core/widgets/user_chip.dart';
 import '../../domain/review.dart';
 
-/// A single review as it appears inside the profile's Reviews card: the
-/// reviewer's name, a relative timestamp, a star row and the comment. Rendered
-/// without its own card surface so several stack inside one [AppCard] with
-/// dividers between them (per the profile mock).
+/// What:   One review: reviewer name, time, stars and comment.
+/// Input:  [review]; optional [onFlag].
+/// Output: Unframed column so several stack in one card with dividers; a Report action when [onFlag] is set.
 class ReviewCard extends StatelessWidget {
   const ReviewCard({super.key, required this.review, this.onFlag});
 
   final Review review;
 
-  /// When set, a small "Report" action appears - used on the owner's own
-  /// profile to flag an unfair review for admin moderation. Null elsewhere.
+  /// Set on the owner's own profile to flag an unfair review.
   final VoidCallback? onFlag;
 
   @override
@@ -27,9 +25,7 @@ class ReviewCard extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              // Empty reviewerId only happens on malformed legacy data - fall
-              // back to plain, non-tappable text rather than pushing
-              // `/users/` with no id.
+              // An empty reviewerId is malformed legacy data: plain text, not a link.
               child: review.reviewerId.isEmpty
                   ? Text(
                       review.reviewerName,
@@ -86,13 +82,13 @@ class ReviewCard extends StatelessWidget {
   }
 }
 
-/// A row of five stars, filled up to [rating] (1–5) with the brand's warning
-/// gold, the rest outlined. Used in reviews and average-rating summaries.
+/// What:   Five stars, filled up to [rating] (1-5).
+/// Input:  [rating].
+/// Output: Gold filled and outlined stars.
 class StarRow extends StatelessWidget {
-  const StarRow({super.key, required this.rating, this.size = 16});
+  const StarRow({super.key, required this.rating});
 
   final int rating;
-  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -103,7 +99,7 @@ class StarRow extends StatelessWidget {
         for (var i = 1; i <= 5; i++)
           Icon(
             i <= rating ? Icons.star : Icons.star_border,
-            size: size,
+            size: 16,
             color: gold,
           ),
       ],

@@ -1,5 +1,6 @@
-/// One award option from `previewBundleAward`: who wins which tasks and
-/// what it costs. The server builds it from the stored bids.
+/// What:   One award option: who wins which tasks and what it costs.
+/// Input:  Callable `previewBundleAward` via BundleRepository (bundle_repository.dart).
+/// Output: Totals, trust, uncovered tasks and the picks to send to `awardBundle`.
 class BundleAwardOption {
   const BundleAwardOption({
     required this.key,
@@ -19,10 +20,10 @@ class BundleAwardOption {
   final int totalSen;
   final int providerCount;
 
-  /// How much more this option costs than the cheapest.
+  /// Extra cost over the cheapest option.
   final int premiumSen;
 
-  /// Trust Score weighted by how much each provider is paid.
+  /// Trust Score weighted by pay.
   final int weightedTrust;
 
   /// False when any hired provider is still new, so [weightedTrust] is hidden.
@@ -60,7 +61,9 @@ class BundleAwardOption {
       );
 }
 
-/// What one provider wins in an option and what each task pays.
+/// What:   What one provider wins in an award option and what each task pays.
+/// Input:  [providerId], [providerName], [taskAmountsSen].
+/// Output: Immutable value from the award callable.
 class BundleAwardItem {
   const BundleAwardItem({
     required this.providerId,

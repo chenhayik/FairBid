@@ -11,8 +11,9 @@ import '../../auth/presentation/auth_controller.dart';
 import '../data/wallet_repository.dart';
 import '../domain/payout_method.dart';
 
-/// "How you get paid": a DuitNow ID or a bank account. Demo only, no real
-/// bank is contacted. Pops `true` once saved.
+/// What:   "How you get paid" screen: choose a DuitNow ID or a bank account (demo, no bank contacted).
+/// Input:  Signed-in user and WalletRepository.watchPayoutMethod() (wallet_repository.dart).
+/// Output: Saves via savePayoutMethod and pops `true`.
 class PayoutMethodScreen extends StatefulWidget {
   const PayoutMethodScreen({super.key});
 
@@ -27,7 +28,7 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
   final _formKey = GlobalKey<FormState>();
   final _account = TextEditingController();
   final _accountAgain = TextEditingController();
-  // DuitNow by mobile when there's a profile phone, else SSM or a bank.
+  // Defaults to DuitNow by mobile if the profile has a phone, else SSM (business) or bank.
   late final _user = context.read<AuthController>().user!;
   late final bool _hasPhone = (_user.phone ?? '').trim().isNotEmpty;
   late final bool _isBusiness = _user.providerType == 'business';
@@ -50,7 +51,7 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    // DuitNow needs an ID that is actually available on this profile.
+    // DuitNow needs an ID that exists on this profile.
     final phone = (context.read<AuthController>().user?.phone ?? '').trim();
     final idReady = _proxyType == 'mobile' ? phone.isNotEmpty : _isBusiness;
     if (_method == 'duitnow' && !idReady) {
@@ -74,10 +75,10 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Payout method saved.')));
       context.pop(true);
-    } on FirebaseFunctionsException catch (e) {
-      setState(() => _error = e.message ?? 'Could not save. Try again.');
-    } catch (_) {
-      setState(() => _error = 'Could not save. Try again.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = (e is FirebaseFunctionsException ? e.message : null) ??
+          'Could not save. Try again.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -220,7 +221,6 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
   }
 }
 
-/// One DuitNow ID choice, with a tick when selected.
 class _IdOption extends StatelessWidget {
   const _IdOption({
     required this.title,

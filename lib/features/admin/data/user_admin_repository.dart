@@ -3,29 +3,27 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/managed_user.dart';
 
-/// Admin-only: lists users and suspends/reinstates them. Suspension flips a
-/// server-owned flag via the `setUserSuspended` Cloud Function - Firestore
-/// rules deny any client write to it - so this never touches the flag
-/// directly. UI depends on this interface so tests can use a fake.
+/// What:   Admin user-management API.
+/// Input:  Firestore `users` and callables via FirestoreUserAdminRepository; a fake in tests.
+/// Output: User stream; suspension and MFA reset go through Cloud Functions (rules deny client writes).
 abstract interface class UserAdminRepository {
-  /// Streams every user for the admin "Users" list. Ordering and filtering
-  /// (search, hide admins) are applied client-side by the caller.
+  /// Every user; the caller orders and filters.
   Stream<List<ManagedUser>> watchUsers();
 
-  /// Suspends (or, when [suspended] is false, reinstates) [uid], with an
-  /// optional [reason] shown to the user (`setUserSuspended`).
+  /// Suspends or (when [suspended] is false) reinstates [uid], with an optional [reason] shown to them.
   Future<void> setSuspended({
     required String uid,
     required bool suspended,
     String? reason,
   });
 
-  /// Clears every second factor from [uid] - the recovery path for a user who
-  /// lost their authenticator app (`adminClearMfa`).
+  /// Clears every second factor from [uid] (`adminClearMfa`).
   Future<void> clearMfa(String uid);
 }
 
-/// Firestore/Functions-backed [UserAdminRepository].
+/// What:   Firestore/Functions-backed [UserAdminRepository].
+/// Input:  `users` collection, `setUserSuspended`, `adminClearMfa`.
+/// Output: ManagedUser stream and action calls.
 class FirestoreUserAdminRepository implements UserAdminRepository {
   FirestoreUserAdminRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -37,8 +35,7 @@ class FirestoreUserAdminRepository implements UserAdminRepository {
 
   @override
   Stream<List<ManagedUser>> watchUsers() {
-    // No orderBy: a `createdAt` order would silently drop any legacy user doc
-    // missing the field. The list is small (admin-only) and the caller sorts.
+    // No orderBy: it would silently drop legacy docs missing `createdAt`.
     return _firestore.collection('users').snapshots().map((snapshot) => [
           for (final doc in snapshot.docs)
             ManagedUser.fromMap(doc.id, doc.data()),

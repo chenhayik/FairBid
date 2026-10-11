@@ -3,8 +3,9 @@ import 'package:flutter/foundation.dart';
 import '../../data/bid_repository.dart';
 import '../../domain/bid.dart';
 
-/// ViewModel for the Submit-a-Bid sheet: manages the busy flag and error
-/// message around the repository call.
+/// What:   Busy flag and error message for the single-job bid sheet.
+/// Input:  BidRepository.submitBid() (bid_repository.dart).
+/// Output: submit() returns true on success so the sheet can close.
 class SubmitBidController extends ChangeNotifier {
   SubmitBidController(this._bids);
 
@@ -16,7 +17,6 @@ class SubmitBidController extends ChangeNotifier {
   bool get isBusy => _busy;
   String? get errorMessage => _errorMessage;
 
-  /// Submits the bid; returns true on success so the sheet can close.
   Future<bool> submit(Bid bid) async {
     _busy = true;
     _errorMessage = null;

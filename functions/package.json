@@ -7,7 +7,7 @@
   "main": "index.js",
   "scripts": {
     "lint": "eslint .",
-    "test": "node check_vectors.js && node ssm.test.js && node mykad.test.js && node idcheck.test.js && node bundles.test.js && node bundle_award.test.js && node price_change.test.js && node payouts.test.js && node payout_method.test.js && node scheduling.test.js"
+    "test": "node check_vectors.js && node --test"
   },
   "dependencies": {
     "@google-cloud/vision": "^6.1.1",

@@ -6,26 +6,9 @@ import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 import '../widgets/status_colors.dart';
 
-/// A task's title and category, used by the task status list below.
-Widget _taskHeader(BuildContext context, Job task) {
-  final theme = Theme.of(context);
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(task.title, style: theme.textTheme.titleMedium),
-      Text(
-        task.category,
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
-      ),
-    ],
-  );
-}
-
-/// A name-and-amount row: the name on the left, ellipsised, and the RM
-/// figure fixed on the right so it never wraps - used for every price line
-/// on the bundle screen (pick rows, award rows).
+/// What:   Name-and-amount row; the name ellipsises, the RM figure never wraps.
+/// Input:  [name], [amountSen]; [maxLines] lets a long task title wrap.
+/// Output: Rendered row, used for every price line on the bundle screen.
 class PriceRow extends StatelessWidget {
   const PriceRow({
     super.key,
@@ -39,8 +22,6 @@ class PriceRow extends StatelessWidget {
   final int amountSen;
   final TextStyle? style;
 
-  /// How many lines [name] may wrap to before ellipsising - 2 for a task
-  /// title that would otherwise cut off, 1 (the default) everywhere else.
   final int maxLines;
 
   @override
@@ -63,8 +44,9 @@ class PriceRow extends StatelessWidget {
   }
 }
 
-/// Just the bundle's tasks (title and category), for an open bundle with
-/// nothing to pick from yet - no bids, or bidding has closed.
+/// What:   The bundle's tasks (title, category) when there is nothing to pick yet.
+/// Input:  [tasks] from JobRepository.watchBundleTasks(); [onOpenTask].
+/// Output: One tappable card per task.
 class BundleTaskList extends StatelessWidget {
   const BundleTaskList({
     super.key,
@@ -77,13 +59,25 @@ class BundleTaskList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final task in tasks) ...[
           AppCard(
             onTap: () => onOpenTask(task),
-            child: _taskHeader(context, task),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(task.title, style: theme.textTheme.titleMedium),
+                Text(
+                  task.category,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
         ],
@@ -92,8 +86,9 @@ class BundleTaskList extends StatelessWidget {
   }
 }
 
-/// The bundle's tasks once bidding is over: one compact card per task with
-/// its price, category, status and winner.
+/// What:   The bundle's tasks once bidding is over.
+/// Input:  [tasks]; [bids] to show a task's own price beside a package price.
+/// Output: One card per task: price, category, status, winner.
 class BundleTaskStatusList extends StatelessWidget {
   const BundleTaskStatusList({
     super.key,
@@ -105,23 +100,18 @@ class BundleTaskStatusList extends StatelessWidget {
   final List<Job> tasks;
   final ValueChanged<Job> onOpenTask;
 
-  /// The bundle's bids, to show a task's own price beside a package price.
   final List<BundleBid> bids;
 
-  /// The winner's price for [task] if hired for it alone, when that differs
-  /// from what the package deal split it to.
+  /// The winner's price for [task] alone, when it differs from the package split.
   int? _alonePriceSen(Job task) {
-    // Released tasks are won by ordinary bids, and a later price change
-    // replaces the package price, so neither gets the note.
+    // Released tasks and price changes replace the package price.
     if (task.releasedAt != null || task.originalBidAmountSen != null) {
       return null;
     }
-    for (final bid in bids) {
-      if (bid.providerId != task.acceptedProviderId) continue;
-      final alone = bid.priceFor(task.id);
-      return alone != null && alone != task.acceptedBidAmountSen ? alone : null;
-    }
-    return null;
+    final bid =
+        bids.where((b) => b.providerId == task.acceptedProviderId).firstOrNull;
+    final alone = bid?.priceFor(task.id);
+    return alone != null && alone != task.acceptedBidAmountSen ? alone : null;
   }
 
   @override
@@ -154,7 +144,6 @@ class BundleTaskStatusList extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 4),
-                // Category, status and winner share one line.
                 Text.rich(
                   TextSpan(
                     style: muted,

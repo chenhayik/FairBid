@@ -1,7 +1,4 @@
-/// The service categories a provider can offer and a requestor can post under.
-///
-/// Lives here rather than in the onboarding step that used to own it, because
-/// the job feed and the post-a-job form need it too.
+/// Service categories providers offer and requestors post under.
 const kServiceCategories = [
   'Cleaning',
   'Plumbing',

@@ -1,36 +1,12 @@
 import '../../../core/config/platform_config.dart';
 import '../../auth/domain/user_role.dart';
 
-/// A read-only, publicly-safe view of another user's `users/{uid}` profile -
-/// what a requestor sees when checking out a bidder, or a provider sees when
-/// checking who posted a job. Built by [PublicProfileRepository] from the
-/// same doc `AppUser` maps for the signed-in user, but the mapper only ever
-/// reads the fields this class exposes below.
-///
-/// Deliberately excluded, even though the underlying doc (or its
-/// subcollections) may carry them for the owner's own use - the mapper never
-/// reads these, so they can never leak through this model:
-/// - `email`, `phone` - contact details; not the public's business. `phone`
-///   has already moved off the public doc into the owner+admin-only
-///   `private/payout` subdocument, which this repository never queries.
-/// - `walletBalanceSen`, `escrowLockedSen` - another person's money is
-///   nobody else's business.
-/// - The payout method - lives in the server-only `private/payoutMethod` doc.
-/// - `idDocumentUrl`, `selfieUrl` - identity documents live in the
-///   owner+admin-only `private/verification` subdocument; this repository
-///   never queries it.
-/// - `onboarding.certificateUrls` - the raw certificate photos routinely
-///   carry an IC number or a home address; only [certificateCount], a plain
-///   count, is exposed.
-/// - `disputesLost` as a standalone number - it already feeds [trustScore]
-///   through the server-computed [trustBreakdown]; surfacing the raw count on
-///   its own is a scarlet letter with no context (a dispute can be lost for
-///   reasons that aren't the user's fault), so it isn't exposed here at all.
-/// - `suspended` / `suspensionReason` - moderation state; not the public's
-///   business, and would out someone as under active discipline.
-/// - `baseLat`/`baseLng`/`baseAddress` and the requestor's `lat`/`lng` -
-///   precise coordinates/address. Only the town/district label behind them
-///   ([location]) is surfaced, never a pinpoint location.
+/// What:   Read-only, public-safe view of another user's `users/{uid}` profile.
+/// Input:  Doc data from PublicProfileRepository.watchProfile() (public_profile_repository.dart).
+/// Output: Identity, stats, trust and provider extras for PublicProfileScreen.
+/// Notes:  The mapper never reads email, phone, wallet or payout data, ID documents, raw certificate
+///         URLs (only [certificateCount]), `disputesLost`, suspension state or precise coordinates
+///         (only the town/district [location] label).
 class PublicProfile {
   const PublicProfile({
     required this.uid,
@@ -60,7 +36,6 @@ class PublicProfile {
   final String uid;
   final String displayName;
 
-  /// Snapshot of `profilePhotoUrl`. Null shows [UserAvatar]'s placeholder.
   final String? photoUrl;
 
   final UserRole role;
@@ -70,43 +45,32 @@ class PublicProfile {
 
   final String? bio;
 
-  /// The town/district label only - see the class doc for what this
-  /// deliberately is not (no coordinates, no street-level address). Prefers
-  /// the structured town picked during onboarding (`baseTown` for a
-  /// provider, `town` for a requestor) and falls back to the legacy
-  /// free-text `location` field only when neither is set.
+  /// Town or district label only; prefers `baseTown` / `town`, else the legacy `location` text.
   final String? location;
 
   final int trustScore;
   final TrustBreakdown? trustBreakdown;
 
-  /// Whether the Trust Score has been earned enough to display - mirrors
-  /// `AppUser.scoreVisible`.
+  /// Mirrors `AppUser.scoreVisible`.
   bool get scoreVisible => trustBreakdown?.scoreVisible ?? false;
 
   final int ratingCount;
   final int ratingSum;
 
-  /// The user's average star rating (1–5), or null with no reviews yet.
+  /// Average stars (1-5); null with no reviews.
   double? get averageRating =>
       ratingCount == 0 ? null : ratingSum / ratingCount;
 
   final int jobsCompleted;
 
-  /// A requestor's job-posting counters, server-owned (see firestore.rules'
-  /// `trustFields()`). [hireRate] (0–100) is the share of posted jobs that
-  /// reached an assigned/accepted state; null while [jobsPosted] is zero, so
-  /// a brand-new client never shows a misleading "0%".
+  /// A requestor's server-owned posting counters; [hireRate] (0-100) is null while [jobsPosted] is 0.
   final int jobsPosted;
   final int? hireRate;
 
-  /// 'none' / 'pending' / 'approved' / 'rejected'. Only 'approved' ever
-  /// renders a badge - see [PublicProfileScreen]; the others render nothing,
-  /// never a punitive "Unverified".
+  /// 'none', 'pending', 'approved' or 'rejected'; only 'approved' renders a badge.
   final String verificationStatus;
 
-  /// When the account was created (from the doc's `createdAt`), shown as
-  /// "Member since {month year}" on a requestor's profile.
+  /// Account creation time, shown as "Member Since" on a requestor's profile.
   final DateTime? memberSince;
 
   // Provider-only extras, read from the `onboarding` map.
@@ -116,14 +80,9 @@ class PublicProfile {
   final List<String> portfolioImageUrls;
   final List<String> portfolioLinks;
 
-  /// A COUNT of `onboarding.certificateUrls`, never the URLs themselves -
-  /// see the class doc for why.
+  /// Count of `onboarding.certificateUrls`, never the URLs.
   final int certificateCount;
 
-  /// Builds a [PublicProfile] from [uid] and its `users/{uid}` doc data -
-  /// see the class doc for exactly which fields this deliberately never
-  /// reads. Accepts either a Firestore `Timestamp` or a plain `DateTime` for
-  /// `createdAt`, so the same parser works against Firestore and fakes.
   factory PublicProfile.fromMap(String uid, Map<String, dynamic> m) {
     final onboarding = m['onboarding'] as Map<String, dynamic>?;
     List<String> strings(dynamic v) =>
@@ -159,12 +118,11 @@ class PublicProfile {
     );
   }
 
-  /// Accepts both a Firestore `Timestamp` (via its `toDate()`) and a plain
-  /// `DateTime`, mirroring `PendingVerification._asDate`.
+  /// Accepts a Firestore Timestamp or a DateTime, so fakes work too.
   static DateTime? _asDate(dynamic value) {
     if (value == null) return null;
     if (value is DateTime) return value;
-    // Duck-type Firestore's Timestamp without importing cloud_firestore here.
+    // Duck-typed to avoid importing cloud_firestore in the domain layer.
     try {
       return (value as dynamic).toDate() as DateTime?;
     } catch (_) {

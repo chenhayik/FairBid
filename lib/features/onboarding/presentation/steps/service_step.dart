@@ -11,9 +11,9 @@ import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/location_field.dart';
 import '../onboarding_controller.dart';
 
-/// Service categories offered on FairBid (Malaysian market).
-
-/// Stage 5 - "Define Your Services": category, coverage area, rate, portfolio.
+/// What:   Provider stage 5: category, coverage area and portfolio images.
+/// Input:  [OnboardingController.data]; the SSM nature of business suggests a category.
+/// Output: Form; Save & Continue writes the fields back and saves.
 class ServiceStep extends StatefulWidget {
   const ServiceStep({super.key});
 
@@ -29,15 +29,12 @@ class _ServiceStepState extends State<ServiceStep> {
     super.initState();
     final onboarding = context.read<OnboardingController>();
     final data = onboarding.data;
-    // Suggested, never imposed: fills only a category the applicant has not
-    // already chosen, and the dropdown stays theirs to change. Null when the
-    // registered trade is not one this app covers, which is the common case.
+    // A suggestion only: never replaces a chosen category.
     data.category ??=
         suggestedCategoryFor(onboarding.ssmExtract?.natureOfBusiness);
   }
 
-  /// Opens the Penang-scoped picker and stores both the composed label
-  /// ([OnboardingData.coverageArea]) and the structured pick behind it.
+  /// Opens the Penang picker; stores the label and the structured pick.
   Future<void> _pickLocation() async {
     final onboarding = context.read<OnboardingController>();
     final data = onboarding.data;
@@ -46,13 +43,8 @@ class _ServiceStepState extends State<ServiceStep> {
       initialCenter: data.lat == null || data.lng == null
           ? null
           : LatLng(data.lat!, data.lng!),
-      initialRegion: data.districtCode == null
-          ? null
-          : Region(
-              districtCode: data.districtCode!,
-              districtName: Region.districtNameFor(data.districtCode!),
-              town: data.town,
-            ),
+      initialRegion: Region.fromMap(
+          {'districtCode': data.districtCode, 'town': data.town}),
     );
     if (picked == null) return;
     setState(() {

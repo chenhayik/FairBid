@@ -1,12 +1,8 @@
-/// A validated Malaysian MyKad (IC) number, `YYMMDD-PB-###G`.
-///
-/// There is **no checksum** in a MyKad number, so the only offline checks are
-/// length, a real birth date, age 18+ and a plausible place-of-birth (PB) code.
-/// A PB code that is unpublished (80, 81, 94-97) is accepted but flagged with
-/// [pbNeedsReview] rather than rejected.
-///
-/// Twin of `functions/mykad.js`; both are pinned by
-/// `test/fixtures/mykad_vectors.json`.
+/// What:   A validated Malaysian MyKad number, `YYMMDD-PB-###G`.
+/// Input:  Typed text via [parse] / [issues]; twin of `functions/mykad.js` (pinned by `test/fixtures/mykad_vectors.json`).
+/// Output: Normalised digits, birth date, place-of-birth code and gender.
+/// Notes:  No checksum exists, so checks are length, real date, age 18+ and a plausible PB code;
+///         unpublished PB codes (80, 81, 94-97) are accepted but set [pbNeedsReview].
 class MyKadNumber {
   const MyKadNumber._({
     required this.normalized,

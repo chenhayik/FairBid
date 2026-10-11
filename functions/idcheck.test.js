@@ -1,4 +1,4 @@
-/** Unit tests for the pure helpers in idcheck.js. Run with `npm test`. */
+// Unit tests for the pure helpers in idcheck.js.
 
 const assert = require("node:assert");
 const {verdictFor, icKey} = require("./idcheck");

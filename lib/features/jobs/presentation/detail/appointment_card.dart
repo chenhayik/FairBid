@@ -23,15 +23,14 @@ class AppointmentCard extends StatefulWidget {
 
   final Job job;
 
-  /// Whether the viewer is the requestor (else the accepted provider).
   final bool isOwner;
 
   @override
   State<AppointmentCard> createState() => AppointmentCardState();
 }
 
+/// What:   State of [AppointmentCard]; public so the screen can reach it through a GlobalKey.
 class AppointmentCardState extends State<AppointmentCard> {
-  /// The proposed time the viewer has picked to confirm.
   int? _selected;
   bool _busy = false;
 
@@ -64,6 +63,7 @@ class AppointmentCardState extends State<AppointmentCard> {
   /// What:   Confirms the picked time (also called by the bottom bar).
   /// Output: Calls respondToAppointment; with none picked, scrolls here.
   Future<void> confirm() async {
+    if (_busy) return;
     final index = _selected;
     if (index == null) {
       await Scrollable.ensureVisible(context);
@@ -219,8 +219,7 @@ class AppointmentCardState extends State<AppointmentCard> {
     ];
   }
 
-  /// The on-the-way / arrived status line, plus the provider's buttons from
-  /// 3 hours before the start until they arrive.
+  /// Status line, plus the provider's buttons from 3 hours before the visit until arrival.
   List<Widget> _visitDay(BuildContext context, Appointment appointment) {
     final sent = _job.onTheWayAt;
     final arrived = _job.arrivedAt;

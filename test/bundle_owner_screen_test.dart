@@ -1,68 +1,31 @@
-import 'dart:async';
-
 import 'package:fairbid/core/theme/app_theme.dart';
-import 'package:fairbid/features/auth/domain/user_role.dart';
-import 'package:fairbid/features/auth/presentation/auth_controller.dart';
 import 'package:fairbid/features/jobs/data/bundle_bid_repository.dart';
 import 'package:fairbid/features/jobs/data/bundle_repository.dart';
-import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/domain/bundle.dart';
 import 'package:fairbid/features/jobs/domain/bundle_award.dart';
 import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
-import 'package:fairbid/features/jobs/presentation/bundle/bundle_detail_screen.dart';
 import 'package:fairbid/features/jobs/presentation/bundle/bundle_option_card.dart';
+import 'package:fairbid/features/jobs/presentation/bundle/bundle_pick_logic.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:go_router/go_router.dart';
-import 'package:provider/provider.dart';
 
-import 'widget_test.dart';
+import 'helpers/builders.dart';
+import 'helpers/fakes.dart';
+import 'helpers/harness.dart';
 
-/// A [BundleBidRepository] whose `watchBundleBids` is a live broadcast stream
-/// - unlike the shared [FakeBundleBidRepository], which only ever emits once.
-/// Only this file needs to push a bid update mid-test (to exercise the
-/// "bids have changed" staleness banner), so it lives here rather than
-/// widening the shared fake.
-class _LiveBundleBidRepository implements BundleBidRepository {
-  final _controller = StreamController<List<BundleBid>>.broadcast();
-  List<BundleBid> _bids = const [];
-
-  void push(List<BundleBid> bids) {
-    _bids = bids;
-    _controller.add(bids);
-  }
-
-  @override
-  Stream<List<BundleBid>> watchBundleBids(String bundleId) async* {
-    yield _bids;
-    yield* _controller.stream;
-  }
-
-  @override
-  Future<void> submit({
-    required String bundleId,
-    required Map<String, int> taskPrices,
-    int? bundlePriceSen,
-    required String estimatedDuration,
-    String message = '',
-  }) => throw UnimplementedError();
-
-  @override
-  Future<void> withdraw(String bundleId) => throw UnimplementedError();
-
-  @override
-  Stream<BundleBid?> watchMyBundleBid(String bundleId, String providerId) =>
-      throw UnimplementedError();
-
-  @override
-  Future<BundleBid?> getMyBundleBid(String bundleId, String providerId) =>
-      throw UnimplementedError();
-
-  @override
-  Stream<List<BundleBid>> watchMyBundleBids(String providerId) =>
-      throw UnimplementedError();
-}
+BundleAwardOption _option(
+  String label,
+  Map<String, String> providerByTask, {
+  int totalSen = 30000,
+}) => sampleOption(key: label, label: label, totalSen: totalSen, awards: [
+    for (final entry in providerByTask.entries)
+      BundleAwardItem(
+        providerId: entry.value,
+        providerName: entry.value,
+        taskAmountsSen: {entry.key: 1000},
+      ),
+  ]);
 
 void main() {
   final tasks = [
@@ -82,16 +45,6 @@ void main() {
     ),
   ];
 
-  BundleBid bid({String providerId = 'prov-1', String providerName = 'Aida Renovation'}) =>
-      BundleBid(
-        bundleId: 'b1',
-        providerId: providerId,
-        providerName: providerName,
-        taskPrices: const {'job-1': 37500, 'job-2': 52000},
-        estimatedDuration: '1 week',
-        createdAt: DateTime.now(),
-      );
-
   /// Pumps [BundleDetailScreen] behind a nested route (so `context.pop()`
   /// and task/profile pushes have somewhere to go) with the given bundle,
   /// tasks and bids. Passing [bundleBids] lets a test use the live fake
@@ -104,56 +57,15 @@ void main() {
     List<BundleBid> bids = const [],
     List<BundleAwardOption> awardOptions = const [],
   }) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
     final bundles = FakeBundleRepository([
       bundle ?? sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
     ])..awardOptions = awardOptions;
-    final router = GoRouter(
-      initialLocation: '/bundle',
-      routes: [
-        GoRoute(
-          path: '/',
-          builder: (context, state) => const Scaffold(body: SizedBox()),
-          routes: [
-            GoRoute(
-              path: 'bundle',
-              builder: (context, state) => MultiProvider(
-                providers: [
-                  Provider<BundleRepository>.value(value: bundles),
-                  Provider<JobRepository>.value(
-                    value: FakeJobRepository(tasksOverride ?? tasks),
-                  ),
-                  Provider<BundleBidRepository>.value(
-                    value: bundleBids ?? FakeBundleBidRepository(bids),
-                  ),
-                  ChangeNotifierProvider<AuthController>(
-                    create: (_) => AuthController(
-                      FakeAuthRepository()..seedSignedIn(UserRole.requestor),
-                    ),
-                  ),
-                ],
-                child: const BundleDetailScreen(bundleId: 'b1'),
-              ),
-            ),
-          ],
-        ),
-        GoRoute(
-          path: '/jobs/:id',
-          builder: (context, state) =>
-              Scaffold(body: Text('Job detail: ${state.pathParameters['id']}')),
-        ),
-        GoRoute(
-          path: '/users/:uid',
-          builder: (context, state) =>
-              Scaffold(body: Text('Profile: ${state.pathParameters['uid']}')),
-        ),
-      ],
+    await pumpOwnerBundleScreen(
+      tester,
+      bundles: bundles,
+      tasks: tasksOverride ?? tasks,
+      bundleBids: bundleBids ?? FakeBundleBidRepository(bids),
     );
-    await tester.pumpWidget(
-      MaterialApp.router(theme: AppTheme.light, routerConfig: router),
-    );
-    await tester.pumpAndSettle();
     return bundles;
   }
 
@@ -318,15 +230,7 @@ void main() {
         String id,
         String name,
         BundleBidStatus status,
-      ) => BundleBid(
-        bundleId: 'b1',
-        providerId: id,
-        providerName: name,
-        taskPrices: const {'job-1': 37500},
-        estimatedDuration: '1 week',
-        status: status,
-        createdAt: DateTime.now(),
-      );
+      ) => sampleBundleBid(providerId: id, providerName: name, taskPrices: const {'job-1': 37500}, status: status);
       await pumpBundle(
         tester,
         bundle: sampleBundle(id: 'b1', status: BundleStatus.awarded),
@@ -357,46 +261,9 @@ void main() {
     testWidgets('two options with the same award are shown as one card', (
       tester,
     ) async {
-      const cheapest = BundleAwardOption(
-        key: 'cheapest',
-        label: 'Cheapest',
-        totalSen: 37500,
-        providerCount: 1,
-        premiumSen: 0,
-        weightedTrust: 700,
-        awards: [
-          BundleAwardItem(
-            providerId: 'prov-1',
-            providerName: 'Aida Renovation',
-            taskAmountsSen: {'job-1': 37500},
-          ),
-        ],
-        uncoveredTaskIds: ['job-2'],
-      );
-      const fewest = BundleAwardOption(
-        key: 'fewest',
-        label: 'Fewest providers',
-        totalSen: 37500,
-        providerCount: 1,
-        premiumSen: 0,
-        weightedTrust: 700,
-        awards: [
-          BundleAwardItem(
-            providerId: 'prov-1',
-            providerName: 'Aida Renovation',
-            taskAmountsSen: {'job-1': 37500},
-          ),
-        ],
-        uncoveredTaskIds: ['job-2'],
-      );
-      const recommended = BundleAwardOption(
-        key: 'recommended',
-        label: 'Recommended',
-        totalSen: 89500,
-        providerCount: 2,
-        premiumSen: 0,
-        weightedTrust: 751,
-        awards: [
+      final cheapest = sampleOption(key: 'cheapest', label: 'Cheapest', uncoveredTaskIds: ['job-2']);
+      final fewest = sampleOption(key: 'fewest', label: 'Fewest providers', uncoveredTaskIds: ['job-2']);
+      final recommended = sampleOption(totalSen: 89500, providerCount: 2, weightedTrust: 751, awards: [
           BundleAwardItem(
             providerId: 'prov-1',
             providerName: 'Aida Renovation',
@@ -407,12 +274,11 @@ void main() {
             providerName: 'Dev Tiling',
             taskAmountsSen: {'job-2': 52000},
           ),
-        ],
-      );
+        ]);
 
       await pumpBundle(
         tester,
-        bids: [bid(), bid(providerId: 'prov-2', providerName: 'Dev Tiling')],
+        bids: [sampleBundleBid(), sampleBundleBid(providerId: 'prov-2', providerName: 'Dev Tiling')],
         awardOptions: [cheapest, fewest, recommended],
       );
       await tester.tap(find.widgetWithText(FilledButton, 'Show award options'));
@@ -435,22 +301,14 @@ void main() {
     testWidgets('an edited bid disables Award until Refresh is pressed', (
       tester,
     ) async {
-      const recommended = BundleAwardOption(
-        key: 'recommended',
-        label: 'Recommended',
-        totalSen: 89500,
-        providerCount: 1,
-        premiumSen: 0,
-        weightedTrust: 700,
-        awards: [
+      final recommended = sampleOption(totalSen: 89500, awards: [
           BundleAwardItem(
             providerId: 'prov-1',
             providerName: 'Aida Renovation',
             taskAmountsSen: {'job-1': 37500, 'job-2': 52000},
           ),
-        ],
-      );
-      final live = _LiveBundleBidRepository()..push([bid()]);
+        ]);
+      final live = FakeBundleBidRepository()..push([sampleBundleBid()]);
       final bundles = await pumpBundle(
         tester,
         bundleBids: live,
@@ -466,15 +324,7 @@ void main() {
 
       // The provider edits their bid - createdAt is unchanged, but the price
       // and updatedAt move on.
-      final edited = BundleBid(
-        bundleId: 'b1',
-        providerId: 'prov-1',
-        providerName: 'Aida Renovation',
-        taskPrices: const {'job-1': 30000, 'job-2': 52000},
-        estimatedDuration: '1 week',
-        createdAt: bid().createdAt,
-        updatedAt: DateTime.now(),
-      );
+      final edited = sampleBundleBid(taskPrices: const {'job-1': 30000, 'job-2': 52000}, createdAt: sampleBundleBid().createdAt, updatedAt: DateTime.now());
       live.push([edited]);
       await tester.pumpAndSettle();
 
@@ -495,64 +345,6 @@ void main() {
     });
   });
 
-  group('BundleOptionCard', () {
-    Job task() => sampleJob(id: 'job-1', title: 'Waterproof the floor');
-    const option = BundleAwardOption(
-      key: 'recommended',
-      label: 'Recommended',
-      totalSen: 37500,
-      providerCount: 1,
-      premiumSen: 0,
-      weightedTrust: 700,
-      awards: [
-        BundleAwardItem(
-          providerId: 'prov-1',
-          providerName: 'Aida Renovation',
-          taskAmountsSen: {'job-1': 37500},
-        ),
-      ],
-    );
-
-    Future<void> pumpCard(
-      WidgetTester tester, {
-      required bool enabled,
-      required bool primary,
-    }) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: AppTheme.light,
-          home: Scaffold(
-            body: BundleOptionCard(
-              merged: MergedBundleOption(option, const ['Recommended']),
-              tasks: [task()],
-              primary: primary,
-              busy: false,
-              enabled: enabled,
-              onAward: () {},
-            ),
-          ),
-        ),
-      );
-    }
-
-    testWidgets('a disabled card cannot be awarded', (tester) async {
-      await pumpCard(tester, enabled: false, primary: true);
-      final button = tester.widget<FilledButton>(find.byType(FilledButton));
-      expect(button.onPressed, isNull);
-    });
-
-    testWidgets('an enabled, non-primary card uses an outlined button', (
-      tester,
-    ) async {
-      await pumpCard(tester, enabled: true, primary: false);
-      expect(find.byType(FilledButton), findsNothing);
-      final button = tester.widget<OutlinedButton>(
-        find.byType(OutlinedButton),
-      );
-      expect(button.onPressed, isNotNull);
-    });
-  });
-
   group('Manual pick section', () {
     testWidgets('hidden entirely when nobody has bid yet', (tester) async {
       await pumpBundle(tester, bids: const []);
@@ -562,7 +354,7 @@ void main() {
     testWidgets('the sticky bar only appears once a task is picked', (
       tester,
     ) async {
-      await pumpBundle(tester, bids: [bid()]);
+      await pumpBundle(tester, bids: [sampleBundleBid()]);
       expect(find.text('Award your pick'), findsNothing);
 
       await tester.tap(find.text('Waterproof the floor'));
@@ -581,93 +373,57 @@ void main() {
         tester,
         bundle: sampleBundle(id: 'b1', taskIds: const ['job-1']),
         tasksOverride: [tasks.first],
-        bids: [bid()],
+        bids: [sampleBundleBid()],
       );
       expect(find.textContaining('1 task'), findsOneWidget);
       expect(find.textContaining('1 bid'), findsOneWidget);
     });
   });
   group('Package price and trust on the bundle page', () {
-    testWidgets('an awarded task split by a package deal says so', (
-      tester,
-    ) async {
-      await pumpBundle(
-        tester,
-        bundle: sampleBundle(id: 'b1', status: BundleStatus.awarded),
-        tasksOverride: [
-          sampleJob(
-            id: 'job-1',
-            title: 'Broken roof tiles',
-            bundleId: 'b1',
-            status: JobStatus.inProgress,
-            acceptedProviderId: 'p1',
-            acceptedProviderName: 'Worker One',
-            acceptedBidAmountSen: 93334,
-          ),
-        ],
-        bids: [
-          BundleBid(
-            bundleId: 'b1',
-            providerId: 'p1',
-            providerName: 'Worker One',
-            taskPrices: const {'job-1': 100000, 'job-2': 50000},
-            bundlePriceSen: 140000,
-            estimatedDuration: '1 week',
-            status: BundleBidStatus.accepted,
-            createdAt: DateTime.now(),
-          ),
-        ],
-      );
+    for (final (name, accepted, original, shown) in [
+      ('an awarded task split by a package deal says so', 93334, null, true),
+      ('no package note once the price was changed later', 100000, 93334, false),
+    ]) {
+      testWidgets(name, (tester) async {
+        await pumpBundle(
+          tester,
+          bundle: sampleBundle(id: 'b1', status: BundleStatus.awarded),
+          tasksOverride: [
+            sampleJob(
+              id: 'job-1',
+              title: 'Broken roof tiles',
+              bundleId: 'b1',
+              status: JobStatus.inProgress,
+              acceptedProviderId: 'p1',
+              acceptedProviderName: 'Worker One',
+              acceptedBidAmountSen: accepted,
+              originalBidAmountSen: original,
+            ),
+          ],
+          bids: [
+            sampleBundleBid(
+              providerId: 'p1',
+              providerName: 'Worker One',
+              taskPrices: const {'job-1': 100000, 'job-2': 50000},
+              bundlePriceSen: 140000,
+              status: BundleBidStatus.accepted,
+            ),
+          ],
+        );
 
-      expect(find.textContaining('Package deal price'), findsOneWidget);
-      expect(find.textContaining('1,000.00 if hired for this task alone'),
-          findsOneWidget);
-    });
-
-    testWidgets('no package note once the price was changed later', (
-      tester,
-    ) async {
-      await pumpBundle(
-        tester,
-        bundle: sampleBundle(id: 'b1', status: BundleStatus.awarded),
-        tasksOverride: [
-          sampleJob(
-            id: 'job-1',
-            title: 'Broken roof tiles',
-            bundleId: 'b1',
-            status: JobStatus.inProgress,
-            acceptedProviderId: 'p1',
-            acceptedProviderName: 'Worker One',
-            acceptedBidAmountSen: 100000,
-            originalBidAmountSen: 93334,
-          ),
-        ],
-        bids: [
-          BundleBid(
-            bundleId: 'b1',
-            providerId: 'p1',
-            providerName: 'Worker One',
-            taskPrices: const {'job-1': 100000, 'job-2': 50000},
-            bundlePriceSen: 140000,
-            estimatedDuration: '1 week',
-            status: BundleBidStatus.accepted,
-            createdAt: DateTime.now(),
-          ),
-        ],
-      );
-      expect(find.textContaining('Package deal price'), findsNothing);
-    });
+        expect(
+          find.textContaining('Package deal price'),
+          shown ? findsOneWidget : findsNothing,
+        );
+        if (shown) {
+          expect(find.textContaining('1,000.00 if hired for this task alone'),
+              findsOneWidget);
+        }
+      });
+    }
 
     Future<void> pumpCard(WidgetTester tester, {required bool visible}) async {
-      final option = BundleAwardOption(
-        key: 'recommended',
-        label: 'Recommended',
-        totalSen: 140000,
-        providerCount: 1,
-        premiumSen: 0,
-        weightedTrust: 608,
-        trustVisible: visible,
-      );
+      final option = sampleOption(totalSen: 140000, weightedTrust: 608, trustVisible: visible, awards: const []);
       await tester.pumpWidget(MaterialApp(
         theme: AppTheme.light,
         home: Scaffold(
@@ -695,6 +451,162 @@ void main() {
     testWidgets('trust is hidden while any provider is new', (tester) async {
       await pumpCard(tester, visible: false);
       expect(find.textContaining('Trust'), findsNothing);
+    });
+  });
+
+  group('Award layout', () {
+    final tasks = [
+      sampleJob(id: 'job-1', title: 'Waterproof the floor', bundleId: 'b1'),
+      sampleJob(id: 'job-2', title: 'Tile the floor', bundleId: 'b1'),
+      sampleJob(id: 'job-3', title: 'Paint the wall', bundleId: 'b1'),
+      sampleJob(id: 'job-4', title: 'Seal the wall', bundleId: 'b1'),
+    ];
+    final aida = sampleBundleBid(taskPrices: {
+      'job-1': 37500,
+      'job-2': 52000,
+      'job-3': 10000,
+      'job-4': 12000,
+    }, bundlePriceSen: 100000);
+    // Dev bids on only two of the four tasks.
+    final dev = sampleBundleBid(providerId: 'prov-2', providerName: 'Dev Tiling', taskPrices: {'job-1': 30000, 'job-3': 9000});
+
+    Future<FakeBundleRepository> pump(
+      WidgetTester tester, {
+      List<BundleAwardOption> awardOptions = const [],
+      BundleAwardOption? manualOption,
+    }) async {
+      final bundles =
+          FakeBundleRepository([
+              sampleBundle(
+                id: 'b1',
+                taskIds: const ['job-1', 'job-2', 'job-3', 'job-4'],
+              ),
+            ])
+            ..awardOptions = awardOptions
+            ..manualOption = manualOption;
+      await pumpOwnerBundleScreen(
+        tester,
+        bundles: bundles,
+        tasks: tasks,
+        bundleBids: FakeBundleBidRepository([aida, dev]),
+        size: const Size(800, 2400),
+      );
+      return bundles;
+    }
+
+    group('By-task pick list', () {
+      testWidgets('rows show the current pick, "Not awarded" at first', (
+        tester,
+      ) async {
+        await pump(tester);
+        expect(find.text('Pick providers yourself'), findsOneWidget);
+        // One row per task.
+        expect(find.text('Not awarded'), findsNWidgets(4));
+        expect(find.text('Your pick'), findsNothing);
+      });
+
+      testWidgets('tapping a row lists bids cheapest first; choosing one '
+          'sets the pick and prices it', (tester) async {
+        final bundles = await pump(
+          tester,
+          manualOption: _option('Your pick', {'job-1': 'prov-2'}),
+        );
+
+        await tester.tap(find.text('Waterproof the floor'));
+        await tester.pumpAndSettle();
+
+        final dev = tester.getTopLeft(find.text('Dev Tiling')).dy;
+        final aida = tester.getTopLeft(find.text('Aida Renovation')).dy;
+        expect(dev, lessThan(aida));
+        expect(find.text('Lowest price'), findsOneWidget);
+        expect(
+          find.textContaining('if they win all 4 tasks'),
+          findsOneWidget,
+        );
+        expect(find.text("Don't award"), findsOneWidget);
+
+        await tester.tap(find.text('Dev Tiling'));
+        await tester.pumpAndSettle();
+
+        expect(bundles.lastManualPicks, {'job-1': 'prov-2'});
+        // The row now reads the provider, and the bar shows the server total.
+        expect(find.text('Dev Tiling'), findsOneWidget);
+        expect(find.textContaining('Your pick: RM'), findsOneWidget);
+        expect(find.text('Award your pick'), findsOneWidget);
+      });
+
+      testWidgets('"Use this option" fills the picks from that option', (
+        tester,
+      ) async {
+        final bundles = await pump(
+          tester,
+          awardOptions: [
+            _option('Recommended', {'job-1': 'prov-2', 'job-2': 'prov-1'}),
+          ],
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Show award options'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(OutlinedButton, 'Use this option'));
+        await tester.pumpAndSettle();
+
+        expect(bundles.lastManualPicks, {'job-1': 'prov-2', 'job-2': 'prov-1'});
+        expect(find.text('Dev Tiling'), findsOneWidget);
+        expect(find.text('Aida Renovation'), findsOneWidget);
+      });
+
+      testWidgets('picking part of a bundle-price bid shows the hint', (
+        tester,
+      ) async {
+        await pump(tester);
+        await tester.tap(find.text('Tile the floor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Aida Renovation'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('drops their bundle price'), findsOneWidget);
+      });
+    });
+
+    group('Bids section', () {
+      testWidgets('opens every bid in a sheet from the top button', (
+        tester,
+      ) async {
+        await pump(tester);
+        expect(find.text('View all bids (2)'), findsOneWidget);
+        expect(find.textContaining('Bundle price (all tasks)'), findsNothing);
+
+        await tester.tap(find.text('View all bids (2)'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Bundle price (all tasks)'), findsOneWidget);
+      });
+    });
+
+    group('pickHints', () {
+      final bids = [aida, dev];
+
+      test('no hints when the bundle bid is won in full or not at all', () {
+        expect(pickHints({}, bids), isEmpty);
+        expect(
+          pickHints({
+            'job-1': 'prov-1',
+            'job-2': 'prov-1',
+            'job-3': 'prov-1',
+            'job-4': 'prov-1',
+          }, bids),
+          isEmpty,
+        );
+      });
+
+      test('warns when a bundle price is dropped', () {
+        final hints = pickHints(
+          {'job-1': 'prov-1'},
+          [sampleBundleBid(providerName: 'Aida', taskPrices: {'job-1': 1, 'job-2': 2}, bundlePriceSen: 2)],
+        );
+        expect(hints, [
+          "Picking fewer than all of Aida's tasks drops their bundle price.",
+        ]);
+      });
     });
   });
 }

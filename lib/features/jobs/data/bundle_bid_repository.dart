@@ -3,28 +3,20 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/bundle_bid.dart';
 
-/// Thrown by [BundleBidRepository.submit]/[BundleBidRepository.withdraw]
-/// when the `submitBundleBid`/`withdrawBundleBid` callable refuses the
-/// request. Carries the server's message, written to be shown to the
-/// provider as-is - see `createBundle`'s counterpart in
-/// `bundle_repository.dart`.
+/// What:   Thrown when a bundle-bid callable refuses.
+/// Input:  [message], server-written.
+/// Output: Exception shown as-is.
 class BundleBidRejectedException implements Exception {
   const BundleBidRejectedException(this.message);
   final String message;
 }
 
-/// Reads and writes package bids on a bundle. UI/controllers depend on this
-/// interface so tests can use a fake without Firestore.
-///
-/// Every write goes through a Cloud Function: `firestore.rules` denies all
-/// client writes to `bundles/{bundleId}/bundleBids`, because the prices live
-/// in a map the rules language cannot walk entry-by-entry. The callables also
-/// let the server stamp the provider's name/photo/Trust Score snapshot
-/// itself, exactly as `submitBid` does for an ordinary `Bid`.
+/// What:   Package-bid reads and writes, behind an interface so tests can fake it.
+/// Input:  Firestore `bundles/{bundleId}/bundleBids/{uid}`; writes go through callables.
+/// Output: BundleBid streams and writes; failures as [BundleBidRejectedException].
+/// Notes:  firestore.rules denies client writes; the server stamps name, photo and Trust Score.
 abstract interface class BundleBidRepository {
-  /// Submits (or re-submits, replacing any existing bid) the caller's
-  /// package bid on [bundleId] through the `submitBundleBid` callable.
-  /// [taskPrices] maps job id to price in sen for each task picked.
+  /// Submits or replaces the caller's bid; [taskPrices] maps job id to sen.
   Future<void> submit({
     required String bundleId,
     required Map<String, int> taskPrices,
@@ -33,34 +25,25 @@ abstract interface class BundleBidRepository {
     String message = '',
   });
 
-  /// Withdraws the caller's bid on [bundleId] through the
-  /// `withdrawBundleBid` callable.
+  /// Withdraws the caller's bid on [bundleId].
   Future<void> withdraw(String bundleId);
 
-  /// Streams the signed-in provider's own bid on [bundleId], or null. Rules
-  /// only let a provider read their OWN bid, so this is a single-document
-  /// read rather than a query - mirrors `BidRepository.watchMyBid`.
+  /// Streams the provider's own bid, or null (rules allow only their own).
   Stream<BundleBid?> watchMyBundleBid(String bundleId, String providerId);
 
-  /// One-shot read of the signed-in provider's own bid on [bundleId], or
-  /// null. Used where a live stream's first event isn't safe to trust - e.g.
-  /// opening the bid sheet - so the caller gets a single up-to-date snapshot
-  /// rather than whatever the local cache serves first.
+  /// One-shot read of the provider's own bid, or null; avoids a stale cache hit.
   Future<BundleBid?> getMyBundleBid(String bundleId, String providerId);
 
-  /// Streams every bid on [bundleId] - the requestor's view of their own
-  /// bundle. Mirrors `BidRepository.watchBids`.
+  /// Streams every bid on [bundleId] (owner only).
   Stream<List<BundleBid>> watchBundleBids(String bundleId);
 
-  /// Streams the provider's own bundle bids across all bundles (newest
-  /// first), for the "Pending Bids" list - mirrors
-  /// `BidRepository.watchMyBids`.
+  /// Streams the provider's bundle bids across bundles, newest first.
   Stream<List<BundleBid>> watchMyBundleBids(String providerId);
 }
 
-/// Firestore-backed [BundleBidRepository]. Bundle bids live at
-/// `bundles/{bundleId}/bundleBids/{uid}` - the provider's uid as the doc id
-/// enforces one package bid per provider per bundle.
+/// What:   Firestore and Cloud Functions [BundleBidRepository].
+/// Input:  Firestore `bundles/{id}/bundleBids/{uid}` (one bid per provider) and callables.
+/// Output: BundleBid streams and writes.
 class FirestoreBundleBidRepository implements BundleBidRepository {
   FirestoreBundleBidRepository({
     FirebaseFirestore? firestore,
@@ -144,14 +127,12 @@ class FirestoreBundleBidRepository implements BundleBidRepository {
         .map(
           (snapshot) => [
             for (final doc in snapshot.docs)
-              // A bundle bid's parent's parent is its bundle document.
+              // parent.parent is the bundle.
               _fromDoc(doc.reference.parent.parent!.id, doc),
           ],
         );
   }
 
-  /// Normalises Firestore Timestamps to DateTime before building the
-  /// [BundleBid].
   BundleBid _fromDoc(
     String bundleId,
     DocumentSnapshot<Map<String, dynamic>> doc,

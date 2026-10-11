@@ -10,17 +10,17 @@ import '../../../../core/util/service_categories.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../auth/domain/app_user.dart';
-import '../../../auth/presentation/validators.dart';
 import '../../data/bundle_bid_repository.dart';
 import '../../domain/bundle.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
-import 'submit_bid_sheet.dart' show kBidDurations;
+import 'submit_bid_sheet.dart' show BidTermsFields, kBidDurations;
 import 'submit_bundle_bid_controller.dart';
 
-/// Bottom sheet for a provider to place or edit a package bid on [bundle].
-/// They pick tasks, price each, and may add a discounted bundle price.
-class SubmitBundleBidSheet extends StatelessWidget {
+/// What:   Bottom sheet for a provider to place or edit a package bid on [bundle].
+/// Input:  [bundle], [tasks], [bidder]; [existing] when editing; a SubmitBundleBidController from [show].
+/// Output: Pick tasks, price each, optional package price; submit/withdraw via BundleBidRepository.
+class SubmitBundleBidSheet extends StatefulWidget {
   const SubmitBundleBidSheet({
     super.key,
     required this.bundle,
@@ -32,12 +32,8 @@ class SubmitBundleBidSheet extends StatelessWidget {
   final Bundle bundle;
   final List<Job> tasks;
   final AppUser bidder;
-
-  /// The provider's current bid when editing. Fills in every field.
-  /// Null when placing a first bid.
   final BundleBid? existing;
 
-  /// Opens the sheet. Finishes when it closes.
   static Future<void> show(
     BuildContext context, {
     required Bundle bundle,
@@ -63,62 +59,27 @@ class SubmitBundleBidSheet extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      // Keep the form above the keyboard.
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: _SubmitBundleBidForm(
-        bundle: bundle,
-        tasks: tasks,
-        bidder: bidder,
-        existing: existing,
-      ),
-    );
-  }
+  State<SubmitBundleBidSheet> createState() => _SubmitBundleBidSheetState();
 }
 
-class _SubmitBundleBidForm extends StatefulWidget {
-  const _SubmitBundleBidForm({
-    required this.bundle,
-    required this.tasks,
-    required this.bidder,
-    required this.existing,
-  });
-
-  final Bundle bundle;
-  final List<Job> tasks;
-  final AppUser bidder;
-  final BundleBid? existing;
-
-  @override
-  State<_SubmitBundleBidForm> createState() => _SubmitBundleBidFormState();
-}
-
-class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
+class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
   final _formKey = GlobalKey<FormState>();
 
-  /// Ticked state per task id, in [widget.tasks] order.
   late final Map<String, bool> _ticked;
 
-  /// "Price if you get only this task" controller per task id.
+  /// "Price if you get only this task" per task id.
   late final Map<String, TextEditingController> _prices;
   final _bundlePrice = TextEditingController();
   final _message = TextEditingController();
-  /// True once the optional package-deal field is revealed.
   bool _showBundlePrice = false;
   String? _duration;
   bool _escrowAcknowledged = false;
 
-  /// Set when submit is blocked by the unticked escrow box. Shown in the
-  /// sheet because a snackbar would appear behind it.
+  /// Shown in the sheet because a snackbar would appear behind it.
   bool _showEscrowError = false;
 
-  /// Set when submit is attempted with no task ticked.
   bool _showNoTaskError = false;
 
-  /// Ids of tasks whose "Show details" description is expanded.
   final _expandedDescriptions = <String>{};
 
   bool get _isUpdate => widget.existing != null;
@@ -146,7 +107,7 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
         _bundlePrice.text = (bundlePriceSen / 100).toStringAsFixed(2);
         _showBundlePrice = true;
       }
-      // Handles a duration missing from kBidDurations instead of crashing.
+      // A stored duration may no longer be in kBidDurations.
       _duration = kBidDurations.contains(existing.estimatedDuration)
           ? existing.estimatedDuration
           : null;
@@ -164,7 +125,6 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     super.dispose();
   }
 
-  /// Ticks or unticks [task].
   void _toggleTask(Job task, bool? value) {
     final tick = value ?? false;
     setState(() {
@@ -186,7 +146,6 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     (sum, t) => sum + (parseRmToSen(_prices[t.id]!.text) ?? 0),
   );
 
-  /// A bundle price needs at least two tasks picked.
   bool get _bundleFieldsEnabled => _tickedTasks.length >= 2;
 
   /// "RM X off your task total" while the bundle price is valid.
@@ -201,7 +160,7 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
 
   Future<void> _submit() async {
     final tickedTasks = _tickedTasks;
-    // Check every gate first so all the errors show together.
+    // Check every gate so all errors show together.
     final formValid = _formKey.currentState!.validate();
     setState(() {
       _showNoTaskError = tickedTasks.isEmpty;
@@ -244,28 +203,14 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     }
   }
 
-  /// Asks to confirm, then withdraws the provider's bundle bid.
   Future<void> _withdraw() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Withdraw your bundle bid?'),
-        content: const Text(
-          'You\'ll no longer be considered for any of its tasks.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Withdraw'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Withdraw your bundle bid?',
+      body: 'You\'ll no longer be considered for any of its tasks.',
+      actionLabel: 'Withdraw',
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     final controller = context.read<SubmitBundleBidController>();
     final ok = await controller.withdraw(widget.bundle.id);
     if (ok && mounted) {
@@ -283,7 +228,13 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     final controller = context.watch<SubmitBundleBidController>();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      // Keeps the form above the keyboard.
+      padding: EdgeInsets.fromLTRB(
+        24,
+        24,
+        24,
+        24 + MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: Form(
         key: _formKey,
         child: Column(
@@ -378,52 +329,18 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
                 ),
               ),
             const SizedBox(height: 8),
-            Text('Estimated duration', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<String>(
-              initialValue: _duration,
-              hint: const Text('How long will it take?'),
-              items: [
-                for (final d in kBidDurations)
-                  DropdownMenuItem(value: d, child: Text(d)),
-              ],
-              onChanged: (v) => setState(() => _duration = v),
-              validator: (v) => v == null ? 'Pick a duration.' : null,
-            ),
-            const SizedBox(height: 16),
-            AppTextField(
-              controller: _message,
-              label: 'Proposal message',
-              hint: 'Explain your approach, experience and what\'s included...',
-              maxLines: 4,
-              validator: (v) => Validators.required(v, 'Message'),
-            ),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              value: _escrowAcknowledged,
-              onChanged: (v) => setState(() {
-                _escrowAcknowledged = v ?? false;
-                if (_escrowAcknowledged) _showEscrowError = false;
+            BidTermsFields(
+              duration: _duration,
+              onDurationChanged: (v) => setState(() => _duration = v),
+              message: _message,
+              escrowAcknowledged: _escrowAcknowledged,
+              showEscrowError: _showEscrowError,
+              onEscrowChanged: (v) => setState(() {
+                _escrowAcknowledged = v;
+                if (v) _showEscrowError = false;
               }),
-              title: Text(
-                'I understand the client pays the full price into escrow '
-                'when they hire me, and FairBid releases it to me when they '
-                'approve the work.',
-                style: theme.textTheme.bodyMedium,
-              ),
             ),
-            if (_showEscrowError)
-              Padding(
-                padding: const EdgeInsets.only(left: 16, top: 4),
-                child: Text(
-                  'Please tick this to confirm you understand, then submit.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.error,
-                  ),
-                ),
-              ),
-            // Repeated here: the sheet is tall, so the top error may be hidden.
+            // Repeated: the sheet is tall, so the top error may be off screen.
             if (controller.errorMessage != null) ...[
               const SizedBox(height: 8),
               ErrorBanner(controller.errorMessage!),
@@ -447,8 +364,6 @@ class _SubmitBundleBidFormState extends State<_SubmitBundleBidForm> {
     );
   }
 
-  /// One task row: checkbox with title, category and budget, optional
-  /// description, and the price field while ticked.
   Widget _taskRow(ThemeData theme, Job task) {
     final ticked = _ticked[task.id] ?? false;
     final budgetLabel = task.budget?.label;

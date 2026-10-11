@@ -1,26 +1,17 @@
-import '../../../../core/util/money.dart';
 import '../../domain/bundle_bid.dart';
+import '../../domain/job.dart';
 
-/// What [bid] charges for [taskIds] taken together (their task prices).
-int bidPriceFor(BundleBid bid, List<String> taskIds) =>
-    taskIds.fold(0, (sum, id) => sum + (bid.priceFor(id) ?? 0));
+/// Title of task [id] in [tasks], or `'a task'`.
+String taskTitle(List<Job> tasks, String id) =>
+    tasks.where((t) => t.id == id).firstOrNull?.title ?? 'a task';
 
-/// Pending bids covering every task in [taskIds], cheapest first.
-List<BundleBid> bidsCoveringAll(List<BundleBid> bids, List<String> taskIds) {
-  final covering = [
-    for (final bid in bids)
-      if (bid.status == BundleBidStatus.pending &&
-          taskIds.every(bid.coversTask))
-        bid,
-  ];
-  covering.sort(
-    (a, b) => bidPriceFor(a, taskIds).compareTo(bidPriceFor(b, taskIds)),
-  );
-  return covering;
-}
+/// Pending bids covering [taskId], cheapest first.
+List<BundleBid> bidsCoveringTask(List<BundleBid> bids, String taskId) => [
+  for (final bid in bids)
+    if (bid.status == BundleBidStatus.pending && bid.coversTask(taskId)) bid,
+]..sort((a, b) => a.priceFor(taskId)!.compareTo(b.priceFor(taskId)!));
 
-/// Warnings about [picks] (task id -> provider id) that the bids alone show:
-/// a lost bundle price.
+/// Warnings about [picks] (task id -> provider id): picking part of a bid drops its bundle price.
 List<String> pickHints(Map<String, String?> picks, List<BundleBid> bids) {
   final hints = <String>[];
   for (final bid in bids) {
@@ -38,10 +29,3 @@ List<String> pickHints(Map<String, String?> picks, List<BundleBid> bids) {
   }
   return hints;
 }
-
-/// Small tags for a bid in the pick sheet.
-List<String> bidTags(BundleBid bid) => [
-  if (bid.bundlePriceSen != null)
-    'Bundle price ${formatRm(bid.bundlePriceSen!)} if they win all '
-        '${bid.taskCount} tasks',
-];

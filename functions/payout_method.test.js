@@ -1,33 +1,18 @@
 const assert = require("node:assert");
+const test = require("node:test");
 const {
   normaliseMobile,
   checkBankAccount,
   buildPayoutMethod,
 } = require("./payout_method");
 
-let failed = 0;
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`  FAIL  ${name}\n        ${err.message}`);
-  }
-}
-
-/** Asserts [fn] throws the callable's `invalid-argument` error. */
-function rejects(fn) {
-  assert.throws(fn, (err) => err.code === "invalid-argument");
-}
+const INVALID = {code: "invalid-argument"};
 
 const profile = {
   phone: "+60 12-345 6789",
   ssmNumber: "202301012345",
   isBusiness: false,
 };
-
-console.log("payout_method.js");
 
 test("mobile numbers are normalised to 01X form", () => {
   assert.strictEqual(normaliseMobile("+60 12-345 6789"), "0123456789");
@@ -39,12 +24,12 @@ test("mobile numbers are normalised to 01X form", () => {
 test("bank accounts must match the bank's length", () => {
   assert.strictEqual(
       checkBankAccount("MBBEMYKL", "512345678901").last4, "8901");
-  rejects(() => checkBankAccount("MBBEMYKL", "12345")); // Maybank is 12
-  rejects(() => checkBankAccount("MBBEMYKL", "5123-4567-8901")); // not digits
-  rejects(() => checkBankAccount("NOTABANK", "512345678901"));
+  assert.throws(() => checkBankAccount("MBBEMYKL", "12345"), INVALID); // Maybank is 12
+  assert.throws(() => checkBankAccount("MBBEMYKL", "5123-4567-8901"), INVALID); // not digits
+  assert.throws(() => checkBankAccount("NOTABANK", "512345678901"), INVALID);
   // A bank with no known length takes 8 to 17 digits.
   checkBankAccount("ARBKMYKL", "12345678");
-  rejects(() => checkBankAccount("ARBKMYKL", "1234567"));
+  assert.throws(() => checkBankAccount("ARBKMYKL", "1234567"), INVALID);
 });
 
 test("a bank method is masked to its last 4 digits", () => {
@@ -66,13 +51,13 @@ test("a DuitNow mobile ID always uses the profile phone", () => {
       profile);
   assert.strictEqual(m.masked, "DuitNow 012-•••• 789"); // not 019...
   assert.strictEqual(m.mobile, "0123456789");
-  rejects(() => buildPayoutMethod({method: "duitnow", proxyType: "mobile"},
-      {...profile, phone: ""}));
+  assert.throws(() => buildPayoutMethod({method: "duitnow", proxyType: "mobile"},
+      {...profile, phone: ""}), INVALID);
 });
 
 test("SSM IDs are for business providers only", () => {
-  rejects(() => buildPayoutMethod({method: "duitnow", proxyType: "brn"},
-      profile));
+  assert.throws(() => buildPayoutMethod({method: "duitnow", proxyType: "brn"},
+      profile), INVALID);
   assert.strictEqual(
       buildPayoutMethod({method: "duitnow", proxyType: "brn"},
           {...profile, isBusiness: true}).masked,
@@ -80,18 +65,12 @@ test("SSM IDs are for business providers only", () => {
 });
 
 test("MyKad is no longer offered", () => {
-  rejects(() => buildPayoutMethod({method: "duitnow", proxyType: "mykad"},
-      profile));
+  assert.throws(() => buildPayoutMethod({method: "duitnow", proxyType: "mykad"},
+      profile), INVALID);
 });
 
 test("an unknown method or ID type is refused", () => {
-  rejects(() => buildPayoutMethod({method: "cash"}, profile));
-  rejects(() => buildPayoutMethod({method: "duitnow", proxyType: "qr"},
-      profile));
+  assert.throws(() => buildPayoutMethod({method: "cash"}, profile), INVALID);
+  assert.throws(() => buildPayoutMethod({method: "duitnow", proxyType: "qr"},
+      profile), INVALID);
 });
-
-if (failed > 0) {
-  console.log(`\n${failed} payout method test(s) failed.`);
-  process.exit(1);
-}
-console.log("All payout method tests passed.\n");

@@ -1,20 +1,17 @@
-// Pure helpers for the mutual price-change flow (requestPriceChange /
-// respondToPriceChange in index.js). Dependency-free so `npm test` can cover
-// every rule without Firebase, like bundles.js.
+// Pure rules for the mutual price-change flow (requestPriceChange and
+// respondToPriceChange in index.js). Needs no Firebase, so `npm test` covers them.
 
-const {checkFundedPriceChange} = require("./payouts");
+const {checkFundedPriceChange, isTerminal} = require("./payouts");
 
 /** Max accepted price changes per job. */
 const MAX_PRICE_CHANGES = 3;
 
-// A finished milestone status; `resolved` is only kept for old data.
-const isTerminal = (status) =>
-  status === "released" || status === "resolved" || status === "refunded";
-
 /**
- * Returns an error message if [newAmountSen] can't become the job's agreed
- * price, else null. [milestones] is an array of milestone data objects. The
- * new price is a top-up or a refund of the undelivered part (see payouts.js).
+ * What:   Validator for a proposed price.
+ * Input:  {job, milestones (data objects), newAmountSen}.
+ * Output: An error message, or null when the change is allowed.
+ * How:    In progress, not a bundle task, a new valid amount, under the change
+ *         limit, no dispute, and a decrease fits the funded stages (payouts.js).
  */
 function validatePriceChange({job, milestones, newAmountSen}) {
   if (job?.status !== "in_progress") return "This job is not in progress.";
@@ -36,9 +33,10 @@ function validatePriceChange({job, milestones, newAmountSen}) {
 }
 
 /**
- * Whether releasing milestone [releasingId] completes the job: every other
- * milestone is terminal AND the stages cover the agreed price. [milestones]
- * is an array of `{id, status, amountSen}`.
+ * What:   Completion check for a release.
+ * Input:  [job], [milestones] as `{id, status, amountSen}`, the [releasingId].
+ * Output: True when every other stage is finished and the stages add up to the
+ *         agreed price.
  */
 function completesJob(job, milestones, releasingId) {
   const allDone = milestones.every(

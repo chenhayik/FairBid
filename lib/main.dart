@@ -1,5 +1,4 @@
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
 import 'core/app.dart';
@@ -27,23 +26,11 @@ import 'features/profile/data/user_report_repository.dart';
 import 'features/wallet/data/wallet_repository.dart';
 import 'firebase_options.dart';
 
-/// FCM background handler. Must be a top-level `vm:entry-point` function -
-/// it runs in its own isolate when a push arrives with the app terminated or
-/// backgrounded. Android already displays notification-type messages itself;
-/// this exists so the isolate has Firebase ready if data-only work is added.
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-}
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   runApp(FairBidApp(
     authRepository: FirebaseAuthRepository(),
     onboardingRepository: FirestoreOnboardingRepository(),

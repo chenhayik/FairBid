@@ -1,22 +1,19 @@
-/// A pending proposal, on an in-progress job, to change the agreed price
-/// (`requestPriceChange` Cloud Function). The counterparty accepts or
-/// declines; the proposer may withdraw.
+/// What:   A pending proposal to change an in-progress job's agreed price.
+/// Input:  Job doc field `priceChangeRequest`, set by the `requestPriceChange` callable.
+/// Output: Who proposed ([by]), the new amount and the reason.
 class PriceChangeRequest {
   const PriceChangeRequest({
     required this.by,
     required this.newAmountSen,
     required this.reason,
-    this.requestedAt,
   });
 
-  /// `'requestor'` or `'provider'`: who proposed the change.
+  /// `'requestor'` or `'provider'`.
   final String by;
   final int newAmountSen;
   final String reason;
-  final DateTime? requestedAt;
 
-  /// Null when [m] is null or malformed. `requestedAt` must already be a
-  /// DateTime (the repository normalises Timestamps).
+  /// Null when [m] is null or malformed.
   static PriceChangeRequest? fromMap(Map<String, dynamic>? m) {
     if (m == null) return null;
     final by = m['by'] as String?;
@@ -26,7 +23,6 @@ class PriceChangeRequest {
       by: by,
       newAmountSen: amount,
       reason: m['reason'] as String? ?? '',
-      requestedAt: m['requestedAt'] as DateTime?,
     );
   }
 }

@@ -4,46 +4,39 @@ import '../../jobs/domain/job.dart';
 import '../domain/conversation.dart';
 import '../domain/message.dart';
 
-/// Reads and writes chat conversations and messages. UI/controllers depend on
-/// this interface so tests can use a fake without Firestore.
+/// What:   Chat API for conversations and messages.
+/// Input:  Firestore via FirestoreChatRepository; a fake in tests.
+/// Output: Conversation and message streams, sends and read marks.
 abstract interface class ChatRepository {
-  /// Finds or lazily creates the conversation between [job]'s requestor and
-  /// its accepted provider, returning its id. The job must already have an
-  /// accepted provider.
+  /// Finds or creates the conversation between [job]'s requestor and accepted provider; returns its id.
   Future<String> openConversation(Job job);
 
-  /// Streams the user's conversations, most recently active first.
+  /// The user's conversations, most recently active first.
   Stream<List<Conversation>> watchConversations(String uid);
 
-  /// Streams one conversation - null until it has been created.
+  /// One conversation; null until created.
   Stream<Conversation?> watchConversation(String conversationId);
 
-  /// Streams the newest 50 messages, newest first (the thread renders them
-  /// with a reversed list, so the newest sits at the bottom).
+  /// The newest 50 messages, newest first.
   Stream<List<Message>> watchMessages(String conversationId);
 
-  /// Appends a text message and updates the conversation's preview fields and
-  /// the recipient's unread counter.
+  /// Appends a message and updates the preview and the recipient's unread counter.
   Future<void> sendMessage({
     required Conversation conversation,
     required String senderId,
     required String text,
   });
 
-  /// Zeroes the user's unread counter on a conversation (called when they
-  /// open the thread).
+  /// Zeroes the user's unread counter.
   Future<void> markRead(String conversationId, String uid);
 
-  /// Streams the user's total unread-message count across all conversations,
-  /// for the Messages tab badge.
+  /// Total unread messages across conversations (Messages tab badge).
   Stream<int> watchTotalUnread(String uid);
 }
 
-/// Firestore-backed [ChatRepository]. Conversations live at
-/// `conversations/{jobId}_{providerId}` with their messages in a
-/// subcollection. Counter updates use dotted-path atomic increments in the
-/// same batch as the message write - not a transaction, since the unread
-/// counter is a UI hint, not an invariant-critical value.
+/// What:   Firestore-backed [ChatRepository].
+/// Input:  `conversations/{jobId}_{providerId}` with a `messages` subcollection.
+/// Output: Models; the unread counter is an atomic increment in the message batch (a UI hint, no transaction).
 class FirestoreChatRepository implements ChatRepository {
   FirestoreChatRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -68,18 +61,13 @@ class FirestoreChatRepository implements ChatRepository {
     final id = '${job.id}_$providerId';
     final ref = _conversations.doc(id);
     final existing = await ref.get();
-    // Only start a fresh thread while the job is live. Once it has ended, an
-    // existing thread is still reachable (read-only after its grace window),
-    // but we don't spin up a brand-new, ungated conversation on a closed job.
+    // Only start a thread while the job is live; existing ones stay reachable.
     if (!existing.exists && job.status == JobStatus.inProgress) {
-      // The winning bid carries the provider's photo snapshot (see
-      // bid.dart's providerPhotoUrl); reuse it here rather than a second
-      // profile lookup.
+      // The winning bid carries the provider's photo snapshot.
       final winningBid =
           await _job(job.id).collection('bids').doc(providerId).get();
-      // Both sides may race to create the same doc; they write identical
-      // initial content, so last-write-wins is harmless. `lastMessageAt` is
-      // set at creation so the empty thread still sorts into the list.
+      // Both sides may race; identical content makes last-write-wins harmless.
+      // `lastMessageAt` is set so the empty thread still sorts into the list.
       await ref.set({
         'jobId': job.id,
         'jobTitle': job.title,
@@ -170,7 +158,6 @@ class FirestoreChatRepository implements ChatRepository {
         conversations.fold(0, (total, c) => total + c.unreadFor(uid)));
   }
 
-  /// Normalises Firestore Timestamps to DateTime before building the model.
   Conversation _conversationFromDoc(
       DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});

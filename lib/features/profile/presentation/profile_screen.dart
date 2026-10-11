@@ -6,6 +6,7 @@ import '../../../core/config/platform_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/money.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/form_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../../core/widgets/user_avatar.dart';
 import '../../admin/data/verification_repository.dart';
@@ -15,13 +16,14 @@ import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/mfa_code_sheet.dart';
 import '../../home/presentation/home_app_bar.dart';
+import '../../onboarding/domain/onboarding_data.dart';
 import '../data/review_repository.dart';
 import '../domain/review.dart';
-import 'widgets/review_card.dart';
+import 'widgets/review_list.dart';
 
-/// The "Profile" tab. A role-aware view of the signed-in user: header, Trust
-/// Score, a provider-only Earnings & Payouts entry, editable About and Basic
-/// Details, and the reviews read from Firestore.
+/// What:   The Profile tab: a role-aware view of the signed-in user.
+/// Input:  [AuthController.user]; reviews via ReviewRepository.watchReviews() (review_repository.dart).
+/// Output: Header, Trust Score, wallet and security links, About, Basic Details and Reviews (admins get access and activity cards instead).
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
@@ -47,9 +49,7 @@ class ProfileScreen extends StatelessWidget {
           children: [
             _Header(user: user),
             const SizedBox(height: 24),
-            // Admins are platform staff, not marketplace participants, so the
-            // Trust Score / earnings / client bio / reviews don't apply - show
-            // their access and account details instead.
+            // Admins are staff, not marketplace participants: no score, wallet or reviews.
             if (isAdmin) ...[
               const _AdminAccessCard(),
               const SizedBox(height: 16),
@@ -59,16 +59,33 @@ class ProfileScreen extends StatelessWidget {
             ] else ...[
               _TrustScoreCard(user: user),
               const SizedBox(height: 16),
-              _EarningsNavCard(isProvider: isProvider),
+              _NavCard(
+                icon: Icons.account_balance_wallet_outlined,
+                title: isProvider ? 'Earnings & payouts' : 'My wallet',
+                subtitle: isProvider
+                    ? 'Manage your income and payout method'
+                    : 'Top up and track your job payments',
+                route: '/profile/earnings',
+              ),
               const SizedBox(height: 16),
               _AboutCard(user: user),
               const SizedBox(height: 16),
               _BasicDetailsCard(user: user),
               const SizedBox(height: 16),
-              _ReviewsCard(user: user),
+              ReviewList(
+                uid: user.uid,
+                header: Text('Reviews (${user.ratingCount})',
+                    style: Theme.of(context).textTheme.titleLarge),
+                onFlag: (review) => _flagReview(context, user, review),
+              ),
             ],
             const SizedBox(height: 16),
-            const _SecurityNavCard(),
+            const _NavCard(
+              icon: Icons.shield_outlined,
+              title: 'Security',
+              subtitle: 'Two-factor authentication',
+              route: '/profile/security',
+            ),
             const SizedBox(height: 24),
             SecondaryButton(
               label: 'Log out',
@@ -91,10 +108,7 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-/// Shows the delete-account confirmation dialog and, if confirmed, deletes
-/// the account. Firestore cleanup happens server-side (`cleanupUserDoc` Cloud
-/// Function) once the Auth account is gone; the router redirects to sign-in
-/// once [AuthController] observes the signed-out state.
+/// Confirms, then deletes the account; `cleanupUserDoc` removes the data and the router returns to sign-in.
 Future<void> _confirmDelete(
   BuildContext context,
   AuthController auth,
@@ -113,9 +127,7 @@ Future<void> _confirmDelete(
   if (!context.mounted) return;
 
   if (!success) {
-    // Unlike withdrawal, deleteAccount re-authenticates internally, so an
-    // enrolled user's challenge surfaces from here rather than a reauth
-    // dialog.
+    // deleteAccount re-authenticates internally, so an MFA challenge surfaces here, not in a reauth dialog.
     final challenge = auth.takePendingChallenge();
     if (challenge != null) {
       final verified = await MfaCodeSheet.show(context, challenge: challenge);
@@ -227,15 +239,12 @@ class _Header extends StatelessWidget {
 
   String _subtitle(AppUser user) => switch (user.role) {
         UserRole.admin => 'Administrator',
-        _ => switch (user.providerType) {
-            'individual' => 'Individual / Freelancer',
-            'business' => 'Registered Business',
-            _ => user.role.label,
-          },
+        _ => ProviderType.fromStorage(user.providerType)?.label ??
+            user.role.label,
       };
 }
 
-/// Admin-only: a short banner explaining the account's platform access.
+/// Admin-only banner describing platform access.
 class _AdminAccessCard extends StatelessWidget {
   const _AdminAccessCard();
 
@@ -251,8 +260,7 @@ class _AdminAccessCard extends StatelessWidget {
   }
 }
 
-/// Admin-only: a live count of applicants still awaiting review, so the admin
-/// sees outstanding work at a glance from their profile too.
+/// Admin-only live count of applicants awaiting review.
 class _AdminActivityCard extends StatelessWidget {
   const _AdminActivityCard();
 
@@ -279,8 +287,7 @@ class _TrustScoreCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // The server-computed breakdown behind the headline score. Until the
-    // Cloud Function has scored this profile, everything reads 0 / hidden.
+    // Server-computed; reads 0 until the Cloud Function has scored this profile.
     final trust = user.trustBreakdown;
     final trustPercent = (user.trustScore / 10).round();
     final jobsToGo =
@@ -350,7 +357,7 @@ class _TrustScoreCard extends StatelessWidget {
               'rejected' => 'Not approved. Tap to send your documents again.',
               _ => 'Tap to send your documents and get verified.',
             },
-            // Skipped or rejected users can always start verification again.
+            // Skipped or rejected users can restart verification.
             onTap: user.verificationStatus == 'approved' ||
                     user.verificationStatus == 'pending'
                 ? null
@@ -369,8 +376,7 @@ class _TrustScoreCard extends StatelessWidget {
     );
   }
 
-  /// Names what's still missing from the profile sub-score, or null when
-  /// everything the score counts is filled in.
+  /// Names what the profile sub-score still lacks; null when complete.
   String? _missingProfileHint() {
     final missing = [
       if ((user.displayName ?? '').isEmpty) 'name',
@@ -383,71 +389,38 @@ class _TrustScoreCard extends StatelessWidget {
   }
 }
 
-/// Navigation card to the wallet screen - Earnings & Payouts for providers,
-/// My Wallet (with the demo top-up) for requestors.
-class _EarningsNavCard extends StatelessWidget {
-  const _EarningsNavCard({required this.isProvider});
-  final bool isProvider;
+/// Tappable card with an icon, title, subtitle and chevron that opens [route].
+class _NavCard extends StatelessWidget {
+  const _NavCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.route,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String route;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AppCard(
-        onTap: () => context.push('/profile/earnings'),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: context.fairbid.subtleBlue,
-              child: Icon(Icons.account_balance_wallet_outlined,
-                  color: context.fairbid.verified),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(isProvider ? 'Earnings & payouts' : 'My wallet',
-                      style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 2),
-                  Text(
-                      isProvider
-                          ? 'Manage your income and payout method'
-                          : 'Top up and track your job payments',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant)),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
-          ],
-        ),
-      );
-  }
-}
-
-/// Navigation card to the Security screen (2FA on/off).
-class _SecurityNavCard extends StatelessWidget {
-  const _SecurityNavCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return AppCard(
-      onTap: () => context.push('/profile/security'),
+      onTap: () => context.push(route),
       child: Row(
         children: [
           CircleAvatar(
             backgroundColor: context.fairbid.subtleBlue,
-            child: Icon(Icons.shield_outlined, color: context.fairbid.verified),
+            child: Icon(icon, color: context.fairbid.verified),
           ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Security', style: theme.textTheme.titleLarge),
+                Text(title, style: theme.textTheme.titleLarge),
                 const SizedBox(height: 2),
-                Text('Two-factor authentication',
+                Text(subtitle,
                     style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant)),
               ],
@@ -541,7 +514,7 @@ class _BasicDetailsCard extends StatelessWidget {
   }
 }
 
-/// The blue "Edit" text link opening the Edit Profile screen.
+/// The blue "Edit" link to Edit Profile.
 class _EditLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -566,142 +539,34 @@ class _EditLink extends StatelessWidget {
   }
 }
 
-class _ReviewsCard extends StatelessWidget {
-  const _ReviewsCard({required this.user});
-  final AppUser user;
+/// Asks for a reason, then flags [review] on [user]'s own profile for the admin moderation queue.
+Future<void> _flagReview(
+    BuildContext context, AppUser user, Review review) async {
+  final reviews = context.read<ReviewRepository>();
+  final messenger = ScaffoldMessenger.of(context);
+  final reason = await showDialog<String>(
+    context: context,
+    builder: (_) => const ReasonDialog(
+      title: 'Report this review?',
+      message: 'Tell the admins why this review is unfair or abusive. It '
+          'stays visible until they decide.',
+      hint: 'e.g. This reviewer was never my client.',
+      confirmLabel: 'Report',
+    ),
+  );
+  if (reason == null) return; // cancelled
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final reviews = context.read<ReviewRepository>();
-
-    return AppCard(
-      child: KeyedStreamBuilder<List<Review>>(
-        // Only 3 are ever shown below (.take(3)), so there's no need to
-        // stream more than that.
-        cacheKey: user.uid,
-        create: () => reviews.watchReviews(user.uid, limit: 3),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const EmptyState(
-              icon: Icons.error_outline,
-              title: "Couldn't load reviews",
-              message: 'Please check your connection and try again.',
-            );
-          }
-          final items = snapshot.data ?? const <Review>[];
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Reviews (${user.ratingCount})',
-                  style: theme.textTheme.titleLarge),
-              const SizedBox(height: 12),
-              if (items.isEmpty)
-                const EmptyState(
-                  icon: Icons.star_border_rounded,
-                  title: 'No reviews yet',
-                  message: 'Reviews from completed jobs will appear here.',
-                )
-              else
-                for (final (i, review) in items.take(3).indexed) ...[
-                  if (i > 0) ...[
-                    const Divider(height: 24),
-                  ],
-                  // These are the viewer's own reviews, so they may report an
-                  // unfair one for admin moderation.
-                  ReviewCard(
-                    review: review,
-                    onFlag: () => _flagReview(context, review),
-                  ),
-                ],
-            ],
-          );
-        },
-      ),
+  try {
+    await reviews.flagReview(
+      revieweeId: user.uid,
+      reviewId: review.id,
+      reason: reason,
+      flaggedByUid: user.uid,
     );
-  }
-
-  /// Asks for a reason, then flags [review] for the admin moderation queue.
-  Future<void> _flagReview(BuildContext context, Review review) async {
-    final reviews = context.read<ReviewRepository>();
-    final messenger = ScaffoldMessenger.of(context);
-    final reason = await showDialog<String>(
-      context: context,
-      builder: (_) => const _FlagReviewDialog(),
-    );
-    if (reason == null) return; // cancelled
-
-    try {
-      await reviews.flagReview(
-        revieweeId: user.uid,
-        reviewId: review.id,
-        reason: reason,
-        flaggedByUid: user.uid,
-      );
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Review reported. An admin will look at it.')));
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not report the review. Please try again.')));
-    }
-  }
-}
-
-/// Reason dialog for reporting a review. Returns the reason on confirm
-/// (required) or null on cancel.
-class _FlagReviewDialog extends StatefulWidget {
-  const _FlagReviewDialog();
-
-  @override
-  State<_FlagReviewDialog> createState() => _FlagReviewDialogState();
-}
-
-class _FlagReviewDialogState extends State<_FlagReviewDialog> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Report this review?'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-              'Tell the admins why this review is unfair or abusive. It stays '
-              'visible until they decide.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            maxLines: 3,
-            autofocus: true,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              hintText: 'e.g. This reviewer was never my client.',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _controller.text.trim().isEmpty
-              ? null
-              : () => Navigator.of(context).pop(_controller.text.trim()),
-          child: const Text('Report'),
-        ),
-      ],
-    );
+    messenger.showSnackBar(const SnackBar(
+        content: Text('Review reported. An admin will look at it.')));
+  } catch (_) {
+    messenger.showSnackBar(const SnackBar(
+        content: Text('Could not report the review. Please try again.')));
   }
 }

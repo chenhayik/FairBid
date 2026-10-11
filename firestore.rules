@@ -8,12 +8,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function roleOf(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data.role;
+    // The caller's own user doc. Guard with isSignedIn() first.
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
     function isAdmin() {
-      return isSignedIn() && roleOf(request.auth.uid) == 'admin';
+      return isSignedIn() && me().role == 'admin';
     }
 
     function jobTakesOrdinaryBids(jobId) {
@@ -32,9 +33,7 @@ service cloud.firestore {
     }
     // Suspended users can read but not write. Only setUserSuspended sets the flag.
     function isSuspended() {
-      return isSignedIn()
-          && get(/databases/$(database)/documents/users/$(request.auth.uid))
-              .data.get('suspended', false) == true;
+      return isSignedIn() && me().get('suspended', false) == true;
     }
 
     // Signed-in users read profiles; owners edit their own, except trust/wallet.
@@ -163,26 +162,8 @@ service cloud.firestore {
       }
     }
 
-    function isApprovedProvider(uid) {
-      let user = get(/databases/$(database)/documents/users/$(uid)).data;
-      return user.role == 'provider' && user.verificationStatus == 'approved';
-    }
-
-    // The caller's own saved Trust Score, so a bid cannot fake a higher one.
-    function callerTrustScore() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid))
-          .data.get('trustScore', 0);
-    }
-
-    function callerScoreVisible() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid))
-          .data.get('trust', {}).get('scoreVisible', false);
-    }
-
-    // The caller's own saved avatar, so a bid cannot use someone else's image.
-    function callerPhotoUrl() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid))
-          .data.get('profilePhotoUrl', null);
+    function isApprovedProvider() {
+      return me().role == 'provider' && me().verificationStatus == 'approved';
     }
 
     function ownsJob(jobId) {
@@ -201,11 +182,6 @@ service cloud.firestore {
       let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
       return job.status == 'open'
           && (!('deadline' in job) || request.time < job.deadline);
-    }
-
-    function jobIsInProgress(jobId) {
-      return get(/databases/$(database)/documents/jobs/$(jobId))
-          .data.status == 'in_progress';
     }
 
     // Clients may only cancel an open job. Every other status change
@@ -271,7 +247,7 @@ service cloud.firestore {
       allow create: if isSignedIn()
                     && !isSuspended()
                     && request.resource.data.requestorId == request.auth.uid
-                    && roleOf(request.auth.uid) == 'requestor'
+                    && me().role == 'requestor'
                     && !request.resource.data.keys().hasAny(bundleFields())
                     && !('fundedAtAward' in request.resource.data)
                     && !request.resource.data.keys().hasAny(scheduleFields());
@@ -296,23 +272,24 @@ service cloud.firestore {
                               && !isSuspended()
                               && request.auth.uid == bidId
                               && request.resource.data.providerId == bidId
-                              && isApprovedProvider(request.auth.uid)
+                              && isApprovedProvider()
                               && jobBiddingOpen(jobId)
                               && jobTakesOrdinaryBids(jobId)
+                              // Accepting is server-only, so a bid can only be written as pending.
+                              && request.resource.data.status == 'pending'
                               // Amount must be a positive int up to RM 1,000,000 (acceptBid trusts it).
                               && request.resource.data.amountSen is int
                               && request.resource.data.amountSen > 0
                               && request.resource.data.amountSen <= 100000000
-                              // Trust Score must match the caller's own profile, not a made-up value.
+                              // Trust Score and photo must match the caller's own profile, not made-up values.
                               && request.resource.data.providerTrustScore
-                                  == callerTrustScore()
+                                  == me().get('trustScore', 0)
                               && request.resource.data
                                   .get('providerScoreVisible', false)
-                                  == callerScoreVisible()
-                              // Same check for the photo (a bid with no photo is fine).
+                                  == me().get('trust', {}).get('scoreVisible', false)
                               && request.resource.data
                                   .get('providerPhotoUrl', null)
-                                  == callerPhotoUrl();
+                                  == me().get('profilePhotoUrl', null);
         // Withdraw only while pending, so an accepted bid cannot be deleted.
         allow delete: if isSignedIn() && request.auth.uid == bidId
                       && resource.data.status == 'pending';
@@ -477,12 +454,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Hashed IC registry for duplicate detection: Cloud Functions only.
-    match /idRegistry/{key} {
-      allow read, write: if false;
-    }
-
-    // Deny everything else by default until its own rules are written.
+    // Deny everything else (incl. the server-only idRegistry).
     match /{document=**} {
       allow read, write: if false;
     }

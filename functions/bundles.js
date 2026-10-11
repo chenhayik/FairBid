@@ -3,9 +3,10 @@
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-// Imported directly: `admin.firestore.*` is undefined in the emulator.
 const {FieldValue, Timestamp} = require("firebase-admin/firestore");
-const {notifyUser} = require("./common");
+const {
+  callerUid, bad, docId, throwIfSuspended, notifyUser,
+} = require("./common");
 
 // Task count limits; must match PlatformConfig. Keeps the award search small.
 const MIN_BUNDLE_TASKS = 2;
@@ -32,20 +33,6 @@ const MAX_TITLE_LEN = 120;
 const MAX_ADDRESS_LEN = 200;
 const MAX_DESCRIPTION_LEN = 5000;
 const MAX_PHOTOS = 10;
-
-// Rejects unauthenticated calls; returns the caller's uid.
-function callerUid(context) {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-        "unauthenticated", "You must be signed in.");
-  }
-  return context.auth.uid;
-}
-
-// An invalid-argument error - every call site does `throw bad("...")`.
-function bad(message) {
-  return new functions.https.HttpsError("invalid-argument", message);
-}
 
 // Returns value trimmed, or throws when it isn't usable text.
 function text(value, name, max) {
@@ -167,7 +154,13 @@ function validateBundle(data) {
   };
 }
 
-// Creates the bundle doc and one ordinary job per task, in one atomic batch.
+/**
+ * What:   Callable that posts a bundle and one ordinary job per task.
+ * Input:  {title, description, location, photoUrls?, deadlineMillis?, tasks}
+ *         from BundleRepository.create().
+ * Output: {bundleId, taskIds}; all docs are written in one batch.
+ * Notes:  Only a non-suspended client may post.
+ */
 exports.createBundle = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const {title, description, location, photoUrls, deadline, tasks} =
@@ -179,12 +172,7 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError(
         "permission-denied", "Only a client can post a bundle.");
   }
-  if (user.suspended === true) {
-    throw new functions.https.HttpsError(
-        "permission-denied",
-        "Your account is suspended. Contact support if you think this is " +
-        "a mistake.");
-  }
+  throwIfSuspended(user);
 
   // Ids are minted locally so the bundle can list its task ids.
   const bundleRef = db.collection("bundles").doc();
@@ -234,22 +222,8 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
   return {bundleId: bundleRef.id, taskIds: jobRefs.map((ref) => ref.id)};
 });
 
-// Provider package bids, and cancelling a bundle.
-
-/** A proposal message is free text, so cap it. */
 const MAX_MESSAGE_LEN = 2000;
-
-/** "Less than 1 week" and friends - a picker's label, not free text. */
 const MAX_DURATION_LEN = 40;
-
-/** A document id sent by the app, e.g. the bundle a bid belongs to. */
-function docId(value, name) {
-  if (typeof value !== "string" || value.trim() === "" ||
-      value.length > 1500 || value.includes("/")) {
-    throw bad(`${name} is missing.`);
-  }
-  return value;
-}
 
 /** Whether a bundle still takes bids: open and not past its deadline. */
 function bundleBiddingOpen(bundle) {
@@ -346,18 +320,16 @@ async function biddingProvider(db, uid) {
         "permission-denied",
         "Only a verified provider can bid. Finish verification first.");
   }
-  if (user.suspended === true) {
-    throw new functions.https.HttpsError(
-        "permission-denied",
-        "Your account is suspended. Contact support if you think this is " +
-        "a mistake.");
-  }
+  throwIfSuspended(user);
   return user;
 }
 
 /**
- * Saves a provider's sealed bid at `bundles/{id}/bundleBids/{uid}`.
- * Runs in a transaction because a re-bid adjusts `bidCount`.
+ * What:   Callable that saves a provider's sealed bid on a bundle.
+ * Input:  {bundleId, taskPrices, bundlePriceSen?, estimatedDuration, message}
+ *         from BundleBidRepository (bundle_bid_repository.dart).
+ * Output: Writes `bundles/{id}/bundleBids/{uid}`; a re-bid edits it and adjusts
+ *         each task's `bidCount`; a new bid notifies the requestor.
  */
 exports.submitBundleBid = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -372,17 +344,8 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
   const bidRef = db.doc(`bundles/${bundleId}/bundleBids/${uid}`);
   const providerName = user.displayName || "Provider";
 
-  // Quick check first so a doomed call fails fast; repeated in the transaction.
-  const cheapBundle = (await bundleRef.get()).data();
-  if (!cheapBundle) {
-    throw new functions.https.HttpsError(
-        "not-found", "That bundle no longer exists.");
-  }
-
   await db.runTransaction(async (tx) => {
-    // Read the bundle first: a transaction cannot read after it writes.
-    const bundleSnap = await tx.get(bundleRef);
-    const bundle = bundleSnap.data();
+    const bundle = (await tx.get(bundleRef)).data();
     if (!bundle) {
       throw new functions.https.HttpsError(
           "not-found", "That bundle no longer exists.");
@@ -402,9 +365,7 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
     }
 
     const taskRefs = taskIds.map((jobId) => db.doc(`jobs/${jobId}`));
-    const [existing, ...taskSnaps] = taskRefs.length === 0 ?
-        [await tx.get(bidRef)] :
-        await tx.getAll(bidRef, ...taskRefs);
+    const [existing, ...taskSnaps] = await tx.getAll(bidRef, ...taskRefs);
     if (taskSnaps.some((snap) =>
       picked.includes(snap.id) && snap.data()?.status !== "open")) {
       throw bad("One of the tasks you picked is no longer open.");
@@ -459,15 +420,14 @@ exports.submitBundleBid = functions.https.onCall(async (data, context) => {
     }
   });
 
-  return {
-    taskCount: picked.length,
-    totalSen: bid.bundlePriceSen == null ?
-        bid.taskTotalSen :
-        bid.bundlePriceSen,
-  };
 });
 
-/** Withdraws the caller's pending bundle bid while bidding is still open. */
+/**
+ * What:   Callable that withdraws the caller's pending bundle bid.
+ * Input:  {bundleId} from BundleBidRepository.
+ * Output: Deletes the bid and lowers each task's `bidCount`; refused once
+ *         bidding closed or the bid was decided.
+ */
 exports.withdrawBundleBid = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
@@ -475,10 +435,9 @@ exports.withdrawBundleBid = functions.https.onCall(async (data, context) => {
   const db = admin.firestore();
   const bundleRef = db.doc(`bundles/${bundleId}`);
   const bidRef = db.doc(`bundles/${bundleId}/bundleBids/${uid}`);
-  const taskCount = await db.runTransaction(async (tx) => {
-    // Read first: a transaction cannot read after it writes.
+  await db.runTransaction(async (tx) => {
     const [bundleSnap, snap] = await tx.getAll(bundleRef, bidRef);
-    if (!snap.exists) return 0; // already gone - nothing left to undo
+    if (!snap.exists) return; // already gone - nothing left to undo
     const existing = snap.data();
     if (existing.status !== "pending") {
       throw new functions.https.HttpsError(
@@ -493,17 +452,17 @@ exports.withdrawBundleBid = functions.https.onCall(async (data, context) => {
           "Bidding has closed on this bundle, so your bid can no longer be " +
           "withdrawn.");
     }
-    const covered = Object.keys(existing.taskPrices || {});
     tx.delete(bidRef);
-    covered.forEach((jobId) =>
+    Object.keys(existing.taskPrices || {}).forEach((jobId) =>
       tx.update(db.doc(`jobs/${jobId}`), {bidCount: FieldValue.increment(-1)}));
-    return covered.length;
   });
-
-  return {taskCount};
 });
 
-/** Cancels an open bundle, its open tasks and pending bids, atomically. */
+/**
+ * What:   Callable that cancels an open bundle.
+ * Input:  {bundleId} from BundleRepository.cancelBundle().
+ * Output: Bundle and its open tasks cancelled, pending bids closed and notified.
+ */
 exports.cancelBundle = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
   const bundleId = docId(data?.bundleId, "Bundle");
@@ -511,10 +470,8 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
   const db = admin.firestore();
   const bundleRef = db.doc(`bundles/${bundleId}`);
 
-  const taskCount = await db.runTransaction(async (tx) => {
-    // Read the bundle first: a transaction cannot read after it writes.
-    const bundleSnap = await tx.get(bundleRef);
-    const bundle = bundleSnap.data();
+  await db.runTransaction(async (tx) => {
+    const bundle = (await tx.get(bundleRef)).data();
     if (!bundle) {
       throw new functions.https.HttpsError(
           "not-found", "That bundle no longer exists.");
@@ -538,10 +495,8 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
           .where("status", "==", "pending")),
     ]);
 
-    let cancelled = 0;
     taskSnaps.forEach((snap) => {
       if (snap.data()?.status !== "open") return;
-      cancelled++;
       tx.update(snap.ref, {
         status: "cancelled",
         cancelledBy: uid,
@@ -568,16 +523,14 @@ exports.cancelBundle = functions.https.onCall(async (data, context) => {
       cancelledBy: uid,
       cancelledAt: FieldValue.serverTimestamp(),
     });
-
-    return cancelled;
   });
-
-  return {taskCount};
 });
 
-// Bundle expiry.
-
-/** Every 6 hours, expires overdue open bundles and closes their pending bids. */
+/**
+ * What:   Scheduled sweep (every 6 hours) for overdue open bundles.
+ * Input:  Bundles with status "open" and a deadline in the past.
+ * Output: Each becomes "expired"; its pending bids are closed and notified.
+ */
 exports.closeExpiredBundles = functions.pubsub
     .schedule("every 6 hours")
     .onRun(async () => {
@@ -591,7 +544,7 @@ exports.closeExpiredBundles = functions.pubsub
       let closed = 0;
       for (const doc of snap.docs) {
         const didClose = await db.runTransaction(async (tx) => {
-          // Re-read inside the transaction: an award may have landed since the query.
+          // Re-read: an award may have landed since the query.
           const bundleSnap = await tx.get(doc.ref);
           const bundle = bundleSnap.data();
           if (!bundle || bundle.status !== "open") return false;
@@ -620,22 +573,11 @@ exports.closeExpiredBundles = functions.pubsub
       functions.logger.info(`closeExpiredBundles: closed ${closed} bundle(s)`);
     });
 
-// Trust and reviews count a bundle once per participant, not once per task.
-
-/** Returns the participants not yet counted as completed for this bundle. */
-function uidsToCount(participants, alreadyCounted) {
-  return participants.filter((uid) => !alreadyCounted.includes(uid));
-}
-
-// Exported for tests only; index.js re-exports just the callables.
+// Exported for tests; index.js re-exports the callables.
 exports.validateBundle = validateBundle;
 exports.validateBundleBid = validateBundleBid;
 exports.bundleBiddingOpen = bundleBiddingOpen;
 exports.splitBundlePrice = splitBundlePrice;
-exports.uidsToCount = uidsToCount;
 
-// Shared with bundle_award.js and the posting assist in index.js.
+// Shared with the posting assist in index.js.
 exports.CATEGORIES = CATEGORIES;
-exports.callerUid = callerUid;
-exports.bad = bad;
-exports.docId = docId;

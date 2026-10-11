@@ -1,32 +1,13 @@
-/**
- * SSM document extraction (smart signup).
- *
- * Fires on every `verification/{uid}/ssm_document_*` upload: confirms the file
- * really is a PDF, reads the business name and registration number out of it,
- * runs the cheap authenticity checks, and writes a verdict to the applicant's
- * owner+admin-only `users/{uid}/private/ssmExtract` document.
- *
- * Three deliberate properties:
- *
- *  1. **Nothing leaves the project.** Parsing is deterministic and runs here.
- *     No LLM, no third-party API, so no cross-border transfer of a document
- *     that may carry the owner's NRIC, date of birth, race and home address.
- *     It is also immune to text hidden in the PDF instructing a model.
- *  2. **Nothing is written to the public profile.** The verdict is a set of
- *     proposals; the client renders them for the applicant to confirm.
- *  3. **The source file is deleted once read.** Only the handful of extracted
- *     fields are kept - see `deleteAfterExtract` below.
- *
- * Lives in its own module because index.js is already long; re-exported there
- * the same way `trust.js` is.
- */
+// SSM document extraction. Parsing is deterministic and runs here: no LLM or
+// third-party API sees the document (it may carry the owner's NRIC, date of
+// birth and home address), and the verdict is only proposals for the client to
+// confirm. Exports extractSsmDocument (re-exported by index.js) and
+// deleteSsmDocument (called by onVerificationDecided).
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-// Imported modularly rather than via the `admin.firestore.FieldValue`
-// namespace: that legacy accessor reads as undefined once the Functions
-// emulator proxies the admin SDK, which fails the trigger at runtime while
-// looking perfectly correct in review.
+// Modular import: `admin.firestore.FieldValue` reads as undefined once the
+// Functions emulator proxies the admin SDK.
 const {FieldValue} = require("firebase-admin/firestore");
 const pdfParse = require("pdf-parse");
 
@@ -41,36 +22,29 @@ const RE_CURRENT = /\b((?:19|20)\d{2}0[1-6]\d{6})\b/;
 const RE_LEGACY = /\b([A-Z]{0,2}\d{5,9}\s*-\s*[A-Z])\b/;
 
 /**
- * Any ALL-CAPS label plus its colon gutter. The Business Profile is laid out in
- * two columns, and flattening it can glue a label from the left column onto a
- * value from the right one ("PRINCIPLE PLACE OF BUSINESS   : SUNMAL DENTAL
- * ART"), so the label has to be stripped rather than matched.
+ * An ALL-CAPS label plus its colon. The Business Profile has two columns, so
+ * flattening can glue a left label onto a right value; strip it, don't match it.
  */
 const RE_LABEL = /^[A-Z][A-Z0-9 .&/'-]{2,40}\s*:\s*/;
 
-/**
- * Closed-vocabulary fields. A keyword scan beats label parsing outright here,
- * because it does not depend on the columns lining up at all.
- */
+/** Closed-vocabulary fields: a keyword scan doesn't depend on column layout. */
 const RE_STATUS = /\b(ACTIVE|AKTIF|DISSOLVED|TERMINATED|EXPIRED)\b/;
 const RE_OWNERSHIP = /\b(SOLE PROPRIETORSHIP|PARTNERSHIP|BODY CORPORATE)\b/;
 
 /** Layout markings a genuine SSM printout carries. Forgeable, but free. */
 const RE_MARKERS = /MENARA SSM|SSM@SENTRAL|REGISTRATION NO|SISTEM EZBIZ|e-?Info/i;
 
-/** Month names as SSM prints them on a Certificate of Registration. */
 const MONTHS = {
   JANUARY: 1, FEBRUARY: 2, MARCH: 3, APRIL: 4, MAY: 5, JUNE: 6,
   JULY: 7, AUGUST: 8, SEPTEMBER: 9, OCTOBER: 10, NOVEMBER: 11, DECEMBER: 12,
 };
 
 /**
- * Parses the two date shapes SSM prints - `08-10-2020` on a Business Profile
- * and `22 JANUARY 2027` on a Certificate - into a plain `YYYY-MM-DD` string.
- *
- * Returns null when there is no usable year rather than guessing one. That
- * matters: an expiry date is only ever acted on when it parsed cleanly, so a
- * half-read date can never wrongly reject a valid registration.
+ * What:   Date parser for the two shapes SSM prints.
+ * Input:  Text with `08-10-2020` (Business Profile) or `22 JANUARY 2027`
+ *         (Certificate).
+ * Output: `YYYY-MM-DD`, or null when there is no usable year.
+ * Notes:  Never guesses, so a half-read date can't reject a valid registration.
  */
 function parseDate(raw) {
   if (!raw) return null;
@@ -88,22 +62,26 @@ function parseDate(raw) {
   return null;
 }
 
-/** Canonical form, mirroring `SsmNumber.normalized` in the Dart client. */
+/**
+ * What:   Canonical registration number.
+ * Input:  Any text.
+ * Output: Upper-case letters and digits only; mirrors `SsmNumber.normalized`
+ *         in the Dart client.
+ */
 function canonical(value) {
   return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 /**
- * Reads an SSM Certificate of Registration or Business Profile.
- *
- * The two document types label their fields differently, but both print the
- * business name on the line immediately above the registration number - so the
- * name is anchored to the number rather than to a label, and one rule covers
- * both layouts.
- *
- * Deliberately reads nothing else. A Business Profile also carries the owner's
- * NRIC, date of birth, race, gender and residential address; not reading them
- * is both cheaper and safer than reading and discarding them.
+ * What:   Reader for an SSM Certificate of Registration or Business Profile.
+ * Input:  The PDF's text.
+ * Output: {businessName, registrationNumber, legacyNumber, expiryDate,
+ *         businessStartDate, natureOfBusiness, entityStatus, ownership}.
+ * How:    The name is the line above the registration number, which holds in
+ *         both layouts. Owner sections (NRIC, DOB, address) are split off first
+ *         and never read.
+ * Notes:  That split depends on SSM printing the owner heading; ssm.test.js
+ *         pins it, so a layout change is a privacy regression to re-test.
  */
 function parseSsmText(text) {
   const lines = text.split("\n").map((line) => line.replace(/\s+$/, ""));
@@ -138,26 +116,16 @@ function parseSsmText(text) {
   out.entityStatus = status ? status[1] : null;
   out.ownership = ownership ? ownership[1] : null;
 
-  // Everything below reads only the business section. Splitting the owner
-  // sections off first means a date of birth can never be mistaken for a
-  // business date, and keeps the owner's NRIC, DOB, race and home address out
-  // of everything this function returns.
-  //
-  // Note the limit of that guarantee: it depends on SSM printing the heading
-  // below. A profile that reworded or omitted it would leave `business` as the
-  // whole document. The guard is pinned by ssm.test.js rather than being
-  // structural, so treat a layout change as a privacy regression to re-test.
+  // Everything below reads only the business section.
   const business = text.split(/INFORMATION OF (?:CURRENT|PREVIOUS) OWNER/i)[0];
 
-  // A Certificate of Registration states its expiry in prose.
+  // A Certificate states its expiry in prose.
   const until = business.match(/registered\s+until\s+(.{3,40}?)\s+in\s+accordance/i);
   out.expiryDate = parseDate(until && until[1]);
 
-  // A Business Profile lists its dates in a fixed order - start, registration,
-  // expiry, last amendment - but the two-column layout separates them from
-  // their labels when flattened, so they cannot be matched by label. The order
-  // is the only reliable handle, and it is gated on the label block actually
-  // being present so this never misfires on some other document.
+  // A Business Profile lists start, registration, expiry, last amendment in
+  // that order, but flattening separates the dates from their labels, so the
+  // order is the only handle. Gated on the label block being present.
   if (/BUSINESS EXPIRY DATE/i.test(business)) {
     const dates = (business.match(/\b\d{2}-\d{2}-\d{4}\b/g) || []);
     if (dates.length >= 3) {
@@ -181,48 +149,39 @@ function parseSsmText(text) {
 }
 
 /**
- * Cheap detector for text that is present in the PDF but invisible on the page.
- *
- * This matters even though no model is involved: the parser above reads the
- * text layer, so an attacker could hide a legitimate business's registration
- * number in white-on-white or 1pt text, type that number into the form, and
- * pass the cross-check. A full check renders the page and diffs it against the
- * text layer; these are the structural giveaways that need no rasteriser.
+ * Detects text that is in the PDF but invisible on the page (white or tiny
+ * text), which could hide a legitimate registration number from a human.
+ * Structural giveaways only; no rasteriser.
  */
 function looksHidden(buffer) {
   const raw = buffer.toString("latin1");
-  // `Tr 3` is the PDF invisible text-rendering mode - legitimate only in
-  // OCR'd scans, which are rejected by the text-layer check anyway.
+  // `Tr 3` is invisible text; legitimate only in OCR'd scans, rejected anyway.
   if (/\b3\s+Tr\b/.test(raw)) return true;
-  // A font set below ~4pt is unreadable by a human but extracts perfectly.
+  // A font under ~4pt is unreadable by a human but extracts perfectly.
   const sizes = raw.match(/\/F\d+\s+([\d.]+)\s+Tf/g) || [];
   for (const decl of sizes) {
     const size = parseFloat(decl.match(/\s([\d.]+)\s+Tf/)[1]);
     if (size > 0 && size < 4) return true;
   }
-  // Unicode tag block - invisible characters used to smuggle instructions.
+  // Unicode tag block: invisible characters used to smuggle instructions.
   if (/\uDB40[\uDC00-\uDC7F]/.test(buffer.toString("utf8"))) return true;
   return false;
 }
 
 /**
- * Reads ONLY the current owner's name out of a Business Profile.
- *
- * This is the single field that links the uploader to the business - a
- * Certificate of Registration names no one, so a genuine certificate proves a
- * business exists but not that this applicant is entitled to it.
- *
- * The name is compared and then thrown away; it is never persisted, and
- * nothing else from the owner section (NRIC, date of birth, race, gender,
- * residential address) is read at all.
+ * What:   Reader for the current owner's name on a Business Profile.
+ * Input:  The PDF's text.
+ * Output: The name, or null. It is compared, then thrown away; nothing else
+ *         from the owner section is read.
+ * Notes:  A Certificate names no owner, so only a Profile links the uploader
+ *         to the business.
  */
 function parseOwnerName(text) {
   const lines = text.split("\n");
   const start = lines.findIndex(
       (line) => /INFORMATION OF CURRENT OWNER/i.test(line));
   if (start < 0) return null;
-  // The name is the first value in the section. The address that follows
-  // starts with a house number, so the leading-letter test skips it.
+  // The name is the first value; the address after it starts with a number.
   for (let i = start + 1; i < Math.min(start + 12, lines.length); i++) {
     const value = lines[i].match(/:\s*(.+?)\s*$/);
     if (!value) continue;
@@ -235,12 +194,11 @@ function parseOwnerName(text) {
 }
 
 /**
- * Whether two names plausibly describe the same person. Returns null when
- * either side is unusable, so "could not tell" stays distinct from "no".
- *
- * Compares token sets rather than strings: SSM prints "TAN XIAO-IAN" while an
- * account might read "Tan Xiao Ian", and Malaysian names carry bin/binti and
- * optional middle names that an exact match would reject outright.
+ * What:   Fuzzy name comparison.
+ * Input:  Two names.
+ * Output: True/false, or null when either is unusable ("can't tell" is not "no").
+ * How:    Token sets, 60% overlap of the shorter one, so punctuation, word
+ *         order, bin/binti and middle names don't matter.
  */
 function namesMatch(a, b) {
   const tokens = (value) => new Set(String(value || "").toUpperCase()
@@ -256,10 +214,9 @@ function namesMatch(a, b) {
 }
 
 /**
- * The identity fields the Certificate branch owns, blanked. Writes use
- * `merge: true` so the optional Profile's contributions survive, which means a
- * rejected re-upload would otherwise leave the previous document's name and
- * number sitting beside the new "rejected" verdict.
+ * The Certificate branch's identity fields, blanked. Writes merge so the
+ * Profile's fields survive, so a rejected re-upload would otherwise leave the
+ * old name and number beside the new "rejected" verdict.
  */
 const BLANK_CERT = {
   registrationNumber: null,
@@ -281,12 +238,19 @@ const HARD_FAILURES = [
   "number-mismatch",
 ];
 
+/**
+ * What:   Storage trigger that checks an uploaded SSM PDF.
+ * Input:  verification/{uid}/ssm_document_* or ssm_profile_* uploads.
+ * Output: Verdict + proposed business fields in users/{uid}/private/ssmExtract.
+ * Notes:  A Business Profile is read only for the owner-name match. Files are
+ *         deleted later, once an admin rules (deleteSsmDocument).
+ */
 exports.extractSsmDocument = functions
     .runWith({memory: "512MB", timeoutSeconds: 120})
     .storage.object().onFinalize(async (object) => {
       const path = object.name || "";
       const match = path.match(SSM_PATH);
-      if (!match) return; // not an SSM upload
+      if (!match) return;
       const uid = match[1];
       const isProfile = match[2] === "profile";
 
@@ -301,9 +265,8 @@ exports.extractSsmDocument = functions
         ...fields,
       }, {merge: true});
 
-      // 1. Magic bytes: a ranged read, so this costs ~16 bytes rather than the
-      //    whole file. `contentType` is client-supplied and Cloud Storage never
-      //    sniffs it, so this is the first point at which the type is known.
+      // 1. Magic bytes by a 16-byte ranged read. `contentType` is client-
+      //    supplied, so this is the first point the type is known.
       const [head] = await file.download({start: 0, end: 15});
       if (!head.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)) {
         await write("rejected", ["not-a-pdf"], {...BLANK_CERT, ...BLANK_OWNER});
@@ -318,9 +281,8 @@ exports.extractSsmDocument = functions
         return;
       }
 
-      // 2. Text layer. A genuine e-Info/EzBiz PDF is text-based; a photo or a
-      //    re-scan is a raster with nothing to read. Cheap, and one of the more
-      //    effective signals available short of checking the signature.
+      // 2. Text layer: a genuine e-Info/EzBiz PDF is text; a photo or re-scan
+      //    has nothing to read.
       let text = "";
       try {
         text = (await pdfParse(buffer)).text || "";
@@ -329,30 +291,24 @@ exports.extractSsmDocument = functions
       }
       const hasTextLayer = text.replace(/\s/g, "").length > 200;
 
-      // The Business Profile is optional and answers exactly one question:
-      // is the applicant the registered owner? It is the only document here
-      // carrying an NRIC, a date of birth and a home address, so it is read
-      // for that one boolean and deleted immediately - a human never sees it,
-      // because the machine has already answered the only thing it is for.
+      // The optional Profile answers one question (is the applicant the
+      // registered owner?) and is deleted at once; it holds an NRIC, a date of
+      // birth and a home address.
       if (isProfile) {
-        // The Profile is the richer document: it alone states the business
-        // status, expiry, ownership type and nature of business. Those are
-        // business facts, not personal data, so they are kept and offered as
-        // autofill for the later onboarding stages.
+        // It alone states the business status, expiry, ownership type and
+        // nature of business: business facts, kept as onboarding autofill.
         const profile = parseSsmText(text);
         const account = await admin.firestore().doc(`users/${uid}`).get();
         const matches = namesMatch(
             parseOwnerName(text), account.get("displayName"));
 
-        // Merged, never overwriting. The Certificate is the required document
-        // and owns `verdict`/`failures`; the Profile only ever adds to them,
-        // and only fills fields the Certificate could not supply.
+        // Merged: the Certificate owns `verdict`/`failures`; the Profile only
+        // fills fields the Certificate could not supply.
         const add = (key, value) => value ? {[key]: value} : {};
         await ref.set({
           ownerNameMatches: matches,
-          // Pinned to the business it was computed for. Without this a Profile
-          // for one business keeps showing "Owner confirmed" beside a
-          // certificate later uploaded for a different one.
+          // Pinned to the business it was computed for, so a later
+          // certificate for another business doesn't inherit "Owner confirmed".
           ownerCheckedFor: canonical(profile.registrationNumber),
           ownerCheckedAt: FieldValue.serverTimestamp(),
           ...add("entityStatus", profile.entityStatus),
@@ -370,29 +326,26 @@ exports.extractSsmDocument = functions
       const parsed = parseSsmText(text);
       const found = canonical(parsed.registrationNumber);
 
-      // 3. Cross-check against what the applicant typed. The number lives in
-      //    the private document, not on the public profile.
+      // 3. Cross-check against the number the applicant typed.
       const privateSnap = await admin.firestore()
           .doc(`users/${uid}/private/verification`).get();
       const typed = canonical(privateSnap.get("ssmNumber"));
 
-      // An owner check belongs to the business it was run against. Keep it only
-      // when this certificate is for that same registration number; otherwise
-      // clear it rather than let a stale "Owner confirmed" ride along.
+      // Keep an owner check only when this certificate is for the same
+      // registration number; otherwise clear it.
       const existing = (await ref.get()).data() || {};
       const ownerStillValid = !!existing.ownerCheckedFor &&
           existing.ownerCheckedFor === found;
       const ownerFields = ownerStillValid ? {} : BLANK_OWNER;
 
-      // A signature is not verified yet - only detected. Most uploads today
-      // are re-prints, so this routes to a human rather than blocking.
+      // A signature is only detected, not verified: most uploads are
+      // re-prints, so this routes to a human rather than blocking.
       const signaturePresent = buffer.includes("/ByteRange");
 
       const failures = [];
       if (!hasTextLayer) failures.push("no-text-layer");
       if (!found) failures.push("no-registration-number");
       if (typed && found && typed !== found) failures.push("number-mismatch");
-      // Only ever acted on when the date parsed cleanly - see parseDate.
       const today = new Date().toISOString().slice(0, 10);
       if (parsed.expiryDate && parsed.expiryDate < today) {
         failures.push("registration-expired");
@@ -420,24 +373,16 @@ exports.extractSsmDocument = functions
     });
 
 /**
- * Deletes the applicant's uploaded SSM document and forgets where it was.
- *
- * Called from `onVerificationDecided` rather than from the extractor: an
- * SSM Business Profile carries the owner's NRIC, date of birth and home
- * address, and PDPA s.10 requires destruction once the purpose is served - but
- * that purpose is not served until a human has reviewed it. Deleting at
- * extraction time would leave the admin queue with nothing to look at, which is
- * exactly the fallback the automated checks depend on.
- *
- * Best-effort throughout: a failure here must never block a verification
- * decision that has already been recorded.
+ * What:   Deletes the applicant's uploaded SSM certificates.
+ * Input:  [uid]; called by onVerificationDecided.
+ * Output: Every `ssm_document_*` file and `ssmDocumentUrl` removed.
+ * Notes:  Runs after an admin rules (PDPA s.10), not at extraction, so the
+ *         queue still has something to review. Best-effort: never blocks a
+ *         recorded decision.
  */
 exports.deleteSsmDocument = async (uid) => {
   const db = admin.firestore();
   try {
-    // Every certificate this applicant uploaded, not only the most recent:
-    // `storagePath` is overwritten on each re-upload, so keying the delete off
-    // it alone stranded the earlier files in Storage for good.
     const [files] = await admin.storage().bucket()
         .getFiles({prefix: `verification/${uid}/ssm_document_`});
     await Promise.all(
@@ -450,10 +395,9 @@ exports.deleteSsmDocument = async (uid) => {
   }
 };
 
-// Exported for unit testing without a Storage emulator.
+// Exported for tests.
 exports.parseSsmText = parseSsmText;
 exports.parseDate = parseDate;
 exports.parseOwnerName = parseOwnerName;
 exports.namesMatch = namesMatch;
-exports.looksHidden = looksHidden;
 exports.canonical = canonical;

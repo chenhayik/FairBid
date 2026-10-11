@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import 'photo_viewer_screen.dart';
 
-/// A horizontal strip of photo thumbnails; tapping one opens the full-size
-/// [PhotoViewerScreen]. Shared by the job detail and bundle screens.
+/// What:   Horizontal strip of photo thumbnails.
+/// Input:  [photoUrls] from job.photoUrls.
+/// Output: Thumbnails; tapping one opens [PhotoViewerScreen].
 class PhotoStrip extends StatelessWidget {
   const PhotoStrip({super.key, required this.photoUrls});
 
@@ -32,10 +33,7 @@ class PhotoStrip extends StatelessWidget {
               photoUrls[i],
               width: 120,
               height: 120,
-              // width/height only constrain layout; without cacheWidth
-              // each of these decodes at the full 1600px upload size,
-              // roughly 7.7MB of RGBA per thumbnail. A five-photo job
-              // cost ~38MB of bitmap to show a 600x120 strip.
+              // Without cacheWidth each thumbnail decodes at the full 1600px (~7.7MB).
               cacheWidth: (120 * MediaQuery.devicePixelRatioOf(context))
                   .round(),
               fit: BoxFit.cover,

@@ -1,112 +1,64 @@
-/// Platform-wide tunables that the plan (§3.2.3, §3.4.3) treats as a future
-/// "platform configuration document". Kept in one place so the bid-ranking and
-/// Trust Score code share a single source of truth and tests can pin the maths.
+/// What:   Platform-wide tunables (bid ranking, Trust Score, caps) in one place.
+/// Input:  Compile-time constants; some mirror Cloud Functions values noted per field.
+/// Output: Constants plus the Dart mirror [trustBreakdownFor] that tests pin.
 class PlatformConfig {
   const PlatformConfig._();
 
-  /// Whether the wallet offers the demo top-up shortcut, which credits a real
-  /// balance through `topUpWallet` without taking payment.
-  ///
-  /// Off unless explicitly switched on at build time:
-  ///
-  /// ```
-  /// flutter run --dart-define=FAIRBID_DEMO_TOPUP=true
-  /// ```
-  ///
-  /// Deliberately not `kDebugMode`. The app has no emulator wiring, so a debug
-  /// build still talks to the real project, and the matching server gate in
-  /// `topUpWallet` is emulator-only - keying this off debug mode would show a
-  /// button that the backend then refuses. An explicit define means the
-  /// developer opting in is the same one pointing at the emulator.
-  ///
-  /// This only hides the button. The real control is the server-side gate;
-  /// see the note on `exports.topUpWallet` in functions/index.js.
+  /// Whether the wallet shows the demo top-up; off unless built with `--dart-define=FAIRBID_DEMO_TOPUP=true`.
+  /// Not `kDebugMode`: debug builds still hit the real project, whose `topUpWallet` gate is emulator-only.
+  /// This only hides the button; the server gate is the real control.
   static const bool demoTopUpEnabled =
       bool.fromEnvironment('FAIRBID_DEMO_TOPUP');
 
-  /// "Best Value" composite weights. Price and trust each contribute a
-  /// normalised 0–1 score; the weights (summing to 1) balance them.
+  /// "Best Value" weights (sum 1) for the normalised price and trust scores.
   static const double priceWeight = 0.6;
   static const double trustWeight = 0.4;
 
-  /// The ranking score for a provider whose Trust Score is still hidden
-  /// ("New"): the starting baseline, so hidden scores never decide a rank.
+  /// Ranking score for a provider whose Trust Score is hidden ("New"), so hidden scores never decide a rank.
   static const int neutralTrustScore = 700;
 
-  /// Highest bid, or bundle bid total (RM 50,000): no wallet can fund more.
+  /// Highest bid or bundle bid total (RM 50,000); no wallet can fund more.
   static const int maxBidSen = maxWalletBalanceSen;
 
-  /// Per-top-up cap (RM 10,000) for the demo wallet, enforced by the
-  /// `topUpWallet` Cloud Function (which keeps its own copy in sync).
+  /// Per-top-up cap (RM 10,000); `topUpWallet` keeps its own copy.
   static const int maxTopUpSen = 1000000;
 
-  /// Cumulative wallet balance cap (RM 50,000), enforced by the
-  /// `topUpWallet` Cloud Function (which keeps its own copy in sync).
+  /// Wallet balance cap (RM 50,000); `topUpWallet` keeps its own copy.
   static const int maxWalletBalanceSen = 5000000;
 
-  /// The max and min amount of tasks within a bundle, enforced by the
-  /// `createBundle` Cloud Function (which keeps its own copy in sync).
-  static const int minBundleTasks = 2;
+  /// Max tasks in a bundle; `createBundle` keeps its own copy.
   static const int maxBundleTasks = 6;
 
-  /// If the cheapest provider does not take all the tasks, this helps decide
-  /// how the bundle can be done with the least amount of providers. The
-  /// fewest-providers option is recommended over the cheapest option only if
-  /// it costs at most [consolidationCapPct]% more AND at most
-  /// [consolidationCapSen] (RM 500) more. Both limits apply, so whichever is
-  /// smaller wins. `createBundle` keeps its own copy in sync.
+  /// The fewest-providers bundle option beats the cheapest only if it costs at most
+  /// [consolidationCapPct]% and [consolidationCapSen] (RM 500) more (the smaller limit wins). `createBundle` keeps its own copy.
   static const int consolidationCapPct = 5;
   static const int consolidationCapSen = 50000; // RM 500
 
-  /// Bayesian Trust Score priors: a new provider starts as if they already had
-  /// [trustPriorWeight] reviews averaging [trustPriorMean] stars, so a single
-  /// review moves the score only gently away from the platform baseline.
+  /// Bayesian priors: a new provider starts as if they had [trustPriorWeight] reviews averaging [trustPriorMean] stars.
   static const double trustPriorMean = 3.5;
   static const int trustPriorWeight = 10;
 
-  /// The Bayesian Trust Score (0–1000) for a user with the given aggregate
-  /// review data. With no reviews this is the prior baseline (700); each review
-  /// pulls it toward that reviewer's rating. See plan §3.4.3.
-  ///
-  /// Since Trust Score v2 this is no longer the headline score - it survives
-  /// as the ancestor of [TrustBreakdown.reviewScore], one of four weighted
-  /// sub-scores blended by [trustBreakdownFor].
-  static int trustScoreFor({required int ratingSum, required int ratingCount}) {
-    final weighted = (trustPriorWeight * trustPriorMean + ratingSum) /
-        (trustPriorWeight + ratingCount);
-    return (weighted / 5 * 1000).round().clamp(0, 1000);
-  }
+  // Trust Score v2. The authoritative computation is `computeTrust` in Cloud Functions (kept in sync via
+  // test/fixtures/trust_vectors.json); this is a mirror. Integer percents keep both languages exact at .5 rounding.
 
-  // -------------------------------------------------------------------------
-  // Trust Score v2 - a multi-signal composite. The authoritative computation
-  // runs in Cloud Functions (functions/index.js `computeTrust`, kept in sync
-  // with this file via test/fixtures/trust_vectors.json); this Dart mirror
-  // exists for tests and documentation. Weights are integer percents so both
-  // languages share exact integer arithmetic (no float drift at .5 rounding).
-  // -------------------------------------------------------------------------
-
-  /// Sub-score weights (percent, summing to 100).
+  /// Sub-score weights (percent, sum 100).
   static const int reviewWeightPct = 45;
   static const int trackRecordWeightPct = 25;
   static const int verificationWeightPct = 20;
   static const int profileWeightPct = 10;
 
-  /// Track record: +[trackRecordPerJob] per completed job, capped at
-  /// [trackRecordJobCap] jobs; −[disputeLostPenalty] per dispute lost.
+  /// Track record: +[trackRecordPerJob] per completed job up to [trackRecordJobCap]; -[disputeLostPenalty] per dispute lost.
   static const int trackRecordPerJob = 10;
   static const int trackRecordJobCap = 10;
   static const int disputeLostPenalty = 20;
 
-  /// Verification sub-score while an application awaits admin review.
+  /// Verification sub-score while awaiting admin review.
   static const int verificationPendingScore = 40;
 
-  /// The score stays hidden ("New") until the user is admin-approved
-  /// AND has this many completed jobs (Upwork/Fiverr-style earned visibility).
+  /// The score stays "New" until admin-approved and this many jobs are completed.
   static const int minJobsForVisibleScore = 3;
 
-  /// Computes the full v2 trust breakdown. Mirrors `computeTrust` in
-  /// functions/index.js - change both together and extend the shared vectors
-  /// in test/fixtures/trust_vectors.json.
+  /// Full v2 breakdown; mirrors `computeTrust` in functions (change both and the shared vectors).
   static TrustBreakdown trustBreakdownFor({
     required int ratingSum,
     required int ratingCount,
@@ -140,8 +92,7 @@ class PlatformConfig {
             .where((f) => f)
             .length;
 
-    // Integer-exact: weights are percents, sub-scores 0–100, so the weighted
-    // sum is composite*10 and only ever needs a .5-up division.
+    // Integer-exact: the weighted sum is composite*10, needing only a .5-up division.
     final composite = ((reviewWeightPct * reviewScore +
                 trackRecordWeightPct * trackRecordScore +
                 verificationWeightPct * verificationScore +
@@ -162,9 +113,9 @@ class PlatformConfig {
   }
 }
 
-/// The four v2 trust sub-scores (0–100 each), their weighted composite
-/// (0–1000, stored as `trustScore`), and whether the score has been earned
-/// enough to display. Server-computed; the client only ever reads it.
+/// What:   The four v2 trust sub-scores (0-100), their composite (0-1000, stored as `trustScore`) and visibility.
+/// Input:  The `trust` map on `users/{uid}`, server-computed.
+/// Output: Read-only values; the client never computes them.
 class TrustBreakdown {
   const TrustBreakdown({
     required this.reviewScore,
@@ -182,8 +133,7 @@ class TrustBreakdown {
   final int composite;
   final bool scoreVisible;
 
-  /// Parses the `trust` map stored on users/{uid}, or a conservative default
-  /// (hidden, all zeros) when the server hasn't computed one yet.
+  /// Parses the map; a missing one gives hidden zeros.
   factory TrustBreakdown.fromMap(Map<String, dynamic>? m) => TrustBreakdown(
         reviewScore: (m?['reviewScore'] as num?)?.toInt() ?? 0,
         trackRecordScore: (m?['trackRecordScore'] as num?)?.toInt() ?? 0,

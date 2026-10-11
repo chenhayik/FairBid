@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../../core/widgets/form_widgets.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/onboarding_data.dart';
 import 'onboarding_controller.dart';
-import 'onboarding_exit.dart';
+import 'onboarding_scaffold.dart';
 import 'pending_review_screen.dart';
 import 'steps/identity_step.dart';
 import 'steps/payout_step.dart';
@@ -13,9 +12,9 @@ import 'steps/profile_step.dart';
 import 'steps/provider_type_step.dart';
 import 'steps/service_step.dart';
 
-/// Hosts the 6-stage provider onboarding flow: an app bar with back navigation,
-/// the stage progress header, and the current stage's content. Once submitted,
-/// shows the pending-review screen.
+/// What:   The 6-stage provider onboarding flow.
+/// Input:  [OnboardingController] (onboarding_controller.dart); verificationStatus from [AuthController].
+/// Output: OnboardingScaffold around the current step, or PendingReviewScreen once submitted.
 class ProviderFlowScreen extends StatefulWidget {
   const ProviderFlowScreen({super.key});
 
@@ -27,7 +26,6 @@ class _ProviderFlowScreenState extends State<ProviderFlowScreen> {
   @override
   void initState() {
     super.initState();
-    // Load saved progress for the signed-in user after the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final uid = context.read<AuthController>().user?.uid;
       if (uid != null) context.read<OnboardingController>().loadFor(uid);
@@ -39,7 +37,6 @@ class _ProviderFlowScreenState extends State<ProviderFlowScreen> {
     final auth = context.watch<AuthController>();
     final onboarding = context.watch<OnboardingController>();
 
-    // Submitted (this session or a previous one) → pending review screen.
     if (auth.user?.verificationStatus == 'pending') {
       return const PendingReviewScreen();
     }
@@ -59,45 +56,12 @@ class _ProviderFlowScreenState extends State<ProviderFlowScreen> {
       _ => ('Payout Details', const PayoutStep()),
     };
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Onboarding'),
-        leading: BackButton(
-          onPressed: () {
-            // Back one stage; from the first stage, leave the flow entirely.
-            final onboarding = context.read<OnboardingController>();
-            if (!onboarding.goBack()) {
-              exitOnboarding(context);
-            }
-          },
-        ),
-      ),
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: Column(
-              children: [
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  child: StageHeader(
-                    stage: step,
-                    totalStages: OnboardingData.totalStages,
-                    sectionLabel: sectionLabel,
-                  ),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-                    child: content,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return OnboardingScaffold(
+      step: step,
+      totalStages: OnboardingData.lastStep,
+      sectionLabel: sectionLabel,
+      goBack: onboarding.goBack,
+      content: content,
     );
   }
 }

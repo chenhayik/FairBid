@@ -2,7 +2,6 @@ import '../../../core/util/money.dart';
 import 'appointment.dart';
 import 'price_change_request.dart';
 
-/// Lifecycle of a job.
 enum JobStatus {
   open,
   inProgress,
@@ -31,8 +30,9 @@ enum JobStatus {
       };
 }
 
-/// A map-picked location: coordinates plus a readable label. [address] is safe
-/// to show as is; [districtCode]/[districtName]/[town] are null on old jobs.
+/// What:   A job's map-picked location.
+/// Input:  Job doc field `location`.
+/// Output: Coordinates and a display [address]; [districtCode]/[districtName]/[town] are null on old jobs.
 class JobLocation {
   const JobLocation({
     required this.lat,
@@ -69,7 +69,9 @@ class JobLocation {
       );
 }
 
-/// Optional budget: a fixed amount, a range or an hourly rate, in sen.
+/// What:   Optional budget: a fixed amount, a range or an hourly rate, in sen.
+/// Input:  Job doc field `budget`.
+/// Output: [label] for display.
 class JobBudget {
   const JobBudget({this.minSen, this.maxSen, this.hourly = false});
 
@@ -77,9 +79,7 @@ class JobBudget {
   final int? maxSen;
   final bool hourly;
 
-  bool get isEmpty => minSen == null && maxSen == null;
-
-  /// Display string, e.g. `RM 100 – RM 250` or `RM 50/hr`.
+  /// e.g. `RM 100 – RM 250` or `RM 50/hr`.
   String? get label =>
       formatBudget(minSen: minSen, maxSen: maxSen, hourly: hourly);
 
@@ -93,7 +93,10 @@ class JobBudget {
       );
 }
 
-/// A job posted by a requestor. The repository maps it to and from Firestore.
+/// What:   A job posted by a requestor (one doc in `jobs`).
+/// Input:  Firestore data via JobRepository._fromDoc (job_repository.dart).
+/// Output: Immutable model; toMap() writes only client-owned fields.
+/// Notes:  Server-owned fields are set by Cloud Functions, never written back.
 class Job {
   const Job({
     required this.id,
@@ -119,8 +122,6 @@ class Job {
     this.priceChangeRequest,
     this.cancellationRequestedBy,
     this.cancellationReason,
-    this.cancellationRequestedAt,
-    this.cancelledAt,
     this.cancelledBy,
     this.bundleId,
     this.bundleOrder,
@@ -138,8 +139,7 @@ class Job {
   final String requestorId;
   final String requestorName;
 
-  /// The requestor's `profilePhotoUrl` at posting time, so providers see a face
-  /// without loading the profile. Null if they had no photo.
+  /// The requestor's photo at posting time; null if none.
   final String? requestorPhotoUrl;
   final String title;
   final String description;
@@ -155,12 +155,12 @@ class Job {
   final DateTime? createdAt;
   final DateTime? deadline;
 
-  /// Winner details, set when the requestor accepts a bid (null while open).
+  /// Winner details; null while open.
   final String? acceptedProviderId;
   final String? acceptedProviderName;
   final int? acceptedBidAmountSen;
 
-  /// The price first agreed at accept time. Null on old jobs until it changes.
+  /// The price first agreed at accept; null on old jobs until it changes.
   final int? originalBidAmountSen;
 
   /// Number of accepted price changes (capped server-side).
@@ -176,10 +176,8 @@ class Job {
   /// The other party accepts to finish it.
   final String? cancellationRequestedBy;
   final String? cancellationReason;
-  final DateTime? cancellationRequestedAt;
 
   /// Set when the job is cancelled: a uid, `'admin'`, or `'dispute'`.
-  final DateTime? cancelledAt;
   final String? cancelledBy;
 
   /// Whether a mid-flight cancellation is awaiting the counterparty's decision.
@@ -187,19 +185,16 @@ class Job {
 
   final String? bundleId;
 
-  /// The order of tasks within a bundle
+  /// Position of the task within its bundle.
   final int? bundleOrder;
 
-  /// How many tasks the bundle has, copied onto each task for the feed card.
-  /// Server-owned, never written back in [toMap].
+  /// Bundle size, copied onto each task for the feed card.
   final int? bundleTaskCount;
 
-  /// Set by `awardBundle` when this task was left unawarded. It then takes
-  /// ordinary per-job bids. Server-owned, never written back in [toMap].
+  /// Set when this task was left unawarded; it then takes ordinary bids.
   final DateTime? releasedAt;
 
-  /// Set at award: the provider can't deliver until a visit time is agreed.
-  /// Server-owned, never written back in [toMap]; absent on older jobs.
+  /// The provider can't deliver until a visit time is agreed; absent on older jobs.
   final bool schedulingRequired;
 
   /// The agreed visit time, or null until both sides confirm one.
@@ -208,8 +203,7 @@ class Job {
   /// A pending proposal of visit times, or null.
   final AppointmentProposal? appointmentProposal;
 
-  /// Visit day, set by the provider: when they said they were on the way, the
-  /// ETA they gave (15/30/45/60), and when they arrived. Server-owned.
+  /// Visit day: when the provider said on the way, their ETA (15/30/45/60) and arrival.
   final DateTime? onTheWayAt;
   final int? etaMinutes;
   final DateTime? arrivedAt;
@@ -221,16 +215,13 @@ class Job {
 
   bool get isBundleTask => bundleId != null;
 
-  /// Whether this task still bids as part of its bundle's package (not yet
-  /// released). Award and cancel happen for the whole bundle.
+  /// Not yet released from its bundle; award and cancel happen for the whole bundle.
   bool get isLiveBundleTask => bundleId != null && releasedAt == null;
 
-  /// Whether this task is still being bid on as part of its bundle:
-  /// [isLiveBundleTask] and still open. Turns false once the bundle is awarded.
+  /// [isLiveBundleTask] and still open; false once the bundle is awarded.
   bool get isBiddingAsBundle => isLiveBundleTask && status == JobStatus.open;
 
-  /// Fields written to Firestore. The repository sets `createdAt`, `bidCount`
-  /// and `status` for a new job.
+  /// Client-owned fields; the repository adds `createdAt`, `bidCount` and `status`.
   Map<String, dynamic> toMap() => {
         'requestorId': requestorId,
         'requestorName': requestorName,
@@ -245,7 +236,6 @@ class Job {
         if (deadline != null) 'deadline': deadline,
       };
 
-  /// Builds a [Job] from a document id and its data map.
   factory Job.fromMap(String id, Map<String, dynamic> m) => Job(
         id: id,
         requestorId: m['requestorId'] as String? ?? '',
@@ -274,8 +264,6 @@ class Job {
             m['priceChangeRequest'] as Map<String, dynamic>?),
         cancellationRequestedBy: m['cancellationRequestedBy'] as String?,
         cancellationReason: m['cancellationReason'] as String?,
-        cancellationRequestedAt: m['cancellationRequestedAt'] as DateTime?,
-        cancelledAt: m['cancelledAt'] as DateTime?,
         cancelledBy: m['cancelledBy'] as String?,
         bundleId: m['bundleId'] as String?,
         bundleOrder: (m['bundleOrder'] as num?)?.toInt(),

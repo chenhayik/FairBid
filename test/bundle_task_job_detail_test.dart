@@ -1,13 +1,13 @@
-// UI fixes for job detail, My Jobs, feed card and admin stats
-// (batch C). Reuses the fakes/helpers already built up in widget_test.dart
-// rather than duplicating them.
+// Bundle tasks on job detail, My Jobs and the feed card: banners, the
+// "View bundle" link and pending bundle bids.
 import 'package:fairbid/core/widgets/app_widgets.dart';
-import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'widget_test.dart';
+import 'helpers/builders.dart';
+import 'helpers/fakes.dart';
+import 'helpers/harness.dart';
 
 void main() {
   group('Browser with a pending bundle bid covering an open task', () {
@@ -15,8 +15,6 @@ void main() {
       'sees a "Your bundle bid" card instead of Submit a bid, and only the '
       'bottom bar offers to edit the bundle bid',
       (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
 
         final task = sampleJob(
           requestorId: 'req-9',
@@ -24,25 +22,18 @@ void main() {
           bundleOrder: 0,
           bundleTaskCount: 2,
         );
-        final myBundleBid = BundleBid(
-          bundleId: 'b1',
-          providerId: 'uid-1',
-          providerName: 'New User',
-          taskPrices: const {'job-1': 15000},
-          estimatedDuration: '1 week',
-        );
+        final myBundleBid = sampleBundleBid(providerId: 'uid-1', providerName: 'New User', taskPrices: const {'job-1': 15000});
         final auth = FakeAuthRepository()
           // A newly-registered provider with the default 'none' status is
           // routed into onboarding instead of the main shell.
           ..verificationStatus = 'approved'
           ..baseLat = 3.139
           ..baseLng = 101.6869;
-        await tester.pumpWidget(buildApp(
+        await pumpApp(tester, buildApp(
           auth,
           jobs: [task],
           bundleBid: FakeBundleBidRepository([myBundleBid]),
-        ));
-        await tester.pumpAndSettle();
+        ), size: const Size(500, 1600));
         await openRegisterAs(tester, 'Work');
         await tester.tap(find.text('Fix leaking sink').first);
         await tester.pumpAndSettle();
@@ -72,8 +63,6 @@ void main() {
       'an in-progress bundle task shows "Awarded as part of ..." instead '
       'of the bidding-time explanation',
       (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
 
         final task = sampleJob(
           requestorId: 'req-9',
@@ -89,22 +78,15 @@ void main() {
           ..verificationStatus = 'approved'
           ..baseLat = 3.139
           ..baseLng = 101.6869;
-        await tester.pumpWidget(buildApp(
+        await pumpApp(tester, buildApp(
           auth,
           jobs: [task],
           bundle: FakeBundleRepository(
             [sampleBundle(id: 'b1', title: 'Bathroom refresh')],
           ),
-        ));
-        await tester.pumpAndSettle();
+        ), size: const Size(500, 1600));
         await openRegisterAs(tester, 'Work');
-        await tester.tap(
-          find.descendant(
-            of: find.byType(NavigationBar),
-            matching: find.text('My jobs'),
-          ),
-        );
-        await tester.pumpAndSettle();
+        await openTab(tester, 'My jobs');
         await tester.tap(find.text('Fix leaking sink').first);
         await tester.pumpAndSettle();
 
@@ -119,8 +101,6 @@ void main() {
       "a cancelled bundle task that was never awarded shows no "
       '"Awarded as part of ..." banner',
       (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
 
         // Still "live" (never released) but cancelled along with its
         // bundle, and never awarded to anyone.
@@ -130,25 +110,15 @@ void main() {
           bundleOrder: 0,
           bundleTaskCount: 2,
         );
-        await tester.pumpWidget(buildApp(
+        await pumpApp(tester, buildApp(
           FakeAuthRepository(),
           jobs: [task],
           bundle: FakeBundleRepository(
             [sampleBundle(id: 'b1', title: 'Bathroom refresh')],
           ),
-        ));
-        await tester.pumpAndSettle();
-        await fillField(tester, 'Email', 'a@b.com');
-        await fillField(tester, 'Password', 'secret123');
-        await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.descendant(
-            of: find.byType(NavigationBar),
-            matching: find.text('My jobs'),
-          ),
-        );
-        await tester.pumpAndSettle();
+        ), size: const Size(500, 1600));
+        await logIn(tester);
+        await openTab(tester, 'My jobs');
         await tester.tap(find.text('Fix leaking sink').first);
         await tester.pumpAndSettle();
 
@@ -163,27 +133,15 @@ void main() {
   group('"View bundle" on the bundle banners', () {
     /// Signs a requestor in (uid-1, owner of [sampleJob]) and opens [task].
     Future<void> openAsOwner(WidgetTester tester, Job task) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(buildApp(
+      await pumpApp(tester, buildApp(
         FakeAuthRepository(),
         jobs: [task],
         bundle: FakeBundleRepository(
           [sampleBundle(id: 'b1', title: 'Bathroom refresh')],
         ),
-      ));
-      await tester.pumpAndSettle();
-      await fillField(tester, 'Email', 'a@b.com');
-      await fillField(tester, 'Password', 'secret123');
-      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.descendant(
-          of: find.byType(NavigationBar),
-          matching: find.text('My jobs'),
-        ),
-      );
-      await tester.pumpAndSettle();
+      ), size: const Size(500, 1600));
+      await logIn(tester);
+      await openTab(tester, 'My jobs');
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
     }
@@ -202,21 +160,33 @@ void main() {
       },
     );
 
-    testWidgets(
-      'an awarded bundle task puts it in the banner, under the text',
-      (tester) async {
-        await openAsOwner(
-          tester,
-          sampleJob(
-            status: JobStatus.inProgress,
-            acceptedProviderId: 'prov-1',
-            acceptedProviderName: 'Aida Renovation',
-            acceptedBidAmountSen: 15000,
-            bundleId: 'b1',
-            bundleOrder: 0,
-            bundleTaskCount: 2,
-          ),
-        );
+    for (final (name, task, body) in [
+      (
+        'an awarded bundle task puts it in the banner, under the text',
+        sampleJob(
+          status: JobStatus.inProgress,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Aida Renovation',
+          acceptedBidAmountSen: 15000,
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+        ),
+        'Awarded as part of',
+      ),
+      (
+        'a released task keeps it in the banner, under the text',
+        sampleJob(
+          bundleId: 'b1',
+          bundleOrder: 0,
+          bundleTaskCount: 2,
+          releasedAt: DateTime.now(),
+        ),
+        "wasn't awarded",
+      ),
+    ]) {
+      testWidgets(name, (tester) async {
+        await openAsOwner(tester, task);
 
         final button = find.descendant(
           of: find.byType(InfoBanner),
@@ -224,47 +194,19 @@ void main() {
         );
         expect(button, findsOneWidget);
         expect(find.text('View bundle'), findsOneWidget);
-        final body = find.textContaining('Awarded as part of');
-        expect(
-          tester.getTopLeft(button).dy,
-          greaterThanOrEqualTo(tester.getBottomLeft(body).dy),
-        );
-      },
-    );
-
-    testWidgets(
-      'a released task keeps it in the banner, under the text',
-      (tester) async {
-        await openAsOwner(
-          tester,
-          sampleJob(
-            bundleId: 'b1',
-            bundleOrder: 0,
-            bundleTaskCount: 2,
-            releasedAt: DateTime.now(),
-          ),
-        );
-
-        final button = find.descendant(
-          of: find.byType(InfoBanner),
-          matching: find.widgetWithText(TextButton, 'View bundle'),
-        );
-        expect(button, findsOneWidget);
         expect(
           tester.getTopLeft(button).dy,
           greaterThanOrEqualTo(
-            tester.getBottomLeft(find.textContaining("wasn't awarded")).dy,
+            tester.getBottomLeft(find.textContaining(body)).dy,
           ),
         );
-      },
-    );
+      });
+    }
   });
 
   group('Bidding fact only while a job is open', () {
     testWidgets('an in-progress job with a deadline hides the Bidding fact',
         (tester) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final job = sampleJob(
         status: JobStatus.inProgress,
@@ -273,12 +215,8 @@ void main() {
         acceptedBidAmountSen: 15000,
         deadline: DateTime.now().add(const Duration(days: 4)),
       );
-      await tester.pumpWidget(buildApp(FakeAuthRepository(), jobs: [job]));
-      await tester.pumpAndSettle();
-      await fillField(tester, 'Email', 'a@b.com');
-      await fillField(tester, 'Password', 'secret123');
-      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
-      await tester.pumpAndSettle();
+      await pumpApp(tester, buildApp(FakeAuthRepository(), jobs: [job]), size: const Size(500, 1600));
+      await logIn(tester);
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
 
@@ -287,18 +225,12 @@ void main() {
 
     testWidgets('the same job while still open shows the Bidding fact',
         (tester) async {
-      await tester.binding.setSurfaceSize(const Size(500, 1600));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final job = sampleJob(
         deadline: DateTime.now().add(const Duration(days: 4)),
       );
-      await tester.pumpWidget(buildApp(FakeAuthRepository(), jobs: [job]));
-      await tester.pumpAndSettle();
-      await fillField(tester, 'Email', 'a@b.com');
-      await fillField(tester, 'Password', 'secret123');
-      await tester.tap(find.widgetWithText(FilledButton, 'Log In'));
-      await tester.pumpAndSettle();
+      await pumpApp(tester, buildApp(FakeAuthRepository(), jobs: [job]), size: const Size(500, 1600));
+      await logIn(tester);
       await tester.tap(find.text('Fix leaking sink').first);
       await tester.pumpAndSettle();
 
@@ -311,8 +243,6 @@ void main() {
       'opens the covered task with the lowest bundleOrder, not whichever '
       'key a Firestore map happens to iterate first',
       (tester) async {
-        await tester.binding.setSurfaceSize(const Size(500, 1600));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
 
         final second = sampleJob(
           id: 'job-1',
@@ -332,32 +262,18 @@ void main() {
         );
         // Declared job-1 (the higher bundleOrder) first, so a naive
         // `taskPrices.keys.first` would open the wrong task.
-        final bid = BundleBid(
-          bundleId: 'b1',
-          providerId: 'uid-1',
-          providerName: 'New User',
-          taskPrices: const {'job-1': 15000, 'job-2': 20000},
-          estimatedDuration: '1 week',
-          bundleTitle: 'Reno bundle',
-        );
+        final bid = sampleBundleBid(providerId: 'uid-1', providerName: 'New User', taskPrices: const {'job-1': 15000, 'job-2': 20000}, bundleTitle: 'Reno bundle');
         final auth = FakeAuthRepository()
           ..verificationStatus = 'approved'
           ..baseLat = 3.139
           ..baseLng = 101.6869;
-        await tester.pumpWidget(buildApp(
+        await pumpApp(tester, buildApp(
           auth,
           jobs: [second, first],
           bundleBid: FakeBundleBidRepository([bid]),
-        ));
-        await tester.pumpAndSettle();
+        ), size: const Size(500, 1600));
         await openRegisterAs(tester, 'Work');
-        await tester.tap(
-          find.descendant(
-            of: find.byType(NavigationBar),
-            matching: find.text('My jobs'),
-          ),
-        );
-        await tester.pumpAndSettle();
+        await openTab(tester, 'My jobs');
 
         // The tile's primary line is the quoted amount now (aligned with
         // the per-job pending-bid tile), so the bundle title only appears

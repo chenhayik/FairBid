@@ -85,12 +85,13 @@ jobs:
         working-directory: firestore-tests
         run: npm ci
 
-      # emulators:exec reads ../firebase.json for the port, starts the
-      # emulator, runs mocha against it, and tears it down. firebase-tools is
-      # pinned to a major so an upstream release cannot break CI silently.
+      # emulators:exec reads ../firebase.json for the ports, starts the
+      # emulators (storage.rules.test.js needs Storage as well as Firestore),
+      # runs mocha against them, and tears them down. firebase-tools is pinned
+      # to a major so an upstream release cannot break CI silently.
       - name: Run rules suite against the emulator
         working-directory: firestore-tests
-        run: npx --yes firebase-tools@15 emulators:exec --only firestore "npm test"
+        run: npx --yes firebase-tools@15 emulators:exec --only firestore,storage "npm test"
 
   functions:
     name: Lint and test (Cloud Functions)
@@ -115,10 +116,10 @@ jobs:
         working-directory: functions
         run: npm run lint
 
-      # Guards the scoring maths in functions/trust.js against the Dart mirror
-      # in PlatformConfig, pinned by test/fixtures/trust_vectors.json. These
-      # two implementations must never drift.
-      - name: Check trust vectors
+      # Runs the trust-vector parity check (functions/trust.js against the Dart
+      # mirror in PlatformConfig, pinned by test/fixtures/trust_vectors.json)
+      # and the node:test unit tests.
+      - name: Test functions
         working-directory: functions
         run: npm test
 

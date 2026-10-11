@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../features/onboarding/domain/face_box.dart';
 
-/// Where to place the full image so only the (padded) face box shows in a
-/// [size]-wide window. Pure maths, so it can be tested without pixels.
+/// What:   Where to place the full image so only the padded face box shows in a [size]-wide window.
+/// Input:  A FaceBox and the window size.
+/// Output: Image size and offset; pure maths, testable without pixels.
 class FaceCropLayout {
   const FaceCropLayout({
     required this.imageW,
@@ -15,8 +16,7 @@ class FaceCropLayout {
 
   final double imageW, imageH, cropH, left, top;
 
-  /// Pads [box] by 20% of its size on each side (kept inside the image) so the
-  /// whole head shows, not just the detector's tight rectangle.
+  /// Pads [box] by 20% per side (within the image) so the whole head shows.
   static FaceCropLayout of(FaceBox box, double size) {
     final l = (box.left - box.width * 0.2).clamp(0.0, 1.0);
     final t = (box.top - box.height * 0.2).clamp(0.0, 1.0);
@@ -34,8 +34,9 @@ class FaceCropLayout {
   }
 }
 
-/// Shows just the face from a photo when its [box] is known, else the whole
-/// photo squared off.
+/// What:   The face from a photo when its [box] is known, else the whole photo squared off.
+/// Input:  [url], optional [box], [size].
+/// Output: A square image.
 class FaceCrop extends StatelessWidget {
   const FaceCrop({super.key, required this.url, this.box, this.size = 140});
 
@@ -50,8 +51,7 @@ class FaceCrop extends StatelessWidget {
     final window = Size(size, layout?.cropH ?? size);
     final theme = Theme.of(context);
 
-    // The image sits in a huge offset box when cropped, so loading/error
-    // states are re-pinned to the visible window instead of that box.
+    // Cropped images sit in a huge offset box; pin loading/error states to the visible window.
     Widget inWindow(Widget child) => OverflowBox(
           alignment: Alignment.topLeft,
           minWidth: 0,

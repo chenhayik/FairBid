@@ -1,11 +1,9 @@
 import '../../../core/config/platform_config.dart';
 import 'user_role.dart';
 
-/// A lightweight, framework-agnostic representation of the signed-in user.
-///
-/// The rest of the app depends on this instead of Firebase's `User` type, which
-/// keeps the UI decoupled from Firebase and makes it easy to substitute a fake
-/// user in tests.
+/// What:   The signed-in user's profile, free of Firebase types.
+/// Input:  Built by FirebaseAuthRepository._mapUser from Auth + `users/{uid}` + private/payout.
+/// Output: Immutable value read by the router, controllers and screens.
 class AppUser {
   const AppUser({
     required this.uid,
@@ -19,7 +17,6 @@ class AppUser {
     this.location,
     this.baseLat,
     this.baseLng,
-    this.baseAddress,
     this.baseDistrictCode,
     this.baseTown,
     this.defaultLat,
@@ -32,7 +29,6 @@ class AppUser {
     this.ratingCount = 0,
     this.ratingSum = 0,
     this.jobsCompleted = 0,
-    this.disputesLost = 0,
     this.trustBreakdown,
     this.profilePhotoUrl,
     this.providerType,
@@ -52,67 +48,50 @@ class AppUser {
   final String? phone;
   final String? location;
 
-  /// The "About" text shown on the profile. Editable by the user.
   final String? bio;
 
-  /// Available wallet balance in sen (1/100 RM). Shown on the Earnings screen.
+  /// Wallet balance in sen.
   final int walletBalanceSen;
 
-  /// Sen the server holds back from the wallet (server-owned; always 0 now
-  /// that jobs are funded at award). Not free to spend or withdraw.
+  /// Sen the server holds back from the wallet; always 0 now that jobs are funded at award.
   final int escrowLockedSen;
 
-  /// The wallet balance actually free to accept a new bid or withdraw:
-  /// [walletBalanceSen] minus what's already committed to accepted work.
+  /// Balance free to spend or withdraw.
   int get availableBalanceSen => walletBalanceSen - escrowLockedSen;
 
-  /// Aggregate rating data, denormalised on the profile so "Reviews (N)" and
-  /// the average star score render without loading the reviews subcollection.
+  /// Denormalised rating totals, so stars render without loading reviews.
   final int ratingCount;
   final int ratingSum;
 
-  /// The user's average star rating (1–5), or null when they have no reviews.
+  /// Average stars (1-5), null with no reviews.
   double? get averageRating => ratingCount == 0 ? null : ratingSum / ratingCount;
 
-  /// Header avatar. Null until a photo is uploaded.
   final String? profilePhotoUrl;
 
-  /// A provider's onboarding provider type ('individual' / 'business'), used for
-  /// the header subtitle. Null for requestors.
+  /// Provider onboarding type ('individual' / 'business'); null for requestors.
   final String? providerType;
 
-  /// A provider's primary service category and skills, from onboarding.
-  /// Editable on Edit Profile. Empty for requestors.
+  /// A provider's primary service category and skills; empty for requestors.
   final String? category;
   final List<String> skills;
 
-  /// Whether email/password is a linked sign-in provider (vs. Google-only).
-  /// Determines whether deleting the account needs a password confirmation
-  /// or a fresh Google sign-in to satisfy Firebase's recent-login check.
+  /// Whether email/password is a linked provider (else Google-only); decides the re-auth method.
   final bool isPasswordAccount;
 
-  /// Whether the user has confirmed the link in their verification email.
-  /// Google accounts arrive already verified. Set only via
-  /// [AuthRepository.reloadUser] - Firebase pushes nothing on its own.
+  /// Whether the verification email link was confirmed; refreshed by [AuthRepository.reloadUser].
   final bool emailVerified;
 
-  /// A provider's saved reference point, used to compute distance to jobs in
-  /// "Jobs near you". Set via a map picker; null until chosen.
+  /// A provider's saved reference point for "Jobs near you"; null until chosen.
   final double? baseLat;
   final double? baseLng;
-  final String? baseAddress;
 
-  /// The Penang district/town behind [baseAddress] (see `Region`), when set
-  /// through the structured location picker. Null on legacy free-text data.
+  /// District/town of the base location (see `Region`); null on legacy data.
   final String? baseDistrictCode;
   final String? baseTown;
 
   bool get hasBaseLocation => baseLat != null && baseLng != null;
 
-  /// A requestor's saved default location (set during onboarding, stage 2),
-  /// used to pre-fill the Post-a-Job form. Stored at the **top level** of the
-  /// `users/{uid}` document - see `RequestorOnboardingData.toMap`. Null for
-  /// providers, and for requestors who onboarded before this existed.
+  /// A requestor's default location, pre-filling Post-a-Job; null for providers.
   final double? defaultLat;
   final double? defaultLng;
   final String? defaultDistrictCode;
@@ -121,61 +100,40 @@ class AppUser {
   bool get hasDefaultLocation =>
       defaultLat != null && defaultLng != null && defaultDistrictCode != null;
 
-  /// Reputation score 0–1000 (see the technical plan): a server-computed
-  /// composite of reviews, track record, verification and profile
-  /// completeness. Displayed only once [scoreVisible]; until then the UI
-  /// shows a "New" state instead of a number.
+  /// Server-computed Trust Score 0-1000; shown only once [scoreVisible].
   final int trustScore;
 
-  /// Completed jobs (as provider or requestor) and disputes lost, the raw
-  /// track-record inputs. Server-maintained.
+  /// Completed jobs as provider or requestor (server-maintained).
   final int jobsCompleted;
-  final int disputesLost;
 
-  /// The server-computed sub-score breakdown behind [trustScore], or null on
-  /// a profile the Cloud Function hasn't scored yet.
+  /// Sub-score breakdown behind [trustScore]; null until first scored.
   final TrustBreakdown? trustBreakdown;
 
-  /// Whether the Trust Score has been earned enough to display (admin-approved
-  /// plus [PlatformConfig.minJobsForVisibleScore] completed jobs).
+  /// Admin-approved plus [PlatformConfig.minJobsForVisibleScore] completed jobs.
   bool get scoreVisible => trustBreakdown?.scoreVisible ?? false;
 
-  /// True while the score is still hidden - the "New User" state.
-  bool get isNewUser => !scoreVisible;
-
-  /// 'none' → not submitted for admin review,
-  /// 'pending' → submitted and awaiting admin review,
-  /// 'approved' / 'rejected' → admin decision.
+  /// 'none' (not submitted), 'pending', 'approved' or 'rejected'.
   final String verificationStatus;
 
-  /// Requestors mark this true when they finish their (lighter) onboarding.
-  /// Providers instead un-gate by submitting for review (status → 'pending').
+  /// Set by requestors on finishing onboarding; providers un-gate via [verificationStatus].
   final bool onboardingComplete;
 
-  /// Whether the user must finish onboarding before using the app.
-  ///
-  /// - Providers are gated until they submit for review (`verificationStatus`
-  ///   leaves `'none'`).
-  /// - Requestors are gated until they complete their onboarding.
+  /// Providers are gated until they submit for review, requestors until they complete onboarding.
   bool get needsOnboarding => switch (role) {
         UserRole.provider => verificationStatus == 'none',
         UserRole.requestor => !onboardingComplete,
         UserRole.admin => false,
       };
 
-  /// Job ids the user has bookmarked (the "Saved Jobs" watchlist).
+  /// Bookmarked job ids ("Saved Jobs").
   final List<String> watchlist;
 
   /// Whether [jobId] is on the user's watchlist.
   bool isSaved(String jobId) => watchlist.contains(jobId);
 
-  /// Whether an admin has suspended this account. A suspended user is frozen
-  /// out of every action (posting, bidding, paying, chatting, reviewing) and
-  /// the router locks them to the "account suspended" screen. Server-owned -
-  /// set only by the `setUserSuspended` Cloud Function.
+  /// Admin suspension; the router locks the user to the suspended screen. Set by `setUserSuspended`.
   final bool suspended;
 
-  /// The admin's optional note explaining the suspension, shown on the
-  /// suspended screen. Null when not suspended or no reason was given.
+  /// Optional admin note shown on the suspended screen.
   final String? suspensionReason;
 }
