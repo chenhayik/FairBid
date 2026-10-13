@@ -143,6 +143,12 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost
+          df -h
+
+
       # Debug, not release: signing keystores are deliberately gitignored, so
       # a release build cannot work here without secrets. Debug still exercises
       # Gradle, AGP, the NDK and plugin registration.
