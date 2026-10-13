@@ -4,17 +4,18 @@ import 'package:provider/provider.dart';
 
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/messages/data/chat_repository.dart';
+import '../widgets/keyed_stream_builder.dart';
 
-/// The persistent bottom-navigation frame that hosts the four main tabs
-/// (Home · My Jobs · Messages · Profile). The [navigationShell] is provided by
-/// go_router's [StatefulShellRoute] and keeps each tab's state alive.
+/// What:   Bottom-navigation frame for the four tabs (Home, My jobs, Messages, Profile).
+/// Input:  [navigationShell] from go_router's StatefulShellRoute; unread count via ChatRepository.watchTotalUnread().
+/// Output: NavigationBar with a Messages badge; each tab keeps its state.
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.navigationShell});
 
   final StatefulNavigationShell navigationShell;
 
   void _goToTab(int index) {
-    // Tapping the active tab again resets it to its initial route.
+    // Re-tapping the active tab resets it.
     navigationShell.goBranch(
       index,
       initialLocation: index == navigationShell.currentIndex,
@@ -38,7 +39,7 @@ class AppShell extends StatelessWidget {
           const NavigationDestination(
             icon: Icon(Icons.work_outline),
             selectedIcon: Icon(Icons.work),
-            label: 'My Jobs',
+            label: 'My jobs',
           ),
           NavigationDestination(
             icon: _MessagesIcon(uid: uid, icon: Icons.forum_outlined),
@@ -56,51 +57,25 @@ class AppShell extends StatelessWidget {
   }
 }
 
-/// The Messages tab icon with a live unread-count badge.
-class _MessagesIcon extends StatefulWidget {
+/// Messages tab icon with an unread badge.
+class _MessagesIcon extends StatelessWidget {
   const _MessagesIcon({required this.uid, required this.icon});
   final String? uid;
   final IconData icon;
 
   @override
-  State<_MessagesIcon> createState() => _MessagesIconState();
-}
-
-class _MessagesIconState extends State<_MessagesIcon> {
-  // Cached so rebuilds (every tab switch) don't resubscribe to Firestore and
-  // flash the badge back to zero.
-  Stream<int>? _unread;
-
-  @override
-  void initState() {
-    super.initState();
-    _subscribe();
-  }
-
-  @override
-  void didUpdateWidget(_MessagesIcon oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.uid != oldWidget.uid) _subscribe();
-  }
-
-  void _subscribe() {
-    final uid = widget.uid;
-    _unread =
-        uid == null ? null : context.read<ChatRepository>().watchTotalUnread(uid);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final unreadStream = _unread;
-    if (unreadStream == null) return Icon(widget.icon);
-    return StreamBuilder<int>(
-      stream: unreadStream,
+    final id = uid;
+    if (id == null) return Icon(icon);
+    return KeyedStreamBuilder<int>(
+      cacheKey: id,
+      create: () => context.read<ChatRepository>().watchTotalUnread(id),
       builder: (context, snapshot) {
         final unread = snapshot.data ?? 0;
         return Badge.count(
           count: unread,
           isLabelVisible: unread > 0,
-          child: Icon(widget.icon),
+          child: Icon(icon),
         );
       },
     );

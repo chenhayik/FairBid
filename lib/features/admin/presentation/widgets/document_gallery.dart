@@ -4,9 +4,9 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/pending_verification.dart';
 
-/// Gallery of labelled document/evidence images; each tile opens a zoomable
-/// full-screen viewer. Shared by the admin verification and dispute detail
-/// screens.
+/// What:   Gallery of labelled document or evidence images.
+/// Input:  [documents]; shared by the verification and dispute detail screens.
+/// Output: Tiles that open a zoomable full-screen viewer, or an empty state.
 class DocumentGallery extends StatelessWidget {
   const DocumentGallery({
     super.key,
@@ -61,6 +61,7 @@ class _DocumentTile extends StatelessWidget {
                 document.url,
                 width: 64,
                 height: 64,
+                cacheWidth: (64 * MediaQuery.devicePixelRatioOf(context)).round(),
                 fit: BoxFit.cover,
                 loadingBuilder: (context, child, progress) => progress == null
                     ? child

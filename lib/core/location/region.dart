@@ -1,13 +1,9 @@
 import 'address_hint.dart';
 import 'penang.dart';
 
-/// A structured country → state → district → town location. Scoped (for this
-/// launch) to Penang, so [country]/[state] are effectively fixed and only
-/// [districtCode] (required) and [town] (optional) vary.
-///
-/// The district is decided by offline point-in-polygon against the shipped
-/// boundaries (see `PenangDistricts`) - never by the device geocoder, which
-/// is only ever used to suggest a [town] label.
+/// What:   Structured country, state, district and town location (Penang only, so only [districtCode] and optional [town] vary).
+/// Input:  Picker result or a stored map via [fromMap]; the district comes from PenangDistricts, never the geocoder.
+/// Output: Immutable value with a readable [label].
 class Region {
   const Region({
     this.country = kCountry,
@@ -22,13 +18,10 @@ class Region {
   final String districtCode;
   final String districtName;
 
-  /// Optional - the picker leaves this unset when the geocoder couldn't
-  /// suggest one of [kPenangTowns] and the user didn't pick one either.
+  /// Unset when neither the user nor the geocoder produced a known town.
   final String? town;
 
-  /// A human-readable label composed from the most to least specific part,
-  /// e.g. "George Town, Timur Laut, Penang" or "Timur Laut, Penang" when no
-  /// town is known.
+  /// e.g. "George Town, Timur Laut, Penang", or "Timur Laut, Penang" without a town.
   String get label => [
     town,
     districtName,
@@ -43,10 +36,7 @@ class Region {
     'town': town,
   };
 
-  /// Rebuilds a [Region] from a stored map. Tolerates legacy data that has no
-  /// structured region at all - returns `null` when [map] is null or is
-  /// missing a district code, so callers can fall back to a raw address
-  /// string instead of crashing.
+  /// Rebuilds from a stored map; null when [map] is null or lacks a district code (legacy data).
   static Region? fromMap(Map<String, dynamic>? map) {
     final code = map?['districtCode'] as String?;
     if (code == null || code.isEmpty) return null;
@@ -59,8 +49,7 @@ class Region {
     );
   }
 
-  /// Resolves a district's display name from its [code] via
-  /// [kPenangDistricts], falling back to the code itself if unrecognised.
+  /// The display name for [code], or the code itself if unknown.
   static String districtNameFor(String code) {
     for (final district in kPenangDistricts) {
       if (district.code == code) return district.nameMs;
@@ -69,9 +58,9 @@ class Region {
   }
 }
 
-/// The value returned by `RegionPickerScreen`: coordinates, a composed
-/// display [address] (== [region].label), the structured [region] behind it,
-/// and an optional street-level [addressHint].
+/// What:   The result of `RegionPickerScreen`.
+/// Input:  Coordinates, [address] (== [region].label), the [region] and an optional [addressHint].
+/// Output: Immutable value; the hint only pre-fills the private service-address form and is never persisted.
 class PickedLocation {
   const PickedLocation({
     required this.lat,
@@ -86,9 +75,5 @@ class PickedLocation {
   final String address;
   final Region region;
 
-  /// A best-effort reverse geocode of the pin, used only to pre-fill the
-  /// private service-address form. Null whenever the geocoder gave nothing
-  /// useful, and never persisted - the public job location deliberately
-  /// carries no street-level detail.
   final AddressHint? addressHint;
 }

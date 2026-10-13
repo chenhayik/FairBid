@@ -4,8 +4,9 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 
-/// Shown after submitting onboarding: "You're almost there." with the admin
-/// review status, per the design mock.
+/// What:   Post-submission screen shown while an admin reviews the provider.
+/// Input:  None; opened when verificationStatus is 'pending'.
+/// Output: Status tiles plus Go to Home / Explore Jobs.
 class PendingReviewScreen extends StatelessWidget {
   const PendingReviewScreen({super.key});
 
@@ -17,9 +18,7 @@ class PendingReviewScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Onboarding'),
         leading: BackButton(
-          // Submission is done and the account is usable while review is
-          // pending, so back leaves for the dashboard. It used to sign the
-          // user out, which is not what a back arrow promises.
+          // The account is usable during review, so back leaves for the dashboard.
           onPressed: () =>
               context.canPop() ? context.pop() : context.go('/home'),
         ),
@@ -80,15 +79,13 @@ class PendingReviewScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   PrimaryButton(
-                    label: 'Go to Dashboard',
+                    label: 'Go to Home',
                     onPressed: () => context.go('/home'),
                   ),
                   const SizedBox(height: 12),
                   SecondaryButton(
                     label: 'Explore Jobs',
-                    // The feed lives outside the shell, so seed the dashboard
-                    // beneath it: that keeps the back arrow and bottom nav
-                    // working, exactly as pushing the feed from home does.
+                    // The feed is outside the shell; seed the dashboard beneath it for back and nav.
                     onPressed: () {
                       context.go('/home');
                       context.push('/jobs');
@@ -104,7 +101,6 @@ class PendingReviewScreen extends StatelessWidget {
   }
 }
 
-/// The circular "review in progress" artwork.
 class _ReviewSpinnerArt extends StatelessWidget {
   const _ReviewSpinnerArt();
 

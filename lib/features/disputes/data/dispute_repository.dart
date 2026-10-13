@@ -3,14 +3,11 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/dispute.dart';
 
-/// Raises and resolves milestone disputes, and streams the admin queue. Both
-/// mutations call Cloud Functions - freezing the milestone and moving the
-/// escrowed money must be atomic and tamper-proof, so Firestore rules reject
-/// every client write to `disputes` (same pattern as the wallet).
-/// UI/controllers depend on this interface so tests can use a fake.
+/// What:   Dispute API: raise, withdraw, resolve and the admin queue.
+/// Input:  Cloud Functions and Firestore via FirestoreDisputeRepository; a fake in tests.
+/// Output: Mutations run in functions (atomic, tamper-proof); rules reject client writes to `disputes`.
 abstract interface class DisputeRepository {
-  /// A party disputes a funded/delivered milestone: freezes it (`→ disputed`)
-  /// and opens the dispute for admin review (the `raiseDispute` function).
+  /// A party disputes a funded or delivered milestone: freezes it and opens the dispute (`raiseDispute`).
   Future<void> raiseDispute({
     required String jobId,
     required String milestoneId,
@@ -18,21 +15,26 @@ abstract interface class DisputeRepository {
     List<String> evidenceUrls = const [],
   });
 
-  /// Admin ruling: pays the escrowed amount to the provider (`release`) or
-  /// back to the requestor (`refund`), closing the dispute (the
-  /// `resolveDispute` function).
+  /// The raiser withdraws their open dispute; the milestone returns to its prior state (`withdrawDispute`).
+  Future<void> withdrawDispute({
+    required String jobId,
+    required String milestoneId,
+  });
+
+  /// Admin ruling: pay the provider (`release`) or refund the client and end the job (`refund`) (`resolveDispute`).
   Future<void> resolveDispute({
     required String disputeId,
     required DisputeResolution resolution,
     required String rulingNote,
   });
 
-  /// Streams every open dispute, oldest first, for the admin queue.
+  /// Every open dispute, oldest first.
   Stream<List<Dispute>> watchOpenDisputes();
 }
 
-/// Firebase-backed [DisputeRepository]. Disputes live in the top-level
-/// `disputes` collection so the admin queue is a single query.
+/// What:   Firebase-backed [DisputeRepository].
+/// Input:  Top-level `disputes` collection (one query for the admin queue) and the dispute callables.
+/// Output: Dispute models and mutation calls.
 class FirestoreDisputeRepository implements DisputeRepository {
   FirestoreDisputeRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -58,6 +60,17 @@ class FirestoreDisputeRepository implements DisputeRepository {
   }
 
   @override
+  Future<void> withdrawDispute({
+    required String jobId,
+    required String milestoneId,
+  }) async {
+    await _functions.httpsCallable('withdrawDispute').call<void>({
+      'jobId': jobId,
+      'milestoneId': milestoneId,
+    });
+  }
+
+  @override
   Future<void> resolveDispute({
     required String disputeId,
     required DisputeResolution resolution,
@@ -72,15 +85,11 @@ class FirestoreDisputeRepository implements DisputeRepository {
 
   @override
   Stream<List<Dispute>> watchOpenDisputes() {
-    // Client-side sort (a handful of open disputes at most) keeps this a
-    // single-field query needing no composite index - same trick as the
-    // verification queue.
+    // Sorted client-side to avoid a composite index (few open disputes).
     return _firestore
         .collection('disputes')
         .where('status', isEqualTo: DisputeStatus.open.storage)
-        // Bounded: "a handful of open disputes" is an assumption about the
-        // platform, not a constraint on it. The admin queue works through
-        // them oldest-first, so a cap cannot hide the ones needing attention.
+        // Safety cap; unordered, so beyond 100 some would not be listed.
         .limit(100)
         .snapshots()
         .map((snapshot) => [
@@ -94,12 +103,9 @@ class FirestoreDisputeRepository implements DisputeRepository {
               }));
   }
 
-  /// Normalises Firestore Timestamps to DateTime before building the
-  /// [Dispute].
   Dispute _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});
     data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
-    data['resolvedAt'] = (data['resolvedAt'] as Timestamp?)?.toDate();
     return Dispute.fromMap(doc.id, data);
   }
 }

@@ -1,7 +1,4 @@
-/// The service categories a provider can offer and a requestor can post under.
-///
-/// Lives here rather than in the onboarding step that used to own it, because
-/// the job feed and the post-a-job form need it too.
+/// Service categories providers offer and requestors post under.
 const kServiceCategories = [
   'Cleaning',
   'Plumbing',
@@ -58,3 +55,12 @@ String? suggestedCategoryFor(String? natureOfBusiness) {
   }
   return null;
 }
+
+/// Licensing note for a category that legally requires a registered/licensed
+/// tradesperson in Malaysia, or null when [category] has none.
+String? licenceNoticeFor(String category) => switch (category) {
+      'Electrical' => 'Electrical work in Malaysia must be done by an '
+          'Energy Commission-registered contractor.',
+      'Plumbing' => 'Major plumbing work may need a SPAN-licensed plumber.',
+      _ => null,
+    };

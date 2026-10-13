@@ -3,15 +3,16 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/util/money.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../profile/presentation/widgets/review_card.dart';
 import '../data/moderation_repository.dart';
 import '../domain/flagged_review.dart';
 
-/// Admin Home › Reviews tab: every review reported as unfair/abusive. Each is
-/// small enough to moderate inline - Hide removes it from public display and
-/// recomputes the reviewee's Trust Score without it; Keep clears the flag.
+/// What:   Admin Reviews tab: reviews reported as unfair or abusive, ruled on inline.
+/// Input:  Flagged reviews via ModerationRepository.watchFlaggedReviews() (moderation_repository.dart).
+/// Output: Cards with Hide (removes it, recomputes the Trust Score) and Keep (clears the flag).
 class ModerationQueueScreen extends StatefulWidget {
   const ModerationQueueScreen({super.key});
 
@@ -20,18 +21,12 @@ class ModerationQueueScreen extends StatefulWidget {
 }
 
 class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
-  // Cached so rebuilds don't resubscribe to Firestore.
-  late final Stream<List<FlaggedReview>> _flagged;
+  // Created once so rebuilds don't resubscribe.
+  late final Stream<List<FlaggedReview>> _flagged =
+      context.read<ModerationRepository>().watchFlaggedReviews();
 
-  /// The review with a ruling call in flight, disabling its buttons.
+  /// The review with a ruling in flight; its buttons are disabled.
   String? _busyId;
-
-  @override
-  void initState() {
-    super.initState();
-    _flagged =
-        context.read<ModerationRepository>().watchFlaggedReviews();
-  }
 
   Future<void> _moderate(FlaggedReview item, {required bool hide}) async {
     final repo = context.read<ModerationRepository>();
@@ -79,7 +74,7 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
             const SizedBox(height: 24),
             StatCard(
               label: 'Flagged Reviews',
-              value: items == null ? '-' : '${items.length}',
+              value: items == null ? '-' : formatCount(items.length),
               icon: Icons.flag_outlined,
             ),
             const SizedBox(height: 24),
@@ -123,8 +118,7 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
   }
 }
 
-/// One flagged review, moderated inline: the review itself, the reporter's
-/// reason, and the Hide / Keep ruling buttons.
+/// A flagged review with the reporter's reason and the Hide / Keep buttons.
 class _FlaggedReviewCard extends StatelessWidget {
   const _FlaggedReviewCard({
     required this.item,

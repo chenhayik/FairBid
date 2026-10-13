@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// Full-screen photo viewer: swipe between [photoUrls] (`PageView`), pinch to
-/// zoom and pan each one (`InteractiveViewer`) - built entirely from Flutter
-/// SDK widgets, no new dependency. Pushed as a full-screen dialog route by
-/// [show], which `job_detail_screen.dart`'s Photos list calls on tap.
+/// What:   Full-screen photo viewer.
+/// Input:  [photoUrls] and [initialIndex], from PhotoStrip.
+/// Output: Swipe between photos; pinch to zoom.
 class PhotoViewerScreen extends StatefulWidget {
   const PhotoViewerScreen({
     super.key,
@@ -14,8 +13,6 @@ class PhotoViewerScreen extends StatefulWidget {
   final List<String> photoUrls;
   final int initialIndex;
 
-  /// Pushes the viewer as a full-screen dialog route, starting at
-  /// [initialIndex].
   static Future<void> show(
     BuildContext context, {
     required List<String> photoUrls,
@@ -51,11 +48,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          tooltip: 'Close',
-          icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
         title: Text('${_index + 1} / ${widget.photoUrls.length}'),
         centerTitle: true,
       ),
@@ -63,8 +55,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         controller: _pageController,
         itemCount: widget.photoUrls.length,
         onPageChanged: (i) => setState(() => _index = i),
-        // Same loading/error builders as job_detail_screen.dart's Photos
-        // list, lifted here so a broken or slow image degrades identically.
         itemBuilder: (context, i) => InteractiveViewer(
           minScale: 1,
           maxScale: 4,

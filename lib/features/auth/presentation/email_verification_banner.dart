@@ -7,13 +7,9 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import 'auth_controller.dart';
 
-/// A nudge shown on the dashboards until the signed-in user confirms their
-/// email address. Renders nothing once they have.
-///
-/// Firebase pushes nothing when the link is clicked, so this checks at the
-/// two moments that cost nothing: app resume (they were probably just in
-/// their mail app) and a manual refresh tap (covers verifying on another
-/// device, where resume never fires).
+/// What:   Dashboard banner nudging the user to verify their email.
+/// Input:  [AuthController.user]; checks on app resume and on the refresh button.
+/// Output: Banner with Resend (60s cooldown) and refresh; nothing once verified.
 class EmailVerificationBanner extends StatefulWidget {
   const EmailVerificationBanner({super.key});
 
@@ -24,7 +20,6 @@ class EmailVerificationBanner extends StatefulWidget {
 
 class _EmailVerificationBannerState extends State<EmailVerificationBanner>
     with WidgetsBindingObserver {
-  // Firebase throttles resends but documents no interval; pick a friendly one.
   static const _resendCooldown = Duration(seconds: 60);
 
   Timer? _cooldownTimer;
@@ -53,8 +48,7 @@ class _EmailVerificationBannerState extends State<EmailVerificationBanner>
     if (_checking) return;
     setState(() => _checking = true);
     await context.read<AuthController>().refreshEmailVerified();
-    // A successful check rebuilds this widget out of existence via
-    // notifyListeners, hence the mounted guard.
+    // A successful check removes this widget via notifyListeners.
     if (mounted) setState(() => _checking = false);
   }
 

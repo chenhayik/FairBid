@@ -1,21 +1,17 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
-import '../../profile/domain/review.dart';
+import '../../profile/data/review_repository.dart';
 import '../domain/flagged_review.dart';
 
-/// Streams the admin review-moderation queue and records rulings. Ruling goes
-/// through the `moderateReview` Cloud Function because hiding a review must
-/// also reverse its rating out of the reviewee's protected Trust Score
-/// aggregates (which no client may write). UI depends on this interface so
-/// tests can use a fake.
+/// What:   Admin review-moderation API.
+/// Input:  Firestore collection group `reviews` via FirestoreModerationRepository; a fake in tests.
+/// Output: Flagged-review stream; rulings go through `moderateReview` because hiding must reverse the protected Trust Score aggregates.
 abstract interface class ModerationRepository {
-  /// Streams every flagged review across all profiles, oldest first.
+  /// Every flagged review across all profiles, oldest first.
   Stream<List<FlaggedReview>> watchFlaggedReviews();
 
-  /// Admin ruling: `hide: true` removes the review from public display and
-  /// recomputes the reviewee's Trust Score without it; `hide: false` keeps
-  /// the review and just clears the flag.
+  /// Admin ruling: [hide] removes the review and recomputes the Trust Score; otherwise it clears the flag.
   Future<void> moderateReview({
     required String revieweeId,
     required String reviewId,
@@ -23,7 +19,9 @@ abstract interface class ModerationRepository {
   });
 }
 
-/// Firebase-backed [ModerationRepository].
+/// What:   Firebase-backed [ModerationRepository].
+/// Input:  Firestore and the `moderateReview` callable.
+/// Output: FlaggedReview stream and ruling calls.
 class FirestoreModerationRepository implements ModerationRepository {
   FirestoreModerationRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -45,7 +43,7 @@ class FirestoreModerationRepository implements ModerationRepository {
                 FlaggedReview(
                   // A review's parent's parent is the reviewee's user doc.
                   revieweeId: doc.reference.parent.parent!.id,
-                  review: _fromDoc(doc),
+                  review: reviewFromDoc(doc),
                 ),
             ]);
   }
@@ -61,12 +59,5 @@ class FirestoreModerationRepository implements ModerationRepository {
       'reviewId': reviewId,
       'hide': hide,
     });
-  }
-
-  /// Normalises Firestore Timestamps to DateTime before building the [Review].
-  Review _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = Map<String, dynamic>.of(doc.data() ?? {});
-    data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
-    return Review.fromMap(doc.id, data);
   }
 }

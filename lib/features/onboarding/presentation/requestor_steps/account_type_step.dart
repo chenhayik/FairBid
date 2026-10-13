@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/app_widgets.dart';
+import '../../../../core/widgets/icon_choice_card.dart';
 import '../../domain/requestor_onboarding_data.dart';
 import '../requestor_onboarding_controller.dart';
 
-/// Stage 1 - how the requestor hires: as an individual or as a business.
+/// What:   Requestor stage 1: hiring as an individual or a business.
+/// Input:  [RequestorOnboardingController.data].type.
+/// Output: Two IconChoiceCards and Continue.
 class AccountTypeStep extends StatelessWidget {
   const AccountTypeStep({super.key});
 
@@ -25,28 +27,29 @@ class AccountTypeStep extends StatelessWidget {
             style: theme.textTheme.headlineMedium),
         const SizedBox(height: 8),
         Text(
-          'Tell us who is posting jobs so we can tailor invoices and '
+          'Tell us who is posting jobs so we can set up the right '
           'verification.',
           textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
         const SizedBox(height: 24),
-        _TypeCard(
-          type: RequestorType.individual,
+        IconChoiceCard(
           icon: Icons.person_outline,
-          description:
+          title: RequestorType.individual.label,
+          subtitle:
               'You hire providers for your own personal or household needs.',
           selected: selected == RequestorType.individual,
+          onTap: () => onboarding.selectType(RequestorType.individual),
         ),
         const SizedBox(height: 16),
-        _TypeCard(
-          type: RequestorType.business,
+        IconChoiceCard(
           icon: Icons.business_outlined,
-          description:
-              'You hire on behalf of a company. We collect company details '
-              'for proper invoicing.',
+          title: RequestorType.business.label,
+          subtitle: 'You hire on behalf of a company. We collect company '
+              'details for proper invoicing.',
           selected: selected == RequestorType.business,
+          onTap: () => onboarding.selectType(RequestorType.business),
         ),
         const SizedBox(height: 32),
         PrimaryButton(
@@ -57,57 +60,6 @@ class AccountTypeStep extends StatelessWidget {
               selected == null ? null : () => onboarding.saveAndContinue(),
         ),
       ],
-    );
-  }
-}
-
-class _TypeCard extends StatelessWidget {
-  const _TypeCard({
-    required this.type,
-    required this.icon,
-    required this.description,
-    required this.selected,
-  });
-
-  final RequestorType type;
-  final IconData icon;
-  final String description;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final brand = context.fairbid.verified;
-    return SelectableCard(
-      selected: selected,
-      onTap: () =>
-          context.read<RequestorOnboardingController>().selectType(type),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: context.fairbid.subtleBlue,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: brand),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(type.label, style: theme.textTheme.titleLarge),
-                Text(description,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant)),
-              ],
-            ),
-          ),
-          if (selected) Icon(Icons.check_circle, color: brand),
-        ],
-      ),
     );
   }
 }

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/theme/app_theme.dart';
@@ -11,59 +10,45 @@ import '../../../../core/util/money.dart';
 import '../../../../core/util/payment_log.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../auth/presentation/auth_controller.dart';
+import '../../../disputes/data/dispute_repository.dart';
 import '../../../disputes/presentation/raise_dispute_sheet.dart';
 import '../../data/milestone_repository.dart';
 import '../../domain/job.dart';
 import '../../domain/milestone.dart';
-import 'propose_milestones_sheet.dart';
 
-/// The escrow milestone plan on a job detail: a hand-rolled vertical
-/// progress tracker (never Flutter's `Stepper` - it owns its own scroll
-/// physics and its fixed `StepState` can't express
-/// proposed/pending/funded/submitted/released/disputed). One linear
-/// sequence: Step 0 "Agree the plan", one step per milestone, then a
-/// terminal "Job complete" step. The accepted provider proposes the plan;
-/// then per milestone the requestor funds, the provider delivers and the
-/// requestor releases payment. Releasing the last milestone completes the
-/// job (server-side, via the `releaseMilestone` Cloud Function), which is
-/// what unlocks reviews.
-///
-/// Only the *current* step - the first milestone not yet released, Step 0
-/// while the plan is still unapproved, or any disputed milestone regardless
-/// of position - renders expanded, with the section's only filled button.
-/// Every other step collapses to one muted line; tapping a collapsed step
-/// expands it.
+/// What:   Escrow tracker: one step per milestone, then "Job complete".
+/// Input:  Milestones via MilestoneRepository.watchMilestones() (milestone_repository.dart); [job].
+/// Output: Steps with dispute/withdraw; the bottom bar runs deliver/release via [runCurrentAction].
+/// How:    Only the current step (disputed first, else first unfinished) is expanded.
 class MilestoneSection extends StatefulWidget {
-  const MilestoneSection({super.key, required this.job});
+  const MilestoneSection({super.key, required this.job, this.busy});
 
   final Job job;
 
+  /// Set while an action runs, so the bottom bar shows busy too.
+  final ValueNotifier<bool>? busy;
+
   @override
-  State<MilestoneSection> createState() => _MilestoneSectionState();
+  State<MilestoneSection> createState() => MilestoneSectionState();
 }
 
-/// Terminal statuses: money has finished moving for this milestone (paid
-/// out, or the legacy `resolved` alias - see [MilestoneStatus]'s doc).
-bool _isTerminal(MilestoneStatus s) =>
-    s == MilestoneStatus.released || s == MilestoneStatus.resolved;
-
-class _MilestoneSectionState extends State<MilestoneSection> {
-  // Cached so rebuilds don't resubscribe to Firestore.
+/// What:   State of [MilestoneSection]; public so the screen can reach it through a GlobalKey.
+class MilestoneSectionState extends State<MilestoneSection> {
   late final Stream<List<Milestone>> _milestones = context
       .read<MilestoneRepository>()
       .watchMilestones(widget.job.id);
 
-  /// The milestone with an action call in flight, disabling its button - or
-  /// [_planBusyKey] while a plan-level (approve/reject) action runs.
   String? _busyId;
 
-  /// Sentinel [_busyId] value for plan-level actions (no single milestone id).
-  static const _planBusyKey = '__plan__';
+  void _setBusy(String? id) {
+    setState(() => _busyId = id);
+    widget.busy?.value = id != null;
+  }
 
-  /// The step (keyed by `'plan'`, a milestone id, or `'complete'`) the
-  /// viewer tapped open manually. The current step is always expanded
-  /// regardless of this.
+  /// Step id (milestone id or `'complete'`) the viewer tapped open.
   String? _expandedOverride;
+
+  List<Milestone> _latest = const [];
 
   void _toggleExpand(String stepId) {
     setState(() {
@@ -71,28 +56,18 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     });
   }
 
-  Future<void> _fund(Milestone milestone) async {
-    final repo = context.read<MilestoneRepository>();
-    final confirmed = await _confirm(
-      title: 'Fund this milestone?',
-      body:
-          '${formatRm(milestone.amountSen)} will be moved from your wallet '
-          'and held in escrow for "${milestone.description}" until you '
-          'release it.',
-      actionLabel: 'Fund',
-    );
-    if (confirmed != true || !mounted) return;
-    // Funding debits the requestor's wallet, so refresh the profile after.
-    await _run(
-      milestone,
-      () => repo.fundMilestone(milestone.jobId, milestone.id),
-      step: 'milestone.fund',
-      refreshBalance: true,
-    );
-  }
-
   Future<void> _deliver(Milestone milestone) async {
     final repo = context.read<MilestoneRepository>();
+    final visit = widget.job.appointment?.startAt;
+    if (visit != null && visit.isAfter(DateTime.now())) {
+      final early = await showConfirmDialog(
+        context,
+        title: 'Visit time not reached',
+        body: "The visit time hasn't come yet. Mark as delivered anyway?",
+        actionLabel: 'Continue',
+      );
+      if (!early || !mounted) return;
+    }
     final note = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -122,7 +97,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Mark Delivered'),
+            child: const Text('Mark delivered'),
           ),
         ],
       ),
@@ -143,7 +118,8 @@ class _MilestoneSectionState extends State<MilestoneSection> {
 
   Future<void> _release(Milestone milestone) async {
     final repo = context.read<MilestoneRepository>();
-    final confirmed = await _confirm(
+    final confirmed = await showConfirmDialog(
+      context,
       title: 'Release payment?',
       body:
           '${formatRm(milestone.amountSen)} will be paid to '
@@ -151,9 +127,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
           '"${milestone.description}". This cannot be undone.',
       actionLabel: 'Release',
     );
-    if (confirmed != true || !mounted) return;
-    // A release may complete the job (last milestone) - the job stream on
-    // the detail screen picks that up on its own.
+    if (!confirmed || !mounted) return;
     await _run(
       milestone,
       () => repo.releaseMilestone(milestone.jobId, milestone.id),
@@ -161,8 +135,25 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
-  Future<void> _dispute(Milestone milestone) async {
-    final raised = await RaiseDisputeSheet.show(context, milestone: milestone);
+  /// The paid milestone a dispute can be raised on, if any.
+  Milestone? get disputableMilestone => _latest
+      .where((m) =>
+          m.status == MilestoneStatus.funded ||
+          m.status == MilestoneStatus.submitted)
+      .firstOrNull;
+
+  bool get hasOpenDispute =>
+      _latest.any((m) => m.status == MilestoneStatus.disputed);
+
+  /// Opens the dispute sheet for [disputableMilestone], optionally pre-filled.
+  Future<void> raiseDispute({String? initialStatement}) async {
+    final m = disputableMilestone;
+    if (m != null) await _dispute(m, initialStatement);
+  }
+
+  Future<void> _dispute(Milestone milestone, [String? initialStatement]) async {
+    final raised = await RaiseDisputeSheet.show(context,
+        milestone: milestone, initialStatement: initialStatement);
     if (raised == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -175,140 +166,34 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     }
   }
 
-  /// Requestor approves the proposed plan, making every milestone fundable.
-  Future<void> _approvePlan() async {
-    final repo = context.read<MilestoneRepository>();
-    final confirmed = await _confirm(
-      title: 'Approve this plan?',
-      body:
-          'You\'ll then fund each milestone into escrow and release payment '
-          'as the work is approved.',
-      actionLabel: 'Approve',
-    );
-    if (confirmed != true || !mounted) return;
-    await _runPlan(() => repo.approveMilestonePlan(widget.job.id));
-  }
-
-  /// Requestor sends the proposed plan back to the provider with a note.
-  Future<void> _rejectPlan() async {
-    final repo = context.read<MilestoneRepository>();
-    final note = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Request changes?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('The provider will be asked to revise the plan.'),
-            const SizedBox(height: 12),
-            TextField(
-              controller: note,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                hintText: 'What should change?',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Request Changes'),
-          ),
-        ],
-      ),
-    );
-    final text = note.text.trim();
-    note.dispose();
-    if (confirmed != true || !mounted) return;
-    await _runPlan(
-      () => repo.rejectMilestonePlan(
-        widget.job.id,
-        note: text.isEmpty ? null : text,
-      ),
-    );
-  }
-
-  /// Provider revises the plan (opens the propose sheet pre-filled).
-  Future<void> _amendPlan(List<Milestone> milestones) async {
-    final changed = await ProposeMilestonesSheet.show(
+  Future<void> _withdraw(Milestone milestone) async {
+    final repo = context.read<DisputeRepository>();
+    final confirmed = await showConfirmDialog(
       context,
-      job: widget.job,
-      existing: milestones,
+      title: 'Withdraw your dispute?',
+      body:
+          'The admin will stop reviewing it and "${milestone.description}" '
+          'goes back to where it was. No money moves.',
+      actionLabel: 'Withdraw',
     );
-    if (changed == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Updated plan sent to the client for approval.'),
-        ),
-      );
-    }
-  }
-
-  /// Runs a plan-level [action] (approve/reject) with a busy sentinel keyed to
-  /// the section, surfacing the Cloud Function's message on failure.
-  Future<void> _runPlan(Future<void> Function() action) async {
-    setState(() => _busyId = _planBusyKey);
-    try {
-      await action();
-    } on FirebaseFunctionsException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.message ?? 'Something went wrong. Please try again.'),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Something went wrong. Please try again.'),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _busyId = null);
-    }
-  }
-
-  Future<bool?> _confirm({
-    required String title,
-    required String body,
-    required String actionLabel,
-  }) {
-    return showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(actionLabel),
-          ),
-        ],
+    if (!confirmed || !mounted) return;
+    await _run(
+      milestone,
+      () => repo.withdrawDispute(
+        jobId: milestone.jobId,
+        milestoneId: milestone.id,
       ),
+      step: 'dispute.withdraw',
     );
   }
 
-  /// Runs a milestone [action] while its card shows a spinner, surfacing the
-  /// Cloud Function's user-readable message on failure. [step] names the
-  /// action for diagnostic logging (e.g. `'milestone.fund'`).
+  /// Runs [action] with a spinner; shows the server's message on failure. [step] is the log key.
   Future<void> _run(
     Milestone milestone,
     Future<void> Function() action, {
     required String step,
-    bool refreshBalance = false,
   }) async {
-    setState(() => _busyId = milestone.id);
+    _setBusy(milestone.id);
     logPayment(
       '$step.requested',
       data: {
@@ -323,12 +208,8 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         '$step.result',
         data: {'milestoneId': milestone.id, 'outcome': 'ok'},
       );
-      // One central confirmation for fund / deliver / release: money has
-      // moved, so acknowledge it in the hand too. Never awaited - a haptic
-      // failure must not be caught below and reported as a payment failure.
+      // Not awaited: a haptic failure must not be reported as a payment failure.
       unawaited(HapticFeedback.mediumImpact());
-      if (!mounted) return;
-      if (refreshBalance) await context.read<AuthController>().refreshUser();
     } on FirebaseFunctionsException catch (e, st) {
       logPayment(
         '$step.error',
@@ -338,22 +219,9 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       );
       unawaited(HapticFeedback.heavyImpact());
       if (!mounted) return;
-      var message = e.message ?? 'Something went wrong. Please try again.';
-      final insufficientBalance = message.startsWith('Insufficient');
-      if (insufficientBalance) {
-        message =
-            '$message Top up your wallet from Profile → My Wallet, '
-            'then try again.';
-      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
-          action: insufficientBalance
-              ? SnackBarAction(
-                  label: 'Top Up',
-                  onPressed: () => context.push('/profile/earnings'),
-                )
-              : null,
+          content: Text(e.message ?? 'Something went wrong. Please try again.'),
         ),
       );
     } catch (e, st) {
@@ -370,31 +238,25 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _busyId = null);
+      if (mounted) _setBusy(null);
     }
   }
 
-  /// The one action the viewer can take on [milestone] right now, or null.
-  (String, Future<void> Function())? _actionFor(
-    Milestone milestone, {
-    required bool isRequestor,
-    required bool isProvider,
-  }) {
-    return switch (milestone.status) {
-      MilestoneStatus.pending when isRequestor => (
-        'Fund Milestone',
-        () => _fund(milestone),
-      ),
-      MilestoneStatus.funded when isProvider => (
-        'Mark as Delivered',
-        () => _deliver(milestone),
-      ),
-      MilestoneStatus.submitted when isRequestor => (
-        'Release Payment',
-        () => _release(milestone),
-      ),
-      _ => null,
-    };
+  /// Runs the current step's deliver or release for the viewer, if any.
+  Future<void> runCurrentAction() async {
+    if (_busyId != null) return;
+    final job = widget.job;
+    final myUid = context.read<AuthController>().user?.uid;
+    final m = currentStage(_latest);
+    // Delivery waits until a visit time is agreed.
+    if (m?.status == MilestoneStatus.funded &&
+        myUid == job.acceptedProviderId &&
+        !job.needsAppointment) {
+      await _deliver(m!);
+    } else if (m?.status == MilestoneStatus.submitted &&
+        myUid == job.requestorId) {
+      await _release(m!);
+    }
   }
 
   @override
@@ -404,14 +266,6 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     final isRequestor = myUid == job.requestorId;
     final isProvider =
         job.acceptedProviderId != null && myUid == job.acceptedProviderId;
-
-    // Milestones only exist between assignment and completion; other viewers
-    // (e.g. losing bidders) have nothing to see here.
-    if ((!isRequestor && !isProvider) ||
-        (job.status != JobStatus.inProgress &&
-            job.status != JobStatus.completed)) {
-      return const SizedBox.shrink();
-    }
 
     return StreamBuilder<List<Milestone>>(
       stream: _milestones,
@@ -435,6 +289,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         }
         final milestones = [...snapshot.data ?? <Milestone>[]]
           ..sort((a, b) => a.order.compareTo(b.order));
+        _latest = milestones;
         return _buildTracker(
           context,
           job,
@@ -446,23 +301,9 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
-  bool _planApproved(List<Milestone> milestones) =>
-      milestones.isNotEmpty &&
-      !milestones.any((m) => m.status == MilestoneStatus.proposed);
-
-  /// `'plan'`, a milestone id, or `'complete'` - the step that's dominant
-  /// right now. See the class doc for the rule.
-  String _currentStepId(List<Milestone> milestones, bool planApproved) {
-    if (!planApproved) return 'plan';
-    final disputed = milestones.where(
-      (m) => m.status == MilestoneStatus.disputed,
-    );
-    if (disputed.isNotEmpty) return disputed.first.id;
-    final next = milestones.cast<Milestone?>().firstWhere(
-      (m) => !_isTerminal(m!.status),
-      orElse: () => null,
-    );
-    return next?.id ?? 'complete';
+  /// A milestone id, or `'complete'`.
+  String _currentStepId(List<Milestone> milestones) {
+    return currentStage(milestones)?.id ?? 'complete';
   }
 
   Widget _buildTracker(
@@ -473,55 +314,21 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     required bool isProvider,
   }) {
     final theme = Theme.of(context);
-    final planApproved = _planApproved(milestones);
-    // The provider may revise the plan only while nothing is funded yet.
-    final planEditable =
-        job.status == JobStatus.inProgress &&
-        milestones.every(
-          (m) =>
-              m.status == MilestoneStatus.proposed ||
-              m.status == MilestoneStatus.pending,
-        );
-    final currentId = _currentStepId(milestones, planApproved);
+    final currentId = _currentStepId(milestones);
 
     final rows = <Widget>[];
     var previousDone = false;
 
-    final planExpanded = !planApproved || _expandedOverride == 'plan';
-    rows.add(
-      _stepRow(
-        gutter: _gutter(
-          context: context,
-          state: planApproved ? _CircleState.done : _CircleState.upcoming,
-          topVisible: false,
-          bottomVisible: true,
-          topDone: false,
-          bottomDone: planApproved,
-        ),
-        content: _planStepContent(
-          context,
-          job,
-          milestones,
-          isRequestor: isRequestor,
-          isProvider: isProvider,
-          expanded: planExpanded,
-          planApproved: planApproved,
-          planEditable: planEditable,
-        ),
-      ),
-    );
-    previousDone = planApproved;
-
     for (final (i, m) in milestones.indexed) {
       final isCurrent = currentId == m.id;
-      final done = _isTerminal(m.status);
+      final done = m.status.isTerminal;
       final expanded = isCurrent || _expandedOverride == m.id;
       rows.add(
         _stepRow(
           gutter: _gutter(
             context: context,
             state: _circleStateFor(m.status),
-            topVisible: true,
+            topVisible: i > 0,
             bottomVisible: true,
             topDone: previousDone,
             bottomDone: done,
@@ -562,159 +369,14 @@ class _MilestoneSectionState extends State<MilestoneSection> {
         Text('Payment & progress', style: theme.textTheme.titleLarge),
         const SizedBox(height: 12),
         if (milestones.isNotEmpty) ...[
-          _PlanSummaryCard(milestones: milestones),
+          _PlanSummaryCard(
+            milestones: milestones,
+            isProvider: isProvider,
+          ),
           const SizedBox(height: 16),
         ],
         ...rows,
       ],
-    );
-  }
-
-  Widget _planStepContent(
-    BuildContext context,
-    Job job,
-    List<Milestone> milestones, {
-    required bool isRequestor,
-    required bool isProvider,
-    required bool expanded,
-    required bool planApproved,
-    required bool planEditable,
-  }) {
-    final theme = Theme.of(context);
-    final totalSen = milestones.fold<int>(0, (s, m) => s + m.amountSen);
-
-    if (!expanded) {
-      return Semantics(
-        button: true,
-        label:
-            'Step 1, Agree the plan, approved, ${milestones.length} '
-            'milestones, ${formatRm(totalSen)} total.',
-        child: InkWell(
-          onTap: () => _toggleExpand('plan'),
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Plan agreed, ${milestones.length} '
-                    'milestone${milestones.length == 1 ? '' : 's'}, '
-                    '${formatRm(totalSen)}',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                if (isProvider && planEditable)
-                  TextButton(
-                    onPressed: _busyId == _planBusyKey
-                        ? null
-                        : () => _amendPlan(milestones),
-                    child: const Text('Amend'),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    final busy = _busyId == _planBusyKey;
-    late final Widget body;
-    if (milestones.isEmpty) {
-      body = isProvider
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (job.planRejectionNote != null) ...[
-                  Text(
-                    'The client asked for changes: '
-                    '"${job.planRejectionNote}"',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: context.fairbid.danger,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                Text(
-                  'Split the accepted '
-                  '${formatRm(job.acceptedBidAmountSen ?? 0)} into '
-                  'milestones. The client approves the plan, then funds '
-                  'each one into escrow before you start, releasing '
-                  'payment as work is approved.',
-                  style: theme.textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 12),
-                PrimaryButton(
-                  label: 'Propose Milestones',
-                  onPressed: () =>
-                      ProposeMilestonesSheet.show(context, job: job),
-                ),
-              ],
-            )
-          : Text(
-              "Waiting for the provider to propose a milestone plan. "
-              "You'll fund each milestone into escrow and release payment "
-              'as work is approved.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            );
-    } else {
-      body = isRequestor
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'The provider proposed how to split the accepted bid. '
-                  'Approve it to start funding, or ask for changes.',
-                  style: theme.textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 12),
-                PrimaryButton(
-                  label: 'Approve Plan',
-                  busy: busy,
-                  onPressed: _approvePlan,
-                ),
-                const SizedBox(height: 8),
-                SecondaryButton(
-                  label: 'Request Changes',
-                  onPressed: busy ? null : _rejectPlan,
-                ),
-              ],
-            )
-          : Text(
-              "The client is reviewing your proposed plan. They'll fund "
-              'the first milestone once they approve it.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            );
-    }
-
-    return Semantics(
-      label:
-          'Step 1, Agree the plan, '
-          '${milestones.isEmpty ? 'awaiting proposal' : 'awaiting approval'}.',
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: context.fairbid.subtleBlue,
-          borderRadius: BorderRadius.circular(12),
-          border: Border(
-            left: BorderSide(color: context.fairbid.verified, width: 3),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Agree the plan', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            body,
-          ],
-        ),
-      ),
     );
   }
 
@@ -730,15 +392,14 @@ class _MilestoneSectionState extends State<MilestoneSection> {
   }) {
     final theme = Theme.of(context);
     final busy = _busyId == m.id;
-    final stepNumber = index + 1; // Step 0 (the plan) is step 1.
-    final totalSteps = totalMilestones + 2; // + plan + job complete.
+    final totalSteps = totalMilestones + 1;
     final turnDescriptor = m.status == MilestoneStatus.disputed
         ? 'an admin is reviewing'
         : _myTurn(m.status, isRequestor: isRequestor)
         ? 'waiting on you'
         : 'waiting on ${_counterpartyName(job, isRequestor: isRequestor)}';
     final semanticsLabel =
-        'Step $stepNumber of $totalSteps, '
+        'Step $index of $totalSteps, '
         '${m.description}, ${formatRm(m.amountSen)}, ${m.status.label}, '
         '$turnDescriptor.';
 
@@ -762,11 +423,6 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       );
     }
 
-    final action = _actionFor(
-      m,
-      isRequestor: isRequestor,
-      isProvider: isProvider,
-    );
     final canDispute =
         m.status == MilestoneStatus.funded ||
         m.status == MilestoneStatus.submitted;
@@ -774,11 +430,7 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     final mine = _myTurn(m.status, isRequestor: isRequestor);
     final accent = _statusAccent(context, m.status);
 
-    // `Border` can't mix a coloured left accent with a differently-coloured
-    // frame and a borderRadius in one go (Flutter's non-uniform-border paint
-    // path only supports a single visible colour) - so the accent is a
-    // separate opaque strip inside a uniformly-bordered, clipped box instead
-    // of one four-sided Border.
+    // Accent is a strip, not a Border side: Flutter can't paint mixed colours with a radius.
     return Semantics(
       label: semanticsLabel,
       child: ClipRRect(
@@ -798,24 +450,19 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '$index. ${m.description}',
-                              style: theme.textTheme.bodyLarge,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: PillBadge(
-                              label: m.status.label,
-                              icon: _statusIcon(m.status),
-                              color: accent,
-                            ),
-                          ),
-                        ],
+                      Text(
+                        '$index. ${m.description}',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      // Own line so large text scales don't truncate it.
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: PillBadge(
+                          label: m.status.label,
+                          icon: _statusIcon(m.status),
+                          color: accent,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Wrap(
@@ -829,16 +476,15 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                               color: context.fairbid.verified,
                             ),
                           ),
-                          if (disputed)
-                            const _TurnPill.admin()
-                          else
-                            _TurnPill(
-                              mine: mine,
-                              label: mine
-                                  ? 'Your turn'
-                                  : 'Waiting on '
-                                        '${_counterpartyName(job, isRequestor: isRequestor)}',
-                            ),
+                          _TurnPill(
+                            mine: mine,
+                            label: disputed
+                                ? 'With a FairBid admin'
+                                : mine
+                                ? 'Your turn'
+                                : 'Waiting on '
+                                      '${_counterpartyName(job, isRequestor: isRequestor)}',
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -897,28 +543,36 @@ class _MilestoneSectionState extends State<MilestoneSection> {
                         )
                       else
                         _MicroProgress(status: m.status),
-                      if (action != null) ...[
+                      if (busy) ...[
                         const SizedBox(height: 12),
-                        PrimaryButton(
-                          label: action.$1,
-                          busy: busy,
-                          onPressed: () => action.$2(),
-                        ),
+                        const LinearProgressIndicator(),
                       ],
                       if (canDispute) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 12),
                         Align(
                           alignment: Alignment.centerLeft,
-                          child: TextButton(
+                          child: OutlinedButton.icon(
                             onPressed: busy ? null : () => _dispute(m),
-                            style: TextButton.styleFrom(
-                              foregroundColor:
-                                  theme.colorScheme.onSurfaceVariant,
-                              padding: EdgeInsets.zero,
-                              minimumSize: const Size(0, 32),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: context.fairbid.danger,
+                              side: BorderSide(color: context.fairbid.danger),
                             ),
-                            child: const Text('Something wrong?'),
+                            icon: const Icon(Icons.gavel_rounded, size: 18),
+                            label: const Text('Raise a dispute'),
+                          ),
+                        ),
+                      ],
+                      if (disputed &&
+                          m.disputedBy != null &&
+                          m.disputedBy ==
+                              context.read<AuthController>().user?.uid) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: busy ? null : () => _withdraw(m),
+                            icon: const Icon(Icons.undo, size: 18),
+                            label: const Text('Withdraw dispute'),
                           ),
                         ),
                       ],
@@ -952,10 +606,9 @@ class _MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
-  /// Whether it's [isRequestor]'s (vs. the provider's) move on [status].
   bool _myTurn(MilestoneStatus status, {required bool isRequestor}) =>
       switch (status) {
-        MilestoneStatus.pending || MilestoneStatus.submitted => isRequestor,
+        MilestoneStatus.submitted => isRequestor,
         MilestoneStatus.funded => !isRequestor,
         _ => false,
       };
@@ -964,52 +617,51 @@ class _MilestoneSectionState extends State<MilestoneSection> {
       ? (job.acceptedProviderName ?? 'the provider')
       : job.requestorName;
 
-  /// The plain-language money line for the expanded (current) step, per the
-  /// per-milestone micro-progression table.
   String _statusLine(Job job, Milestone m) {
     final amount = formatRm(m.amountSen);
     final provider = job.acceptedProviderName ?? 'the provider';
     return switch (m.status) {
-      MilestoneStatus.pending => 'Fund $amount to start this milestone.',
-      MilestoneStatus.funded => '$amount held in escrow, $provider is working.',
+      MilestoneStatus.funded when job.needsAppointment =>
+        '$amount secured in escrow. Agree a visit time first.',
+      MilestoneStatus.funded =>
+        '$amount secured in escrow, $provider is working.',
       MilestoneStatus.submitted => 'Delivered, review and release $amount.',
       MilestoneStatus.released => 'Paid out.',
       MilestoneStatus.disputed => 'On hold, an admin is reviewing.',
-      MilestoneStatus.proposed => 'Awaiting client approval.',
+      MilestoneStatus.proposed || MilestoneStatus.pending => 'Not funded.',
       MilestoneStatus.resolved => 'Resolved.',
+      MilestoneStatus.refunded => '$amount went back to the client.',
     };
   }
 
-  /// The collapsed one-line summary for a done or upcoming milestone step.
   String _collapsedLine(Milestone m) {
     final amount = formatRm(m.amountSen);
     return switch (m.status) {
       MilestoneStatus.released => '${m.description}, $amount paid out',
       MilestoneStatus.resolved => '${m.description}, $amount resolved',
-      MilestoneStatus.pending => '${m.description}, $amount, not funded yet',
       MilestoneStatus.funded => '${m.description}, $amount, in escrow',
       MilestoneStatus.submitted =>
         '${m.description}, $amount, delivered, awaiting release',
       MilestoneStatus.disputed => '${m.description}, $amount, disputed',
-      MilestoneStatus.proposed => '${m.description}, $amount',
+      MilestoneStatus.proposed ||
+      MilestoneStatus.pending => '${m.description}, $amount, not funded',
+      MilestoneStatus.refunded => '${m.description}, $amount refunded',
     };
   }
 }
 
-/// Gutter circle shape per state (WCAG 1.4.1: shape carries the state, not
-/// just colour) - filled-with-check (done), ring-with-lock (in escrow),
-/// hollow (upcoming), filled-with-`!` (disputed).
+/// Circle shape per state, so shape (not just colour) carries the state.
 enum _CircleState { done, inEscrow, upcoming, disputed }
 
 _CircleState _circleStateFor(MilestoneStatus s) => switch (s) {
-  MilestoneStatus.released || MilestoneStatus.resolved => _CircleState.done,
+  MilestoneStatus.released ||
+  MilestoneStatus.resolved ||
+  MilestoneStatus.refunded => _CircleState.done,
   MilestoneStatus.funded || MilestoneStatus.submitted => _CircleState.inEscrow,
   MilestoneStatus.disputed => _CircleState.disputed,
   MilestoneStatus.proposed || MilestoneStatus.pending => _CircleState.upcoming,
 };
 
-/// Status-chip colour per state - [FairBidColors.warningText] (not the raw
-/// `warning` fill) so the pill's text/icon keeps readable contrast.
 Color _statusAccent(BuildContext context, MilestoneStatus s) => switch (s) {
   MilestoneStatus.proposed ||
   MilestoneStatus.pending ||
@@ -1017,7 +669,8 @@ Color _statusAccent(BuildContext context, MilestoneStatus s) => switch (s) {
   MilestoneStatus.funded => context.fairbid.verified,
   MilestoneStatus.released => context.fairbid.successText,
   MilestoneStatus.disputed => context.fairbid.danger,
-  MilestoneStatus.resolved => Theme.of(context).colorScheme.onSurfaceVariant,
+  MilestoneStatus.resolved ||
+  MilestoneStatus.refunded => Theme.of(context).colorScheme.onSurfaceVariant,
 };
 
 IconData _statusIcon(MilestoneStatus s) => switch (s) {
@@ -1027,12 +680,10 @@ IconData _statusIcon(MilestoneStatus s) => switch (s) {
   MilestoneStatus.released => Icons.check_circle_outline,
   MilestoneStatus.disputed => Icons.gavel_rounded,
   MilestoneStatus.resolved => Icons.info_outline,
+  MilestoneStatus.refunded => Icons.undo,
 };
 
-/// One `Row(children: [SizedBox(width: 32, child: gutter), Expanded(content)])`
-/// tracker row. Wrapped in [IntrinsicHeight] so the gutter's connector lines
-/// (which need a bounded height to flex against) can stretch to match
-/// whatever height [content] ends up needing that build.
+// IntrinsicHeight lets the gutter's connector lines stretch to the content.
 Widget _stepRow({required Widget gutter, required Widget content}) {
   return IntrinsicHeight(
     child: Row(
@@ -1046,9 +697,7 @@ Widget _stepRow({required Widget gutter, required Widget content}) {
   );
 }
 
-/// The gutter: a 2dp connector line above and below a 24dp state circle.
-/// [topVisible]/[bottomVisible] hide the line for the tracker's first/last
-/// step; otherwise the segment is coloured when the step it touches is done.
+// Connector line above and below a state circle; hidden at the first/last step.
 Widget _gutter({
   required BuildContext context,
   required _CircleState state,
@@ -1088,9 +737,7 @@ class _StepCircle extends StatelessWidget {
     final fairbid = context.fairbid;
     final theme = Theme.of(context);
     return switch (state) {
-      // successText, not success: a white tick on the brighter fill sits at
-      // 2.02:1, so the "this milestone is paid out" state was carried by
-      // shape alone at the exact moment money had moved.
+      // successText, not success: a white tick on the brighter fill has poor contrast.
       _CircleState.done => _circle(
         fill: fairbid.successText,
         icon: Icons.check,
@@ -1137,57 +784,36 @@ class _StepCircle extends StatelessWidget {
   }
 }
 
-/// "Your turn" (accent-filled) vs "Waiting on {name}" (neutral outline) -
-/// the highest-value single addition to the tracker: whoever is looking
-/// immediately knows if the ball is in their court.
+// "Your turn" (filled) or "Waiting on ..." (outlined).
 class _TurnPill extends StatelessWidget {
-  const _TurnPill({required this.mine, required this.label})
-    : _adminCopy = null;
-  const _TurnPill.admin()
-    : mine = false,
-      label = '',
-      _adminCopy = 'With a FairBid admin';
+  const _TurnPill({required this.mine, required this.label});
 
   final bool mine;
   final String label;
-  final String? _adminCopy;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final text = _adminCopy ?? label;
-    if (mine) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: context.fairbid.verified,
-          borderRadius: BorderRadius.circular(9999),
-        ),
-        child: Text(
-          text,
-          style: theme.textTheme.labelMedium?.copyWith(color: Colors.white),
-        ),
-      );
-    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
+        color: mine ? context.fairbid.verified : null,
         borderRadius: BorderRadius.circular(9999),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        border: mine
+            ? null
+            : Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Text(
-        text,
+        label,
         style: theme.textTheme.labelMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
+          color: mine ? Colors.white : theme.colorScheme.onSurfaceVariant,
         ),
       ),
     );
   }
 }
 
-/// The three small labelled beats (Fund → Deliver → Release) for the
-/// expanded current step, so the status reads as a position in a sequence
-/// rather than an opaque word.
+// Fund -> Deliver -> Release beats for the expanded step.
 class _MicroProgress extends StatelessWidget {
   const _MicroProgress({required this.status});
   final MilestoneStatus status;
@@ -1199,7 +825,7 @@ class _MicroProgress extends StatelessWidget {
     MilestoneStatus.funded => 1,
     MilestoneStatus.submitted => 2,
     MilestoneStatus.released || MilestoneStatus.resolved => 3,
-    MilestoneStatus.disputed => -1,
+    MilestoneStatus.disputed || MilestoneStatus.refunded => -1,
   };
 
   @override
@@ -1252,33 +878,41 @@ class _MicroProgress extends StatelessWidget {
   }
 }
 
-/// The card above the tracker: total, a segmented Paid out / In escrow / Not
-/// funded bar (word + icon per segment, never colour alone), and a plain-
-/// language reassurance for first-time requestors.
+/// What:   Summary above the tracker: price, Paid out / In escrow / Not funded bar, reassurance.
+/// Input:  [milestones] from MilestoneSectionState; [isProvider] picks the wording.
+/// Output: AppCard; each segment has a word and icon, not colour alone.
 class _PlanSummaryCard extends StatelessWidget {
-  const _PlanSummaryCard({required this.milestones});
+  const _PlanSummaryCard({
+    required this.milestones,
+    required this.isProvider,
+  });
   final List<Milestone> milestones;
+  final bool isProvider;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final totalSen = milestones.fold<int>(0, (s, m) => s + m.amountSen);
-    final paidOutSen = milestones
-        .where(
-          (m) =>
-              m.status == MilestoneStatus.released ||
-              m.status == MilestoneStatus.resolved,
-        )
+    int sum(bool Function(MilestoneStatus s) test) => milestones
+        .where((m) => test(m.status))
         .fold<int>(0, (s, m) => s + m.amountSen);
-    final inEscrowSen = milestones
-        .where(
-          (m) =>
-              m.status == MilestoneStatus.funded ||
-              m.status == MilestoneStatus.submitted ||
-              m.status == MilestoneStatus.disputed,
-        )
-        .fold<int>(0, (s, m) => s + m.amountSen);
-    final notFundedSen = totalSen - paidOutSen - inEscrowSen;
+    final totalSen = sum((_) => true);
+    final paidOutSen = sum(
+      (s) => s == MilestoneStatus.released || s == MilestoneStatus.resolved,
+    );
+    final inEscrowSen = sum(
+      (s) =>
+          s == MilestoneStatus.funded ||
+          s == MilestoneStatus.submitted ||
+          s == MilestoneStatus.disputed,
+    );
+    final refundedSen = sum((s) => s == MilestoneStatus.refunded);
+    final notFundedSen = totalSen - paidOutSen - inEscrowSen - refundedSen;
+    final segments = [
+      (paidOutSen, context.fairbid.success),
+      (inEscrowSen, context.fairbid.verified),
+      (refundedSen, theme.colorScheme.onSurfaceVariant),
+      (notFundedSen, context.fairbid.borderSubtle),
+    ];
 
     return AppCard(
       child: Column(
@@ -1287,7 +921,8 @@ class _PlanSummaryCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Total plan', style: theme.textTheme.labelMedium),
+                child: Text('Job price',
+                    style: theme.textTheme.labelMedium),
               ),
               Text(formatRm(totalSen), style: theme.textTheme.titleLarge),
             ],
@@ -1298,30 +933,12 @@ class _PlanSummaryCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(4),
               child: Row(
                 children: [
-                  if (paidOutSen > 0)
-                    Expanded(
-                      flex: paidOutSen,
-                      child: Container(
-                        height: 8,
-                        color: context.fairbid.success,
+                  for (final (sen, color) in segments)
+                    if (sen > 0)
+                      Expanded(
+                        flex: sen,
+                        child: Container(height: 8, color: color),
                       ),
-                    ),
-                  if (inEscrowSen > 0)
-                    Expanded(
-                      flex: inEscrowSen,
-                      child: Container(
-                        height: 8,
-                        color: context.fairbid.verified,
-                      ),
-                    ),
-                  if (notFundedSen > 0)
-                    Expanded(
-                      flex: notFundedSen,
-                      child: Container(
-                        height: 8,
-                        color: context.fairbid.borderSubtle,
-                      ),
-                    ),
                 ],
               ),
             ),
@@ -1342,12 +959,20 @@ class _PlanSummaryCard extends StatelessWidget {
                 color: context.fairbid.verified,
                 label: 'In escrow ${formatRm(inEscrowSen)}',
               ),
-              _legend(
-                context,
-                icon: Icons.hourglass_empty,
-                color: theme.colorScheme.onSurfaceVariant,
-                label: 'Not funded ${formatRm(notFundedSen)}',
-              ),
+              if (refundedSen > 0)
+                _legend(
+                  context,
+                  icon: Icons.undo,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  label: 'Refunded ${formatRm(refundedSen)}',
+                ),
+              if (notFundedSen > 0)
+                _legend(
+                  context,
+                  icon: Icons.hourglass_empty,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  label: 'Not funded ${formatRm(notFundedSen)}',
+                ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1362,8 +987,11 @@ class _PlanSummaryCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Money you fund is held by FairBid, not paid to the '
-                  'provider, until you release it.',
+                  isProvider
+                      ? 'The full price is held in escrow and paid to you '
+                            'when the client approves the work.'
+                      : 'Your payment is held in escrow, not paid to the '
+                            'provider, until you release it.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),

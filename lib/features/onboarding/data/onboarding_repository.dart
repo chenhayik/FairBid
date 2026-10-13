@@ -1,26 +1,31 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../domain/face_box.dart';
+import '../domain/id_extract.dart';
 import '../domain/onboarding_data.dart';
 import '../domain/ssm_extract.dart';
 
-/// Loads and saves a provider's onboarding progress.
+/// What:   Provider onboarding persistence API.
+/// Input:  Firestore via FirestoreOnboardingRepository; a fake in tests.
+/// Output: OnboardingData reads/writes and the SSM/ID extract streams.
 abstract interface class OnboardingRepository {
   Future<OnboardingData> load(String uid);
 
   Future<void> save(String uid, OnboardingData data);
 
-  /// Final submission: saves everything and flips the user's
-  /// `verificationStatus` to `pending` for admin review.
+  /// Saves everything and sets `verificationStatus` to `pending`.
   Future<void> submitForReview(String uid, OnboardingData data);
 
-  /// Streams the server's reading of the uploaded SSM document, or null while
-  /// none exists. Written only by the `extractSsmDocument` Cloud Function.
+  /// The server's SSM reading, null while none exists (`extractSsmDocument` writes it).
   Stream<SsmExtract?> watchSsmExtract(String uid);
+
+  /// The server's ID photo reading, null while none exists (`extractIdDocument` writes it).
+  Stream<IdExtract?> watchIdExtract(String uid);
 }
 
-/// Firestore-backed implementation. Progress lives in an `onboarding` map on
-/// the `users/{uid}` document, which the existing security rules already let
-/// the owner write.
+/// What:   Firestore-backed [OnboardingRepository].
+/// Input:  `onboarding` map on `users/{uid}` plus owner-only `private/verification`.
+/// Output: Batched writes; identity URLs merged back on load.
 class FirestoreOnboardingRepository implements OnboardingRepository {
   FirestoreOnboardingRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -30,19 +35,11 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
   DocumentReference<Map<String, dynamic>> _doc(String uid) =>
       _firestore.collection('users').doc(uid);
 
-  /// Owner+admin-only doc holding the sensitive identity photo URLs.
+  /// Owner+admin-only doc with the identity photo URLs.
   DocumentReference<Map<String, dynamic>> _privateDoc(String uid) =>
       _doc(uid).collection('private').doc('verification');
 
-  /// Owner+admin-only doc holding the payout bank details (see
-  /// `OnboardingData.payoutMap`), never on the world-readable public doc.
-  DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
-      _doc(uid).collection('private').doc('payout');
-
-  /// Fields whose public home moved to [_payoutDoc]; explicitly deleted from
-  /// the public `onboarding` map on every subsequent save so legacy accounts
-  /// migrate organically. A one-off backfill Cloud Function is still needed
-  /// for providers who never save again - deliberately out of scope here.
+  /// Legacy public bank fields, removed on every save (now in `private/payoutMethod`).
   static final _legacyPayoutDeletes = {
     'onboarding.bankName': FieldValue.delete(),
     'onboarding.accountHolder': FieldValue.delete(),
@@ -50,33 +47,27 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
     'onboarding.branchCode': FieldValue.delete(),
   };
 
+  static Map<String, dynamic>? _map(Object? v) =>
+      v is Map ? Map<String, dynamic>.from(v) : null;
+
   @override
   Future<OnboardingData> load(String uid) async {
     final snapshot = await _doc(uid).get();
     final data = OnboardingData.fromMap(
         snapshot.data()?['onboarding'] as Map<String, dynamic>?);
-    // Identity URLs live in the private doc; merge them back for resume.
     final private = (await _privateDoc(uid).get()).data();
     if (private != null) {
       data
         ..idDocumentUrl = private['idDocumentUrl'] as String?
         ..selfieUrl = private['selfieUrl'] as String?
         ..ssmDocumentUrl = private['ssmDocumentUrl'] as String?
+        ..icNumber = private['icNumber'] as String? ?? ''
+        ..idFaceBox = FaceBox.fromMap(_map(private['idFaceBox']))
+        ..selfieFaceBox = FaceBox.fromMap(_map(private['selfieFaceBox']))
+        ..idConsentAt = (private['idConsentAt'] as Timestamp?)?.toDate()
         ..ssmNumber = private['ssmNumber'] as String? ?? ''
         ..ssmNumberNormalized =
             private['ssmNumberNormalized'] as String? ?? '';
-    }
-    // Payout bank details live in their own private doc too; merge them back
-    // for resume, falling back to the legacy public onboarding fields (still
-    // parsed by OnboardingData.fromMap above) for accounts that haven't saved
-    // since the migration.
-    final payout = (await _payoutDoc(uid).get()).data();
-    if (payout != null) {
-      data
-        ..bankName = payout['bankName'] as String? ?? data.bankName
-        ..accountHolder =
-            payout['accountHolder'] as String? ?? data.accountHolder
-        ..branchCode = payout['branchCode'] as String? ?? data.branchCode;
     }
     return data;
   }
@@ -89,28 +80,34 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
       .map((snapshot) => SsmExtract.fromMap(snapshot.data()));
 
   @override
-  Future<void> save(String uid, OnboardingData data) {
-    final batch = _firestore.batch()
-      ..set(_doc(uid), {'onboarding': data.toMap()}, SetOptions(merge: true))
-      ..update(_doc(uid), _legacyPayoutDeletes)
-      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))
-      ..set(_payoutDoc(uid), data.payoutMap(), SetOptions(merge: true));
-    return batch.commit();
-  }
+  Stream<IdExtract?> watchIdExtract(String uid) => _doc(uid)
+      .collection('private')
+      .doc('idExtract')
+      .snapshots()
+      .map((snapshot) => IdExtract.fromMap(snapshot.data()));
 
   @override
-  Future<void> submitForReview(String uid, OnboardingData data) {
-    final batch = _firestore.batch()
-      ..set(_doc(uid), {
-        'onboarding': data.toMap(),
+  Future<void> save(String uid, OnboardingData data) => _commit(uid, data);
+
+  @override
+  Future<void> submitForReview(String uid, OnboardingData data) =>
+      _commit(uid, data, {
         'verificationStatus': 'pending',
-        // Use the onboarding display name as the public profile name.
         if (data.displayName.isNotEmpty) 'displayName': data.displayName,
         'submittedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true))
+      });
+
+  /// Writes the onboarding map (plus [extra] top-level fields) and the private doc in one batch.
+  Future<void> _commit(
+    String uid,
+    OnboardingData data, [
+    Map<String, dynamic> extra = const {},
+  ]) {
+    final batch = _firestore.batch()
+      ..set(_doc(uid), {'onboarding': data.toMap(), ...extra},
+          SetOptions(merge: true))
       ..update(_doc(uid), _legacyPayoutDeletes)
-      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true))
-      ..set(_payoutDoc(uid), data.payoutMap(), SetOptions(merge: true));
+      ..set(_privateDoc(uid), data.privateMap(), SetOptions(merge: true));
     return batch.commit();
   }
 }

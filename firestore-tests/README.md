@@ -32,47 +32,14 @@ npx firebase-tools emulators:exec --only firestore,storage "npm test"
 on port 8080) and sets `FIRESTORE_EMULATOR_HOST` for the test process, which
 `initializeTestEnvironment()` picks up automatically.
 
-To iterate faster while writing tests, you can instead leave the emulator
-running in one terminal (`npx firebase-tools emulators:start --only
-firestore`, from the repo root or here) and just re-run `npm test` in
-another - `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
-`firebase.json`.
+To iterate faster, leave the emulators running in one terminal (`npx
+firebase-tools emulators:start --only firestore,storage`, from the repo root
+or here) and re-run `npm test` in another with `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`
+and `FIREBASE_STORAGE_EMULATOR_HOST=127.0.0.1:9199` set.
 
 ## What's covered
 
-`rules.test.js`, one `describe` block per collection:
-
-- **Bids** (`jobs/{jobId}/bids/{bidId}`): amount validation (positive
-  integer, ≤ 100,000,000), the `providerTrustScore`/`providerScoreVisible`/
-  `providerPhotoUrl` snapshots must match the provider's own stored profile
-  (can't forge a higher Best Value ranking or put someone else's photo on a
-  bid), approved-provider-only, open-job-only.
-- **Reviews** (`users/{revieweeId}/reviews/{reviewId}`): rating must be an
-  integer 1–5, doc id must be `{jobId}_{reviewerId}` (blocks the
-  multi-review-per-job spam vector), job must be `completed`, reviewer must
-  be a participant, no self-reviews.
-- **User profile self-writes** (`users/{uid}`): a user can update ordinary
-  fields (`displayName`, `phone`, `bio`, ...) but not the Trust Score/wallet
-  fields (`trustScore`, `ratingSum`, `ratingCount`, `jobsCompleted`,
-  `disputesLost`, `trust`, `walletBalanceSen`, `escrowLockedSen`) or the
-  public-profile client-history counters (`jobsPosted`, `jobsAssigned`,
-  `hireRate`) - all Cloud-Function-only; a create is denied if it carries a
-  nonzero wallet balance, any trust field, or a forged `jobsPosted`/
-  `hireRate`.
-- **Conversations** (`conversations/{id}`): an update can only touch the
-  message-preview/unread-counter fields - writing `chatClosesAt` (the
-  chat-reopen hole) or changing `participantIds` is denied.
-- **Server-only collections**: `transactions/{id}` and `disputes/{id}` deny
-  every client write; a `milestones` doc `create` is denied even for the
-  job's own requestor/accepted provider - all three are Cloud-Function-only.
-- **Service address privacy** (`jobs/{jobId}/private/address`): only the
-  job's owner (read + write), its accepted provider (read only) and admins
-  (read only) may read it - a signed-in non-participant is denied read; a
-  suspended owner is denied write; delete is always denied.
-- **Private payout doc** (`users/{uid}/private/payout`): payout bank details
-  and the phone number, moved off the world-readable `users/{uid}` doc -
-  only the owner (read + write) and admins (read only) may read it; another
-  signed-in user is denied.
+`rules.test.js` (Firestore) and `storage.rules.test.js` (Storage): one `describe` per collection or path, each case proving a single allow or deny.
 
 ## Notes
 
@@ -82,6 +49,5 @@ another - `FIRESTORE_EMULATOR_HOST` defaults to `localhost:8080`, matching
   under test with `assertFails`/`assertSucceeds`.
 - `afterEach` calls `testEnv.clearFirestore()` so tests don't leak state
   into each other.
-- This suite intentionally does **not** touch `firestore.rules`,
-  `functions/`, or any Dart code - it only reads the rules file and asserts
-  against it.
+- This suite only reads the rules files and asserts against them; it never
+  edits them.

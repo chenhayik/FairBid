@@ -1,14 +1,17 @@
 import 'package:intl/intl.dart';
 
-/// Money in FairBid is stored as an integer number of **sen** (1/100 RM) to
-/// avoid floating-point rounding. These helpers format sen for display.
+// Money is stored as integer sen (1/100 RM) to avoid float rounding; these helpers format it.
 final _rm = NumberFormat('#,##0.00');
 
-/// Formats sen as `RM 1,234.50`.
-String formatRm(int sen) => 'RM ${_rm.format(sen / 100)}';
+final _count = NumberFormat('#,##0');
 
-/// Formats a budget range: `RM 100`, `RM 100 – RM 250`, with an optional
-/// `/hr` suffix. Returns `null` when neither bound is set.
+/// Formats a count with thousands separators: `12,345`.
+String formatCount(int n) => _count.format(n);
+
+/// Formats sen as `RM 1,234.50` (non-breaking space keeps it on one line).
+String formatRm(int sen) => 'RM\u00A0${_rm.format(sen / 100)}';
+
+/// Formats a budget: `RM 100` or `RM 100 – RM 250`, with an optional `/hr`; null when neither bound is set.
 String? formatBudget({int? minSen, int? maxSen, bool hourly = false}) {
   if (minSen == null && maxSen == null) return null;
   final suffix = hourly ? '/hr' : '';
@@ -18,7 +21,7 @@ String? formatBudget({int? minSen, int? maxSen, bool hourly = false}) {
   return '${formatRm(minSen ?? maxSen!)}$suffix';
 }
 
-/// Parses a user-typed RM amount (e.g. "125.50") into sen, or null if blank.
+/// Parses a typed RM amount ("125.50") into sen; null if blank or invalid.
 int? parseRmToSen(String? input) {
   final text = input?.trim() ?? '';
   if (text.isEmpty) return null;

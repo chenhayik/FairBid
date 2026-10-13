@@ -6,7 +6,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 4 - "Build your profile": display name, bio, skills, trust boosters.
+/// What:   Provider stage 4: display name, bio, skills, certificates and links.
+/// Input:  [OnboardingController.data].
+/// Output: Form; Save & Continue writes the fields back and saves.
 class ProfileStep extends StatefulWidget {
   const ProfileStep({super.key});
 
@@ -24,9 +26,7 @@ class _ProfileStepState extends State<ProfileStep> {
   void initState() {
     super.initState();
     final data = context.read<OnboardingController>().data;
-    // A registered business trades under its registered name, so that is the
-    // sensible default - but only when the applicant has not set one, so this
-    // can never overwrite a name they chose.
+    // Default to the business name, never overwriting a chosen display name.
     _displayName = TextEditingController(
         text: data.displayName.isNotEmpty ? data.displayName : data.businessName);
     _bio = TextEditingController(text: data.bio);
@@ -65,8 +65,8 @@ class _ProfileStepState extends State<ProfileStep> {
         Text('Build your profile', style: theme.textTheme.headlineMedium),
         const SizedBox(height: 8),
         Text(
-          'Tell us a bit about yourself. This information helps verified '
-          'businesses understand your expertise and professional background.',
+          'Tell us a bit about yourself. Clients read this to see what you '
+          'do and how much experience you have.',
           style: theme.textTheme.bodyMedium
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
@@ -78,13 +78,13 @@ class _ProfileStepState extends State<ProfileStep> {
               AppTextField(
                 controller: _displayName,
                 label: 'Display Name',
-                hint: 'E.g. Jane Doe or J. Doe Designs',
+                hint: 'E.g. Ah Seng or Seng Aircon Services',
               ),
               AppTextField(
                 controller: _bio,
                 label: 'Short Bio',
-                hint: 'Briefly describe your professional background and '
-                    'what you specialize in...',
+                hint: 'Briefly describe your experience and the jobs you '
+                    'usually do...',
                 maxLines: 4,
                 maxLength: 250,
               ),
@@ -134,8 +134,8 @@ class _ProfileStepState extends State<ProfileStep> {
               ),
               const SizedBox(height: 8),
               Text(
-                'These sections are optional, but profiles with verifiable '
-                'links and certificates attract 3x more verified businesses.',
+                'These sections are optional, but certificates (e.g. a '
+                'wireman or gas licence) and links help clients trust you.',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
@@ -145,6 +145,7 @@ class _ProfileStepState extends State<ProfileStep> {
               UploadBox(
                 compact: true,
                 onTap: onboarding.pickCertificate,
+                busy: onboarding.isUploading('certificate'),
                 icon: Icons.upload_file_outlined,
                 hint: 'PDF, JPG, PNG up to 5MB',
                 pickedName: data.certificateUrls.isEmpty
@@ -155,7 +156,7 @@ class _ProfileStepState extends State<ProfileStep> {
               AppTextField(
                 controller: _linkInput,
                 label: 'Portfolio Links (Optional)',
-                hint: 'https://dribbble.com/yourprofile',
+                hint: 'Facebook page or Google Maps listing link',
                 prefixIcon: Icons.link,
                 keyboardType: TextInputType.url,
               ),

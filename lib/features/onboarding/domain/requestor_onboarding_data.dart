@@ -1,4 +1,4 @@
-/// Whether the requestor hires as a private individual or a company.
+/// Whether the requestor hires as an individual or a company.
 enum RequestorType {
   individual,
   business;
@@ -8,18 +8,13 @@ enum RequestorType {
         RequestorType.business => 'Business',
       };
 
-  static RequestorType? fromStorage(String? value) => switch (value) {
-        'individual' => RequestorType.individual,
-        'business' => RequestorType.business,
-        _ => null,
-      };
+  static RequestorType? fromStorage(String? value) => values.asNameMap()[value];
 }
 
-/// Everything a requestor fills in during the short 3-stage onboarding.
-///
-/// Unlike the provider flow (which nests everything in an `onboarding` map),
-/// requestor fields are general profile data reused across the app, so they are
-/// persisted at the **top level** of the `users/{uid}` document.
+/// What:   Everything a requestor fills in during the 3-stage onboarding.
+/// Input:  Top-level fields of `users/{uid}` plus private docs, via RequestorOnboardingRepository.
+/// Output: Mutable draft owned by RequestorOnboardingController.
+/// Notes:  Top level (not an `onboarding` map) because the app reuses these as profile data.
 class RequestorOnboardingData {
   RequestorOnboardingData();
 
@@ -27,15 +22,11 @@ class RequestorOnboardingData {
 
   static const firstStep = 1;
   static const lastStep = 3;
-  static const totalStages = 3;
 
   // Stage 1 - account type.
   RequestorType? type;
 
-  // Stage 2 - details. `location` mirrors `Region.label` (kept as a plain
-  // string for backward-compatible display); `districtCode`/`town`/`lat`/
-  // `lng` are the structured pick behind it, from the Penang-scoped location
-  // picker.
+  // Stage 2 - details. `location` mirrors `Region.label`; the rest is the structured pick.
   String fullName = '';
   String? profilePhotoUrl;
   String phone = '';
@@ -53,9 +44,7 @@ class RequestorOnboardingData {
 
   bool get isBusiness => type == RequestorType.business;
 
-  /// Public fields to merge into the user document. The identity/SSM document
-  /// URL and phone number are intentionally excluded - see [privateMap] and
-  /// [payoutMap] respectively.
+  /// Public fields for the user doc; the document URL and phone are in [privateMap] / [payoutMap].
   Map<String, dynamic> toMap() => {
         'requestorOnboardingStep': step,
         'requestorType': type?.name,
@@ -69,25 +58,17 @@ class RequestorOnboardingData {
         'companyName': companyName,
       };
 
-  /// Sensitive identity document - stored in the owner+admin-only
-  /// `users/{uid}/private/verification` doc, never in the world-readable
-  /// user document.
-  /// The SSM number sits here rather than on the public document because for
-  /// a sole proprietorship the business has no legal personality separate from
-  /// its owner, which makes the registration number personal data. The company
-  /// *name* stays public - see [toMap].
+  /// Document URL and SSM number (personal data for a sole proprietorship) for owner+admin-only
+  /// `private/verification`. The company name stays public in [toMap].
   Map<String, dynamic> privateMap() => {
         'clientDocumentUrl': clientDocumentUrl,
         'ssmNumber': ssmNumber,
         'ssmNumberNormalized': ssmNumberNormalized,
       };
 
-  /// Phone number - stored in the owner+admin-only `users/{uid}/private/payout`
-  /// doc, never in the world-readable user document. Shares that doc with
-  /// [OnboardingData]'s payout bank details (providers' twin of this class).
+  /// Phone number for owner+admin-only `private/payout`.
   Map<String, dynamic> payoutMap() => {'phone': phone};
 
-  /// Rebuilds from the top-level fields of a `users/{uid}` document.
   static RequestorOnboardingData fromMap(Map<String, dynamic>? map) {
     final data = RequestorOnboardingData();
     if (map == null) return data;

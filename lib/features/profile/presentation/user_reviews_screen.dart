@@ -6,11 +6,9 @@ import '../data/review_repository.dart';
 import '../domain/review.dart';
 import 'widgets/review_card.dart';
 
-/// The "See all N reviews" screen opened from [PublicProfileScreen] - pushed
-/// full-screen with a back button. Pages of ~20 reviews at a time (newest
-/// first, loaded as the list scrolls near the end); no sort control and no
-/// ratings-distribution histogram (misleading under ~5 reviews, which is
-/// most profiles at launch).
+/// What:   "See all N reviews" screen opened from [PublicProfileScreen].
+/// Input:  [uid]; ReviewRepository.fetchReviewPage() (review_repository.dart), 20 per page.
+/// Output: Newest-first list that loads the next page near the end.
 class UserReviewsScreen extends StatefulWidget {
   const UserReviewsScreen({super.key, required this.uid});
 
@@ -66,8 +64,7 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
     if (_loadingMore || !_hasMore || _reviews.isEmpty) return;
     final cursor = _reviews.last.createdAt;
     if (cursor == null) {
-      // No timestamp to page from (shouldn't happen on a saved review) -
-      // stop rather than risk re-fetching the same page forever.
+      // No timestamp to page from; stop rather than refetch the same page forever.
       setState(() => _hasMore = false);
       return;
     }
@@ -124,10 +121,7 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
       separatorBuilder: (_, _) => const Divider(height: 24),
       itemBuilder: (context, i) {
         if (i >= _reviews.length) {
-          // Building this trailing slot means the list has scrolled near the
-          // end - kick off the next page. Guarded by _loadingMore/_hasMore,
-          // so a rebuild of this same slot while a fetch is in flight is a
-          // no-op.
+          // Building this slot means the list is near the end; _loadMore guards repeats.
           WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 16),

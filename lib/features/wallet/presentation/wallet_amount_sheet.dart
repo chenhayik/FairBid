@@ -9,8 +9,9 @@ import '../../../core/util/payment_log.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/form_widgets.dart';
 
-/// Bottom sheet that asks for an RM amount and runs a wallet action (top-up
-/// or withdraw). [show] resolves `true` once the action succeeded.
+/// What:   Bottom sheet asking for an RM amount, then running a wallet action (top-up or withdraw).
+/// Input:  [title], [subtitle], [actionLabel], [onSubmit] (a WalletRepository call), optional [maxSen].
+/// Output: [show] resolves `true` once the action succeeded.
 class WalletAmountSheet extends StatefulWidget {
   const WalletAmountSheet({
     super.key,
@@ -25,10 +26,9 @@ class WalletAmountSheet extends StatefulWidget {
   final String subtitle;
   final String actionLabel;
 
-  /// The wallet call to run with the entered amount.
   final Future<void> Function(int amountSen) onSubmit;
 
-  /// Optional upper bound, e.g. the available balance for withdrawals.
+  /// Upper bound, e.g. the available balance for withdrawals.
   final int? maxSen;
 
   static Future<bool?> show(
@@ -90,21 +90,16 @@ class _WalletAmountSheetState extends State<WalletAmountSheet> {
       await widget.onSubmit(amountSen);
       unawaited(HapticFeedback.mediumImpact());
       if (mounted) Navigator.of(context).pop(true);
-    } on FirebaseFunctionsException catch (e, st) {
-      logPayment('wallet_amount_sheet.submit.error',
-          data: {'amountSen': amountSen, 'code': e.code},
-          error: e,
-          stackTrace: st);
-      // The wallet functions raise user-readable messages - but fall back
-      // rather than leaving the sheet with no explanation when one isn't set.
-      if (mounted) {
-        setState(() =>
-            _error = e.message ?? 'Something went wrong. Please try again.');
-      }
     } catch (e, st) {
+      final code = e is FirebaseFunctionsException ? e.code : null;
       logPayment('wallet_amount_sheet.submit.error',
-          data: {'amountSen': amountSen}, error: e, stackTrace: st);
-      if (mounted) setState(() => _error = 'Something went wrong. Please try again.');
+          data: {'amountSen': amountSen, 'code': ?code}, error: e, stackTrace: st);
+      // Wallet functions send readable messages; fall back when none is set.
+      if (mounted) {
+        setState(() => _error =
+            (e is FirebaseFunctionsException ? e.message : null) ??
+                'Something went wrong. Please try again.');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -114,7 +109,7 @@ class _WalletAmountSheetState extends State<WalletAmountSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      // Keep the form above the keyboard.
+      // Keeps the form above the keyboard.
       padding:
           EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SingleChildScrollView(

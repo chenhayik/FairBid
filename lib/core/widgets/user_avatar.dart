@@ -2,24 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// A user's avatar: their network photo when [photoUrl] is set, else the
-/// standard `person_outline` placeholder. If the network image fails to
-/// load, falls back to the placeholder rather than showing a broken image.
-///
-/// Used everywhere a user's photo appears - the profile header, bids, job
-/// cards and the conversation list - so the fallback behaviour stays
-/// consistent across the app.
+/// What:   A user's avatar, used wherever a photo appears.
+/// Input:  [photoUrl] (the profile photo or a denormalised copy); null or empty shows the placeholder.
+/// Output: The network photo, or the `person_outline` placeholder when unset or failed to load.
 class UserAvatar extends StatefulWidget {
   const UserAvatar({super.key, this.photoUrl, this.radius, this.iconSize});
 
-  /// The user's `profilePhotoUrl` (or a denormalised snapshot of it, e.g. on
-  /// a `Bid` or `Conversation`). Null or empty shows the placeholder.
   final String? photoUrl;
 
-  /// Passed straight to the underlying [CircleAvatar]; null uses its default.
   final double? radius;
 
-  /// Passed straight to the placeholder [Icon]; null uses its default.
   final double? iconSize;
 
   @override
@@ -27,14 +19,13 @@ class UserAvatar extends StatefulWidget {
 }
 
 class _UserAvatarState extends State<UserAvatar> {
-  /// Set once the photo fails to load, so the fallback icon is shown instead
-  /// of a broken image.
+  /// Set once the photo fails to load.
   bool _failed = false;
 
   @override
   void didUpdateWidget(covariant UserAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A newly saved/loaded photo deserves a fresh chance to load.
+    // A new photo URL gets a fresh load attempt.
     if (oldWidget.photoUrl != widget.photoUrl) _failed = false;
   }
 
@@ -45,7 +36,13 @@ class _UserAvatarState extends State<UserAvatar> {
     return CircleAvatar(
       radius: widget.radius,
       backgroundColor: context.fairbid.subtleBlue,
-      backgroundImage: hasPhoto ? NetworkImage(photo) : null,
+      // Decode at display size, not the photo's full resolution.
+      backgroundImage: hasPhoto
+          ? ResizeImage(NetworkImage(photo),
+              width: ((widget.radius ?? 20) * 2 *
+                      MediaQuery.devicePixelRatioOf(context))
+                  .round())
+          : null,
       onBackgroundImageError: hasPhoto
           ? (_, _) {
               if (mounted) setState(() => _failed = true);

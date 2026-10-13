@@ -6,8 +6,9 @@ import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/onboarding_data.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 2 - "Choose Provider Type": Individual/Freelancer vs Registered
-/// Business, each with its verification-requirement badge.
+/// What:   Provider stage 2: Individual / Freelancer or Registered Business.
+/// Input:  [OnboardingController.data].providerType.
+/// Output: Two selectable cards with their verification badges, and Continue.
 class ProviderTypeStep extends StatelessWidget {
   const ProviderTypeStep({super.key});
 
@@ -37,8 +38,9 @@ class ProviderTypeStep extends StatelessWidget {
           type: ProviderType.individual,
           icon: Icons.person_outline,
           description:
-              'You operate as an independent professional. Ideal for tutors, '
-              'freelance designers, consultants, and independent contractors.',
+              'You work on your own. Ideal for plumbers, electricians, '
+              'aircon technicians, cleaners, and other independent '
+              'tradespeople.',
           badge: 'Identity Verification Required',
           badgeIcon: Icons.verified_user_outlined,
           selected: selected == ProviderType.individual,
@@ -49,8 +51,8 @@ class ProviderTypeStep extends StatelessWidget {
           icon: Icons.business_outlined,
           description:
               'You operate as a formally registered company (e.g., SSM '
-              'registered). Ideal for agencies, established firms, and '
-              'service companies.',
+              'registered). Ideal for repair, cleaning, and renovation '
+              'companies with their own team.',
           badge: 'Business Verification Required',
           badgeIcon: Icons.badge_outlined,
           selected: selected == ProviderType.business,

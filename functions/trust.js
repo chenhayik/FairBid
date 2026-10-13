@@ -28,7 +28,12 @@ const MIN_JOBS_FOR_VISIBLE_SCORE = 3;
 
 const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 
-/** Computes the full trust breakdown from a `users/{uid}` document's data. */
+/**
+ * What:   Trust Score breakdown.
+ * Input:  A `users/{uid}` document's data.
+ * Output: {reviewScore, trackRecordScore, verificationScore, profileScore,
+ *         composite, scoreVisible}.
+ */
 function computeTrust(user) {
   const ratingSum = user.ratingSum || 0;
   const ratingCount = user.ratingCount || 0;

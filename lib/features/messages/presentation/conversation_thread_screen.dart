@@ -10,8 +10,9 @@ import '../data/chat_repository.dart';
 import '../domain/conversation.dart';
 import '../domain/message.dart';
 
-/// One chat thread: the message history (newest at the bottom) and a composer.
-/// Opening the thread clears the viewer's unread counter.
+/// What:   One chat thread: message history (newest at the bottom) and a composer.
+/// Input:  [conversationId]; ChatRepository.watchConversation()/watchMessages() (chat_repository.dart).
+/// Output: Thread UI; send calls sendMessage, and opening clears the viewer's unread counter.
 class ConversationThreadScreen extends StatefulWidget {
   const ConversationThreadScreen({super.key, required this.conversationId});
 
@@ -26,7 +27,7 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
   final _composer = TextEditingController();
   bool _sending = false;
 
-  // Cached so rebuilds don't resubscribe to Firestore.
+  // Created once so rebuilds don't resubscribe.
   late final Stream<Conversation?> _conversation;
   late final Stream<List<Message>> _messages;
 
@@ -70,16 +71,14 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
       builder: (context, snapshot) {
         final conversation = snapshot.data;
 
-        // Clear my unread counter whenever the thread is open with unread
-        // messages; the resulting snapshot has zero, so this converges.
+        // Clears my unread counter; the next snapshot has zero, so this converges.
         if (conversation != null &&
             myUid != null &&
             conversation.unreadFor(myUid) > 0) {
           final repo = context.read<ChatRepository>();
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            // Best-effort: a failed clear just leaves the badge until the
-            // next open.
+            // A failed clear just leaves the badge until the next open.
             repo
                 .markRead(widget.conversationId, myUid)
                 .catchError((_) {});
@@ -89,8 +88,7 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
         return Scaffold(
           appBar: AppBar(
             toolbarHeight: 72,
-            // Tapping the chat header opens the counterparty's public
-            // profile - the strongest convention for "who am I talking to".
+            // Tapping the header opens the counterparty's public profile.
             title: conversation == null || myUid == null
                 ? const Text('Chat')
                 : UserChip(
@@ -106,20 +104,26 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
             child: Column(
               children: [
                 Expanded(child: _MessageList(stream: _messages, myUid: myUid)),
-                // A failed conversation stream leaves `conversation` null
-                // forever, which used to render the composer disabled with no
-                // explanation at all: a dead text box the user could not type
-                // in and had no way to understand.
+                // A stream error leaves `conversation` null for good, so say so
+                // instead of showing a dead composer.
                 if (snapshot.hasError)
-                  const _ChatUnavailableFooter()
+                  const _Footer(
+                    icon: Icons.cloud_off,
+                    text: "Couldn't load this conversation. Check your "
+                        'connection, then go back and open it again.',
+                    error: true,
+                  )
                 else if (conversation != null &&
                     !conversation.isOpenAt(DateTime.now()))
-                  const _ClosedChatFooter()
+                  const _Footer(
+                    icon: Icons.lock_outline,
+                    text: 'This conversation is closed. You can still read '
+                        'the history.',
+                  )
                 else
                   _Composer(
                     controller: _composer,
                     sending: _sending,
-                    enabled: conversation != null && myUid != null,
                     onSend: conversation == null || myUid == null
                         ? null
                         : () => _send(conversation, myUid),
@@ -161,8 +165,7 @@ class _MessageList extends StatelessWidget {
             message: 'Say hello and confirm the job details.',
           );
         }
-        // Messages arrive newest-first; a reversed list renders them
-        // bottom-up so the newest sits at the bottom, pre-scrolled into view.
+        // Newest-first data in a reversed list puts the newest at the bottom.
         return ListView.builder(
           reverse: true,
           padding: const EdgeInsets.all(16),
@@ -230,13 +233,13 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-/// Shown in place of the composer once a job has ended and its chat grace
-/// window has passed. The history above stays readable.
-/// Shown in place of the composer when the conversation stream failed. The
-/// stream is terminal once it errors, so the instruction is to reopen the
-/// chat rather than to wait.
-class _ChatUnavailableFooter extends StatelessWidget {
-  const _ChatUnavailableFooter();
+/// Replaces the composer with an icon and message (stream failed, or chat closed); [error] tints the icon.
+class _Footer extends StatelessWidget {
+  const _Footer({required this.icon, required this.text, this.error = false});
+
+  final IconData icon;
+  final String text;
+  final bool error;
 
   @override
   Widget build(BuildContext context) {
@@ -251,44 +254,15 @@ class _ChatUnavailableFooter extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.cloud_off, size: 18, color: theme.colorScheme.error),
+          Icon(icon,
+              size: 18,
+              color: error
+                  ? theme.colorScheme.error
+                  : theme.colorScheme.onSurfaceVariant),
           const SizedBox(width: 8),
           Flexible(
             child: Text(
-              "Couldn't load this conversation. Check your connection, then "
-              'go back and open it again.',
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ClosedChatFooter extends StatelessWidget {
-  const _ClosedChatFooter();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: context.fairbid.borderSubtle)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.lock_outline,
-              size: 18, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              'This conversation is closed. You can still read the history.',
+              text,
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -303,13 +277,13 @@ class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
     required this.sending,
-    required this.enabled,
     required this.onSend,
   });
 
   final TextEditingController controller;
   final bool sending;
-  final bool enabled;
+
+  /// Null while the conversation or user isn't loaded; disables the field.
   final VoidCallback? onSend;
 
   @override
@@ -326,7 +300,7 @@ class _Composer extends StatelessWidget {
           Expanded(
             child: TextField(
               controller: controller,
-              enabled: enabled && !sending,
+              enabled: onSend != null && !sending,
               minLines: 1,
               maxLines: 4,
               textCapitalization: TextCapitalization.sentences,

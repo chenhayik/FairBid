@@ -1,23 +1,35 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
-/// Optional Gemini-backed suggestions for the Post-a-Job form, proxied
-/// through the `suggestJobDetails` Cloud Function so the API key never ships
-/// in the APK. Every method returns null when no suggestion is available
-/// (offline, quota reached, unparseable reply) - the form must work
-/// unchanged without them. UI/controllers depend on this interface so tests
-/// can use a fake.
+/// What:   A post drafted from one rough note.
+/// Input:  Built by FirebaseAssistRepository.suggestDraft().
+/// Output: Title, category, description; the budget range is null when the model won't commit.
+class JobDraft {
+  const JobDraft({
+    required this.title,
+    required this.category,
+    required this.description,
+    this.minSen,
+    this.maxSen,
+  });
+
+  final String title;
+  final String category;
+  final String description;
+  final int? minSen;
+  final int? maxSen;
+}
+
+/// What:   Optional Gemini suggestions for the Post-a-Job form.
+/// Input:  Callable `suggestJobDetails` (via FirebaseAssistRepository), so the API key stays server-side.
+/// Output: A draft or price range, or null when unavailable (offline, quota, bad reply).
 abstract interface class AssistRepository {
-  /// Expands the requestor's rough note into a structured job description,
-  /// or null when no suggestion could be made. [photoUrl], when given, lets
-  /// the model factor in a photo of the job.
-  Future<String?> suggestDescription({
-    required String category,
+  /// Turns one rough note into a draft post (category inferred), or null.
+  Future<JobDraft?> suggestDraft({
     required String roughText,
     String? photoUrl,
   });
 
-  /// An indicative fair-price range (in sen) for the described job, or null.
-  /// [photoUrl], when given, lets the model factor in a photo of the job.
+  /// An indicative fair-price range in sen, or null; [photoUrl] lets the model see the job.
   Future<({int minSen, int maxSen})?> suggestPriceRange({
     required String category,
     required String description,
@@ -25,7 +37,9 @@ abstract interface class AssistRepository {
   });
 }
 
-/// Firebase-backed [AssistRepository] over the `suggestJobDetails` callable.
+/// What:   Cloud Functions [AssistRepository].
+/// Input:  FirebaseFunctions.
+/// Output: Draft suggestions from the AI callable.
 class FirebaseAssistRepository implements AssistRepository {
   FirebaseAssistRepository({FirebaseFunctions? functions})
       : _functions = functions ?? FirebaseFunctions.instance;
@@ -34,12 +48,11 @@ class FirebaseAssistRepository implements AssistRepository {
 
   Future<Map<String, dynamic>?> _call({
     required String kind,
-    required String category,
+    String category = '',
     required String roughText,
     String? photoUrl,
   }) async {
-    // Advisory only: swallow every failure into "no suggestion" - a broken
-    // assist must never surface as a form error.
+    // Advisory only: any failure becomes "no suggestion", never a form error.
     try {
       final result = await _functions
           .httpsCallable('suggestJobDetails')
@@ -57,18 +70,23 @@ class FirebaseAssistRepository implements AssistRepository {
   }
 
   @override
-  Future<String?> suggestDescription({
-    required String category,
+  Future<JobDraft?> suggestDraft({
     required String roughText,
     String? photoUrl,
   }) async {
-    final data = await _call(
-        kind: 'description',
-        category: category,
-        roughText: roughText,
-        photoUrl: photoUrl);
+    final data =
+        await _call(kind: 'draft', roughText: roughText, photoUrl: photoUrl);
+    final title = data?['title'] as String?;
+    final category = data?['category'] as String?;
     final description = data?['description'] as String?;
-    return description == null || description.isEmpty ? null : description;
+    if (title == null || category == null || description == null) return null;
+    return JobDraft(
+      title: title,
+      category: category,
+      description: description,
+      minSen: (data?['minSen'] as num?)?.toInt(),
+      maxSen: (data?['maxSen'] as num?)?.toInt(),
+    );
   }
 
   @override

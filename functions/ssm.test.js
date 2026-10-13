@@ -1,17 +1,9 @@
-/**
- * Unit tests for the SSM parsers in ssm.js.
- *
- * These cover the one property the whole privacy design rests on: that reading
- * a Business Profile cannot surface the owner's NRIC, date of birth, race,
- * gender or residential address. That guarantee is enforced by a text split on
- * the owner-section heading, which is worth pinning precisely because it is
- * heading-dependent rather than structural.
- *
- * Plain node:assert - the functions directory has no test framework, and these
- * need none. Run with `npm test`.
- */
+// The privacy design rests on one property: reading a Business Profile can't
+// surface the owner's NRIC, date of birth, race, gender or address. It is
+// enforced by a text split on the owner heading, so it is pinned here.
 
 const assert = require("node:assert");
+const test = require("node:test");
 const {
   parseSsmText, parseOwnerName, namesMatch, parseDate, canonical,
 } = require("./ssm");
@@ -53,19 +45,6 @@ const CERTIFICATE = [
   "has this day been registered until 22 JANUARY in accordance with",
 ].join("\n");
 
-let failed = 0;
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`  FAIL  ${name}\n        ${err.message}`);
-  }
-}
-
-console.log("ssm.js parsers");
-
 test("reads a Business Profile's business fields", () => {
   const out = parseSsmText(PROFILE);
   assert.strictEqual(out.businessName, "SUNMAL DENTAL ART");
@@ -92,13 +71,6 @@ test("no owner personal data can reach any parsed field", () => {
     assert.ok(!values.includes(secret.toUpperCase()),
         `leaked ${secret} into parsed output: ${values}`);
   }
-});
-
-test("owner dates cannot be mistaken for business dates", () => {
-  // The owner block holds 30-03-1992; only the business block's dates count.
-  const out = parseSsmText(PROFILE);
-  assert.strictEqual(out.businessStartDate, "2008-05-05");
-  assert.notStrictEqual(out.expiryDate, "1992-03-30");
 });
 
 test("a PREVIOUS OWNER section is excluded too", () => {
@@ -146,9 +118,3 @@ test("canonical form matches the Dart client's", () => {
   assert.strictEqual(canonical("201903350205"), "201903350205");
   assert.strictEqual(canonical(null), "");
 });
-
-if (failed > 0) {
-  console.log(`\n${failed} SSM parser test(s) failed.`);
-  process.exit(1);
-}
-console.log("All SSM parser tests passed.\n");

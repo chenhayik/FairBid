@@ -3,21 +3,20 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/platform_stats.dart';
 
-/// Loads the admin dashboard's platform statistics. UI depends on this
-/// interface so tests can use a fake without Firestore.
+/// What:   Admin dashboard stats API.
+/// Input:  Firestore aggregates via FirestoreStatsRepository; a fake in tests.
+/// Output: PlatformStats and the Trust Score recompute.
 abstract interface class StatsRepository {
-  /// One-shot load (pull-to-refresh re-calls it; counts don't need realtime).
+  /// Loads the numbers once.
   Future<PlatformStats> load();
 
-  /// Runs the `backfillTrust` Cloud Function: recounts every user's completed
-  /// jobs and lost disputes so their Trust Score breakdown is recomputed.
-  /// Idempotent. Returns the number of users processed.
+  /// Recounts every user's completed jobs and lost disputes (`backfillTrust`); returns the user count. Safe to rerun.
   Future<int> recomputeTrustScores();
 }
 
-/// Firestore-backed [StatsRepository] built on server-side aggregation
-/// queries - `count()`/`sum()` return a single number per query instead of
-/// downloading every document, which is the correct way to count at scale.
+/// What:   Firestore [StatsRepository].
+/// Input:  `count()` / `sum()` aggregate queries, so no documents are downloaded.
+/// Output: PlatformStats.
 class FirestoreStatsRepository implements StatsRepository {
   FirestoreStatsRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -41,8 +40,10 @@ class FirestoreStatsRepository implements StatsRepository {
   Future<PlatformStats> load() async {
     final users = _firestore.collection('users');
     final jobs = _firestore.collection('jobs');
+    final bundles = _firestore.collection('bundles');
+    final disputes = _firestore.collection('disputes');
 
-    // All aggregations run concurrently; each returns one number.
+    // Order matches the PlatformStats fields below.
     final results = await Future.wait([
       _count(users.where('role', isEqualTo: 'requestor')),
       _count(users.where('role', isEqualTo: 'provider')),
@@ -50,15 +51,17 @@ class FirestoreStatsRepository implements StatsRepository {
       _count(jobs.where('status', isEqualTo: 'in_progress')),
       _count(jobs.where('status', isEqualTo: 'completed')),
       _count(users.where('verificationStatus', isEqualTo: 'pending')),
-      _count(_firestore
-          .collection('disputes')
-          .where('status', isEqualTo: 'open')),
+      _count(disputes.where('status', isEqualTo: 'open')),
       _firestore
           .collection('transactions')
           .where('type', isEqualTo: 'release')
           .aggregate(sum('amountSen'))
           .get()
           .then((s) => (s.getSum('amountSen') ?? 0).toInt()),
+      _count(bundles.where('status', isEqualTo: 'awarded')),
+      _count(bundles
+          .where('status', isEqualTo: 'awarded')
+          .where('splitAward', isEqualTo: true)),
     ]);
 
     return PlatformStats(
@@ -70,6 +73,8 @@ class FirestoreStatsRepository implements StatsRepository {
       pendingVerifications: results[5],
       openDisputes: results[6],
       releasedVolumeSen: results[7],
+      bundlesAwarded: results[8],
+      splitAwards: results[9],
     );
   }
 }

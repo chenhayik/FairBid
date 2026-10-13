@@ -9,8 +9,9 @@ import '../data/job_repository.dart';
 import '../domain/job.dart';
 import 'widgets/job_card.dart';
 
-/// The signed-in user's bookmarked jobs - fed by the bookmark toggle on
-/// [JobCard] across the feed and "Jobs near you".
+/// What:   The signed-in user's bookmarked jobs.
+/// Input:  Watchlist ids from AuthController; jobs via JobRepository.watchSavedJobs().
+/// Output: JobCards with a bookmark toggle.
 class SavedJobsScreen extends StatelessWidget {
   const SavedJobsScreen({super.key});
 
@@ -20,12 +21,10 @@ class SavedJobsScreen extends StatelessWidget {
     final watchlist = user?.watchlist ?? const [];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Saved Jobs')),
+      appBar: AppBar(title: const Text('Saved jobs')),
       body: SafeArea(
         child: KeyedStreamBuilder<List<Job>>(
-          // The watchlist really does change here (bookmarking from this very
-          // screen), so key on its contents: re-create the query when the ids
-          // change, and only then.
+          // Bookmarking here changes the watchlist, so re-query when the ids change.
           cacheKey: watchlist.join(','),
           create: () =>
               context.read<JobRepository>().watchSavedJobs(watchlist),

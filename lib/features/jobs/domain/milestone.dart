@@ -1,9 +1,5 @@
-/// Lifecycle of an escrow milestone. A plan starts at `proposed` (the provider
-/// splits the accepted bid) and only becomes fundable once the requestor
-/// approves it, moving every milestone to `pending`. `resolved` is legacy: a
-/// refunded dispute used to land here, but now returns the milestone to
-/// `pending` for rework (see the `resolveDispute`/`isTerminal` Cloud
-/// Functions); it is kept only so pre-existing documents still decode.
+/// Escrow stage lifecycle. New stages start `funded`; `proposed`, `pending` and
+/// `resolved` are legacy values kept so old documents still decode.
 enum MilestoneStatus {
   proposed,
   pending,
@@ -11,44 +7,34 @@ enum MilestoneStatus {
   submitted,
   released,
   disputed,
-  resolved;
+  resolved,
 
-  String get storage => switch (this) {
-    MilestoneStatus.proposed => 'proposed',
-    MilestoneStatus.pending => 'pending',
-    MilestoneStatus.funded => 'funded',
-    MilestoneStatus.submitted => 'submitted',
-    MilestoneStatus.released => 'released',
-    MilestoneStatus.disputed => 'disputed',
-    MilestoneStatus.resolved => 'resolved',
-  };
+  /// Money went back to the client after a dispute ended the job.
+  refunded;
+
+  String get storage => name;
+
+  /// Money has finished moving: paid out, or the legacy `resolved` alias.
+  bool get isTerminal => this == released || this == resolved || this == refunded;
 
   String get label => switch (this) {
-    MilestoneStatus.proposed => 'Awaiting Client Approval',
+    MilestoneStatus.proposed => 'Awaiting client approval',
     MilestoneStatus.pending => 'Not funded yet',
     MilestoneStatus.funded => 'In escrow',
     MilestoneStatus.submitted => 'Delivered, awaiting release',
     MilestoneStatus.released => 'Paid out',
     MilestoneStatus.disputed => 'Disputed, on hold',
     MilestoneStatus.resolved => 'Resolved',
+    MilestoneStatus.refunded => 'Refunded to client',
   };
 
-  static MilestoneStatus fromStorage(String? value) => switch (value) {
-    'proposed' => MilestoneStatus.proposed,
-    'pending' => MilestoneStatus.pending,
-    'funded' => MilestoneStatus.funded,
-    'submitted' => MilestoneStatus.submitted,
-    'released' => MilestoneStatus.released,
-    'disputed' => MilestoneStatus.disputed,
-    'resolved' => MilestoneStatus.resolved,
-    _ => MilestoneStatus.proposed,
-  };
+  static MilestoneStatus fromStorage(String? value) =>
+      values.asNameMap()[value] ?? MilestoneStatus.proposed;
 }
 
-/// One escrow milestone of a job, stored at `jobs/{jobId}/milestones/{id}`.
-/// The accepted provider proposes them; the requestor funds and releases them
-/// (via Cloud Functions - see MilestoneRepository). Framework-agnostic - the
-/// repository handles the Firestore ↔ [Milestone] mapping.
+/// What:   One escrow stage of a job (`jobs/{jobId}/milestones/{id}`).
+/// Input:  Firestore data via FirestoreMilestoneRepository (milestone_repository.dart).
+/// Output: Immutable model; created funded at award, the provider delivers, the requestor releases.
 class Milestone {
   const Milestone({
     required this.id,
@@ -60,27 +46,23 @@ class Milestone {
     this.status = MilestoneStatus.proposed,
     this.submissionNote,
     this.reworkNote,
-    this.reworkCount = 0,
+    this.disputedBy,
     this.createdAt,
   });
 
-  /// The document's id (its path, not a stored field). Empty for a milestone
-  /// that has not been written yet.
+  /// Empty until written.
   final String id;
 
-  /// The parent job's id (the doc's path, not a stored field).
+  /// From the doc path, not a stored field.
   final String jobId;
 
-  /// The accepted provider, denormalised so the Earnings screen can query the
-  /// provider's milestones across jobs with one collection-group query (same
-  /// pattern as a bid's `providerId`).
+  /// Denormalised so Earnings can query a provider's stages across jobs.
   final String providerId;
 
   final String description;
   final int amountSen;
 
-  /// Position in the proposed plan (0-based) - milestones in one plan share a
-  /// server timestamp, so this keeps their order stable.
+  /// 0-based position; stages can share a timestamp, so this keeps order stable.
   final int order;
 
   final MilestoneStatus status;
@@ -88,27 +70,14 @@ class Milestone {
   /// Optional note from the provider, set when they mark it delivered.
   final String? submissionNote;
 
-  /// The admin's ruling note, copied here when a dispute is refunded and this
-  /// milestone is reopened for rework, so the provider sees why.
+  /// Admin note on older refunds that sent the stage back for rework.
   final String? reworkNote;
 
-  /// How many times this milestone has been sent back for rework via a
-  /// refunded dispute. 0 for a milestone that has never been disputed.
-  final int reworkCount;
+  /// Uid of whoever raised the open dispute, so only they can withdraw it.
+  final String? disputedBy;
 
   final DateTime? createdAt;
 
-  /// Fields written to Firestore. `status`/`createdAt` for a new milestone are
-  /// set by the repository, so they are omitted here.
-  Map<String, dynamic> toMap() => {
-    'providerId': providerId,
-    'description': description,
-    'amountSen': amountSen,
-    'order': order,
-  };
-
-  /// Builds a [Milestone] from its job id, doc id and (already
-  /// Timestamp-normalised) data map.
   factory Milestone.fromMap(String jobId, String id, Map<String, dynamic> m) =>
       Milestone(
         id: id,
@@ -120,7 +89,14 @@ class Milestone {
         status: MilestoneStatus.fromStorage(m['status'] as String?),
         submissionNote: m['submissionNote'] as String?,
         reworkNote: m['reworkNote'] as String?,
-        reworkCount: (m['reworkCount'] as num?)?.toInt() ?? 0,
+        disputedBy: m['disputedBy'] as String?,
         createdAt: m['createdAt'] as DateTime?,
       );
 }
+
+/// What:   The stage that is dominant right now (shared by the tracker and the bottom bar).
+/// Input:  A job's [milestones] in order.
+/// Output: The disputed stage if any, else the first non-terminal one, else null.
+Milestone? currentStage(List<Milestone> milestones) =>
+    milestones.where((m) => m.status == MilestoneStatus.disputed).firstOrNull ??
+    milestones.where((m) => !m.status.isTerminal).firstOrNull;

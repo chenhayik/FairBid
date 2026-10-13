@@ -17,9 +17,9 @@ import '../../data/job_repository.dart';
 import '../../domain/job.dart';
 import '../widgets/job_card.dart';
 
-/// Provider-facing browse screen: search + category/radius/budget filters over
-/// the open-jobs stream, with client-side distance from the provider's saved
-/// base location.
+/// What:   Provider browse screen for open jobs.
+/// Input:  Open jobs via JobRepository.watchOpenJobs() (job_repository.dart); base location from the profile.
+/// Output: Job cards filtered by search, category, radius and budget, nearest first, with Load more.
 class JobFeedScreen extends StatefulWidget {
   const JobFeedScreen({super.key});
 
@@ -33,15 +33,10 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   int? _maxBudgetSen; // null = any
   double? _radiusKm; // null = any
 
-  /// Debounces the search field. Every rebuild re-runs the whole filter pass
-  /// (including a haversine per job) and, until the feed's stream is hoisted
-  /// out of build(), also tears down and re-creates the Firestore listener -
-  /// so typing "plumber" cost seven of each.
+  /// Debounces search: each rebuild re-runs the whole filter pass.
   Timer? _searchDebounce;
 
-  /// How many jobs the query currently asks for. Grown by "Load more" rather
-  /// than paged, so the feed remains a single live stream and newly posted
-  /// jobs still appear at the top.
+  /// Jobs the query asks for; "Load more" grows it so the feed stays one live stream.
   int _limit = kOpenJobsPageSize;
 
   @override
@@ -67,15 +62,12 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     await context.read<AuthController>().setBaseLocation(picked);
   }
 
-  /// Applies the category, search, budget and radius filters and sorts by
-  /// distance (nearest first) when a base location is known.
+  /// Applies search, budget and radius, sorting nearest first when a base location is known.
   List<(Job, String?)> _applyFilters(List<Job> jobs, LatLng? base) {
     final query = _search.text.trim().toLowerCase();
     final results = <(Job, double?)>[];
     for (final job in jobs) {
-      // Category is filtered server-side now (see watchOpenJobs), so it is
-      // deliberately absent here. Search, budget and radius still run locally
-      // against the loaded window.
+      // Category is filtered server-side (watchOpenJobs); the rest run on the loaded window.
       if (query.isNotEmpty &&
           !job.title.toLowerCase().contains(query) &&
           !job.description.toLowerCase().contains(query)) {
@@ -112,10 +104,10 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Find Jobs'),
+        title: const Text('Find jobs'),
         actions: [
           IconButton(
-            tooltip: 'Saved Jobs',
+            tooltip: 'Saved jobs',
             icon: const Icon(Icons.bookmark_border),
             onPressed: () => context.push('/jobs/saved'),
           ),
@@ -159,16 +151,12 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
               ),
             Expanded(
               child: KeyedStreamBuilder<List<Job>>(
-                // Re-subscribe only when the query itself changes, i.e. a new
-                // category or a grown window. Typing in search must not.
+                // Resubscribe only on a new category or window, not on search typing.
                 cacheKey: '${_category ?? ''}:$_limit',
                 create: () =>
                     repo.watchOpenJobs(category: _category, limit: _limit),
                 builder: (context, snapshot) {
-                  // hasData rather than the connection state: a resubscribe
-                  // resets to `waiting` while retaining the previous results,
-                  // and blanking the list in that case is what made searching
-                  // and filtering feel broken.
+                  // hasData, not connection state: a resubscribe goes to `waiting` but keeps old results.
                   if (!snapshot.hasData && !snapshot.hasError) {
                     return const Center(child: CircularProgressIndicator());
                   }
@@ -181,13 +169,10 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                   }
                   final loaded = snapshot.data ?? [];
                   final results = _applyFilters(loaded, base);
-                  // A full window means there is very likely more behind it.
+                  // A full window likely has more behind it.
                   final canLoadMore = loaded.length >= _limit;
                   if (results.isEmpty) {
-                    // Search, budget and radius are applied to the loaded
-                    // window only, so "nothing matched" can simply mean the
-                    // matches are further down. Offering the next page here
-                    // keeps that from being a dead end.
+                    // Filters see the loaded window only, so offer the next page.
                     return Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -297,11 +282,11 @@ class _FilterBar extends StatelessWidget {
           const SizedBox(width: 8),
           _FilterChip<int?>(
             label: maxBudgetSen == null
-                ? 'Budget'
+                ? 'Likely price'
                 : '≤ ${formatRm(maxBudgetSen!)}',
             value: maxBudgetSen,
             items: const {
-              'Any budget': null,
+              'Any price': null,
               'Up to RM 100': 10000,
               'Up to RM 500': 50000,
               'Up to RM 1,000': 100000,
@@ -315,9 +300,7 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
-/// Wraps a menu value so a `null` selection (e.g. the "All categories" reset,
-/// whose value is `null`) isn't swallowed by [PopupMenuButton]'s `onCanceled`
-/// path - a non-null wrapper is always distinguishable from a dismissed menu.
+// Wraps a menu value so a null pick ("All categories") isn't mistaken for a dismissed menu.
 class _MenuOption<T> {
   const _MenuOption(this.value);
   final T value;

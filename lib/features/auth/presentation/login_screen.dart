@@ -5,14 +5,14 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/form_widgets.dart';
-import '../data/auth_config.dart';
 import '../domain/user_role.dart';
 import 'auth_controller.dart';
 import 'mfa_code_sheet.dart';
 import 'validators.dart';
 
-/// "Welcome to FairBid" - email/password + Google sign-in, with the
-/// Log In / Sign Up tab strip from the design mock.
+/// What:   Login screen: email/password and Google sign-in.
+/// Input:  [AuthController] (auth_controller.dart).
+/// Output: Form with Log In / Sign Up tabs; prompts for the second factor when required.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -35,7 +35,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     final auth = context.read<AuthController>();
-    // Navigation happens automatically via the router's auth redirect.
     await auth.signInWithEmail(_email.text, _password.text);
     if (!mounted) return;
     await _resolveMfaIfNeeded(auth);
@@ -43,15 +42,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _google() async {
     final auth = context.read<AuthController>();
-    // Existing Google users keep their stored role; roleIfNew only applies to
-    // a first-time Google account.
+    // roleIfNew only applies to a first-time Google account.
     await auth.signInWithGoogle(roleIfNew: UserRole.requestor);
     if (!mounted) return;
     await _resolveMfaIfNeeded(auth);
   }
 
-  /// Prompts for the second factor when Firebase asked for one. Nothing to do
-  /// on success - the router redirect handles it, same as a normal sign-in.
+  /// Prompts for the second factor when Firebase asked for one.
   Future<void> _resolveMfaIfNeeded(AuthController auth) async {
     final challenge = auth.takePendingChallenge();
     if (challenge == null) return;
@@ -97,10 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant)),
                   const SizedBox(height: 24),
-                  _AuthTabs(
-                    loginSelected: true,
-                    onSignUp: () => context.go('/register'),
-                  ),
+                  _AuthTabs(onSignUp: () => context.go('/register')),
                   const SizedBox(height: 24),
                   if (auth.errorMessage != null)
                     ErrorBanner(auth.errorMessage!),
@@ -144,7 +138,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const OrDivider(),
                   GoogleButton(
-                    enabled: !auth.isBusy && isGoogleSignInConfigured,
+                    enabled: !auth.isBusy,
                     onPressed: _google,
                   ),
                   const SizedBox(height: 40),
@@ -165,11 +159,10 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-/// The Log In / Sign Up tab strip at the top of the auth screens.
+/// The Log In / Sign Up tab strip; Log In is always selected.
 class _AuthTabs extends StatelessWidget {
-  const _AuthTabs({required this.loginSelected, required this.onSignUp});
+  const _AuthTabs({required this.onSignUp});
 
-  final bool loginSelected;
   final VoidCallback onSignUp;
 
   @override
@@ -205,8 +198,8 @@ class _AuthTabs extends StatelessWidget {
 
     return Row(
       children: [
-        tab('Log In', loginSelected, null),
-        tab('Sign Up', !loginSelected, onSignUp),
+        tab('Log In', true, null),
+        tab('Sign Up', false, onSignUp),
       ],
     );
   }

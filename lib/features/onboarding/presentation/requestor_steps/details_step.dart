@@ -11,7 +11,9 @@ import '../../../../core/widgets/location_field.dart';
 import '../../../auth/presentation/validators.dart';
 import '../requestor_onboarding_controller.dart';
 
-/// Stage 2 - the requestor's contact details and (for businesses) company info.
+/// What:   Requestor stage 2: contact details, default location and (business) company info.
+/// Input:  [RequestorOnboardingController.data].
+/// Output: Form; Continue validates, writes the data back and saves.
 class DetailsStep extends StatefulWidget {
   const DetailsStep({super.key});
 
@@ -45,8 +47,7 @@ class _DetailsStepState extends State<DetailsStep> {
     super.dispose();
   }
 
-  /// Opens the Penang-scoped picker and stores both the composed label
-  /// ([RequestorOnboardingData.location]) and the structured pick behind it.
+  /// Opens the Penang picker; stores the label and the structured pick.
   Future<void> _pickLocation() async {
     final onboarding = context.read<RequestorOnboardingController>();
     final data = onboarding.data;
@@ -55,13 +56,8 @@ class _DetailsStepState extends State<DetailsStep> {
       initialCenter: data.lat == null || data.lng == null
           ? null
           : LatLng(data.lat!, data.lng!),
-      initialRegion: data.districtCode == null
-          ? null
-          : Region(
-              districtCode: data.districtCode!,
-              districtName: Region.districtNameFor(data.districtCode!),
-              town: data.town,
-            ),
+      initialRegion: Region.fromMap(
+          {'districtCode': data.districtCode, 'town': data.town}),
     );
     if (picked == null) return;
     setState(() {
@@ -116,6 +112,7 @@ class _DetailsStepState extends State<DetailsStep> {
         UploadBox(
           compact: true,
           onTap: onboarding.pickProfilePhoto,
+          busy: onboarding.isUploading('avatar'),
           icon: Icons.add_a_photo_outlined,
           hint: 'JPEG or PNG',
           pickedName: data.profilePhotoUrl == null ? null : 'Photo added',

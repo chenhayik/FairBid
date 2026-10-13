@@ -1,19 +1,16 @@
-/// The entity type encoded in digits 5–6 of a current-format SSM number.
+/// The entity type in digits 5-6 of a current-format SSM number.
 enum SsmEntityType {
-  localCompany('01', 'Local company'),
-  foreignCompany('02', 'Foreign company'),
-  business('03', 'Sole proprietorship / partnership'),
-  localLlp('04', 'Limited liability partnership'),
-  foreignLlp('05', 'Foreign LLP'),
-  professionalLlp('06', 'Professional practice LLP');
+  localCompany('01'),
+  foreignCompany('02'),
+  business('03'),
+  localLlp('04'),
+  foreignLlp('05'),
+  professionalLlp('06');
 
-  const SsmEntityType(this.code, this.label);
+  const SsmEntityType(this.code);
 
   /// The two digits as they appear in the number, e.g. `'03'`.
   final String code;
-
-  /// Human-readable, for the profile and the admin queue.
-  final String label;
 
   static SsmEntityType? fromCode(String code) {
     for (final type in values) {
@@ -33,26 +30,14 @@ enum SsmNumberFormat {
   legacy,
 }
 
-/// A parsed Malaysian SSM registration number.
-///
-/// Both formats are still in circulation and real SSM documents print them
-/// together - a certificate header reads
-/// `REGISTRATION NO. : 201903350205 (003058656-T)` - so [parse] accepts either
-/// form, or both at once.
-///
-/// There is **no check digit**: all twelve positions of the current format are
-/// accounted for by year + type + sequence. The only offline checks possible
-/// are the length, a plausible year and a known type code.
-///
-/// Deliberately *not* validated:
-///  * the legacy trailing letter. It is neither a documented check character
-///    nor a reliable type code - a sole proprietorship draws `-T`/`-V` from the
-///    same alphabet a Sdn Bhd draws `-U`/`-K` from. Store it, never compute it.
-///  * the legacy two-letter state prefix (`SA`, `PG`, `JM`). No authoritative
-///    SSM table exists, so it is display metadata only.
+/// What:   A parsed Malaysian SSM registration number.
+/// Input:  Typed text via [parse] / [validate]; accepts the current format, the legacy one, or both pasted together
+///         (`201903350205 (003058656-T)`).
+/// Output: Normalised key plus year and entity type (current format only).
+/// Notes:  No check digit exists: checks are length, plausible year and known type code. The legacy trailing
+///         letter and state prefix are stored, not validated.
 class SsmNumber {
   const SsmNumber._({
-    required this.raw,
     required this.normalized,
     required this.format,
     this.year,
@@ -60,12 +45,7 @@ class SsmNumber {
     this.legacyNumber,
   });
 
-  /// Exactly what the user typed, trimmed. Show this back to them.
-  final String raw;
-
-  /// Canonical key: uppercased, punctuation stripped, and - when the combined
-  /// form was pasted - the current-format half. Match and de-duplicate on this,
-  /// never on [raw].
+  /// Canonical key (uppercase, no punctuation, current-format half if both were pasted); match on this.
   final String normalized;
 
   final SsmNumberFormat format;
@@ -79,12 +59,10 @@ class SsmNumber {
   /// The legacy number when the combined form was pasted, so it survives.
   final String? legacyNumber;
 
-  /// Returns null when [input] is not a usable SSM number.
   static SsmNumber? parse(String? input) =>
       input == null ? null : _parse(input).$1;
 
-  /// `TextFormField` validator - null when acceptable, else the message to
-  /// show. Mirrors the contract of [Validators].
+  /// `TextFormField` validator: null when acceptable, else the message.
   static String? validate(String? value) {
     final text = value?.trim() ?? '';
     if (text.isEmpty) return 'SSM registration number is required.';
@@ -104,8 +82,7 @@ class SsmNumber {
   static String _strip(String value) =>
       value.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
 
-  /// Returns the parsed number, or the reason it could not be parsed. One pass
-  /// serves both [parse] and [validate] so the two can never disagree.
+  /// Parsed number or the failure reason; shared by [parse] and [validate] so they agree.
   static (SsmNumber?, String?) _parse(String input) {
     final text = input.trim();
 
@@ -127,7 +104,6 @@ class SsmNumber {
       }
       return (
         SsmNumber._(
-          raw: text,
           normalized: normalized,
           format: SsmNumberFormat.current,
           year: year,
@@ -141,7 +117,6 @@ class SsmNumber {
     if (_legacyFormat.hasMatch(normalized)) {
       return (
         SsmNumber._(
-          raw: text,
           normalized: normalized,
           format: SsmNumberFormat.legacy,
         ),

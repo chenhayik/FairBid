@@ -5,16 +5,15 @@ import 'package:provider/provider.dart';
 import '../../../../core/location/region.dart';
 import '../../../../core/location/region_picker_screen.dart';
 import '../../../../core/theme/app_theme.dart';
-import '../../../../core/util/money.dart';
 import '../../../../core/util/service_categories.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/location_field.dart';
 import '../onboarding_controller.dart';
 
-/// Service categories offered on FairBid (Malaysian market).
-
-/// Stage 5 - "Define Your Services": category, coverage area, rate, portfolio.
+/// What:   Provider stage 5: category, coverage area and portfolio images.
+/// Input:  [OnboardingController.data]; the SSM nature of business suggests a category.
+/// Output: Form; Save & Continue writes the fields back and saves.
 class ServiceStep extends StatefulWidget {
   const ServiceStep({super.key});
 
@@ -24,29 +23,18 @@ class ServiceStep extends StatefulWidget {
 
 class _ServiceStepState extends State<ServiceStep> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _rate;
 
   @override
   void initState() {
     super.initState();
     final onboarding = context.read<OnboardingController>();
     final data = onboarding.data;
-    _rate = TextEditingController(text: data.hourlyRate);
-    // Suggested, never imposed: fills only a category the applicant has not
-    // already chosen, and the dropdown stays theirs to change. Null when the
-    // registered trade is not one this app covers, which is the common case.
+    // A suggestion only: never replaces a chosen category.
     data.category ??=
         suggestedCategoryFor(onboarding.ssmExtract?.natureOfBusiness);
   }
 
-  @override
-  void dispose() {
-    _rate.dispose();
-    super.dispose();
-  }
-
-  /// Opens the Penang-scoped picker and stores both the composed label
-  /// ([OnboardingData.coverageArea]) and the structured pick behind it.
+  /// Opens the Penang picker; stores the label and the structured pick.
   Future<void> _pickLocation() async {
     final onboarding = context.read<OnboardingController>();
     final data = onboarding.data;
@@ -55,13 +43,8 @@ class _ServiceStepState extends State<ServiceStep> {
       initialCenter: data.lat == null || data.lng == null
           ? null
           : LatLng(data.lat!, data.lng!),
-      initialRegion: data.districtCode == null
-          ? null
-          : Region(
-              districtCode: data.districtCode!,
-              districtName: Region.districtNameFor(data.districtCode!),
-              town: data.town,
-            ),
+      initialRegion: Region.fromMap(
+          {'districtCode': data.districtCode, 'town': data.town}),
     );
     if (picked == null) return;
     setState(() {
@@ -81,7 +64,6 @@ class _ServiceStepState extends State<ServiceStep> {
           const SnackBar(content: Text('Please pick a coverage area.')));
       return;
     }
-    onboarding.data.hourlyRate = _rate.text.trim();
     onboarding.saveAndContinue();
   }
 
@@ -125,23 +107,6 @@ class _ServiceStepState extends State<ServiceStep> {
                 onTap: _pickLocation,
               ),
               const SizedBox(height: 16),
-              AppTextField(
-                controller: _rate,
-                label: 'Indicative Hourly Rate (RM)',
-                // The prefix shows even on an empty field, so a sample amount
-                // here reads as a pre-filled rate rather than a placeholder.
-                hint: '0.00',
-                prefixText: 'RM ',
-                helperText: 'Optional. Shown on your public profile.',
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                validator: (v) {
-                  if ((v ?? '').trim().isEmpty) return null; // optional
-                  return parseRmToSen(v) == null
-                      ? 'Enter a valid amount.'
-                      : null;
-                },
-              ),
               Row(
                 children: [
                   Text('Portfolio', style: theme.textTheme.labelLarge),
@@ -162,6 +127,7 @@ class _ServiceStepState extends State<ServiceStep> {
               const SizedBox(height: 12),
               UploadBox(
                 onTap: onboarding.pickPortfolioImage,
+                busy: onboarding.isUploading('portfolio'),
                 icon: Icons.add_photo_alternate_outlined,
                 hint: 'PNG, JPG up to 5MB',
               ),

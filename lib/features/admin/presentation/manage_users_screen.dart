@@ -6,11 +6,9 @@ import '../../../core/widgets/app_widgets.dart';
 import '../data/user_admin_repository.dart';
 import '../domain/managed_user.dart';
 
-/// Admin Home › Users tab: search every user and suspend / reinstate them.
-/// Suspension is a soft ban applied by the `setUserSuspended` Cloud Function -
-/// the user keeps their account but is frozen out of all actions and locked to
-/// the "account suspended" screen until reinstated. Admins are never listed
-/// (they can't be suspended). Hosted (Scaffold and all) by AdminHomeScreen.
+/// What:   Admin Users tab: search users, suspend / reinstate them, reset their two-factor.
+/// Input:  Users via UserAdminRepository.watchUsers() (user_admin_repository.dart); admins are hidden.
+/// Output: Filtered list; actions call `setUserSuspended` / `adminClearMfa`. Hosted by AdminHomeScreen.
 class ManageUsersScreen extends StatefulWidget {
   const ManageUsersScreen({super.key});
 
@@ -19,17 +17,14 @@ class ManageUsersScreen extends StatefulWidget {
 }
 
 class _ManageUsersScreenState extends State<ManageUsersScreen> {
-  // Cached so typing in the search box re-filters the loaded list client-side
-  // instead of resubscribing to Firestore on every keystroke.
+  // Created once so typing re-filters client-side without resubscribing.
   late final Stream<List<ManagedUser>> _users =
       context.read<UserAdminRepository>().watchUsers();
 
   String _query = '';
-  String? _busyUid; // the user whose suspend/reinstate call is in flight
+  String? _busyUid; // the user whose action is in flight
 
-  /// Opens the reason sheet; on confirm applies the suspension. The sheet
-  /// returns the reason string (possibly empty) on Suspend, or null when
-  /// cancelled/dismissed - so it owns and disposes its own controller.
+  /// Opens the reason sheet (null result = cancelled), then suspends.
   Future<void> _suspend(ManagedUser user) async {
     final reason = await showModalBottomSheet<String>(
       context: context,
@@ -38,85 +33,74 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
       builder: (_) => _SuspendSheet(userName: user.displayName),
     );
     if (reason == null || !mounted) return;
-    await _apply(user.uid, suspended: true, reason: reason);
+    await _act(
+      user.uid,
+      () => context
+          .read<UserAdminRepository>()
+          .setSuspended(uid: user.uid, suspended: true, reason: reason),
+      done: 'User suspended.',
+      failed: 'Could not update the user. Please try again.',
+    );
   }
 
   Future<void> _reinstate(ManagedUser user) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Reinstate ${user.displayName}?'),
-        content: const Text('They will regain full access to the marketplace.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Reinstate')),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Reinstate ${user.displayName}?',
+      body: 'They will regain full access to the marketplace.',
+      actionLabel: 'Reinstate',
     );
-    if (confirmed != true || !mounted) return;
-    await _apply(user.uid, suspended: false);
+    if (!confirmed || !mounted) return;
+    await _act(
+      user.uid,
+      () => context
+          .read<UserAdminRepository>()
+          .setSuspended(uid: user.uid, suspended: false),
+      done: 'User reinstated.',
+      failed: 'Could not update the user. Please try again.',
+    );
   }
 
-  Future<void> _apply(String uid,
-      {required bool suspended, String? reason}) async {
+  /// Runs [call] with [uid] marked busy, then shows the [done] or [failed] snackbar.
+  Future<void> _act(
+    String uid,
+    Future<void> Function() call, {
+    required String done,
+    required String failed,
+  }) async {
     setState(() => _busyUid = uid);
     try {
-      await context.read<UserAdminRepository>().setSuspended(
-          uid: uid, suspended: suspended, reason: reason);
+      await call();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(suspended ? 'User suspended.' : 'User reinstated.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(done)));
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not update the user. Please try again.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failed)));
     } finally {
       if (mounted) setState(() => _busyUid = null);
     }
   }
 
-  /// Confirms, then clears every second factor from [user] - the recovery
-  /// path for a lost authenticator app.
+  /// Confirms, then clears every second factor (recovery for a lost authenticator app).
   Future<void> _clearMfa(ManagedUser user) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Reset two-factor for ${user.displayName}?'),
-        content: const Text(
-            'This lets them sign in with just their password until they set '
-            'it up again.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Reset')),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Reset two-factor for ${user.displayName}?',
+      body: 'This lets them sign in with just their password until they set '
+          'it up again.',
+      actionLabel: 'Reset',
     );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _busyUid = user.uid);
-    try {
-      await context.read<UserAdminRepository>().clearMfa(user.uid);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Two-factor authentication reset.')));
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not reset it. Please try again.')));
-    } finally {
-      if (mounted) setState(() => _busyUid = null);
-    }
+    if (!confirmed || !mounted) return;
+    await _act(
+      user.uid,
+      () => context.read<UserAdminRepository>().clearMfa(user.uid),
+      done: 'Two-factor authentication reset.',
+      failed: 'Could not reset it. Please try again.',
+    );
   }
 
-  /// Non-admin users matching the search, suspended ones first then by name.
+  /// Non-admin users matching the search; suspended first, then by name.
   List<ManagedUser> _visible(List<ManagedUser> all) {
     final q = _query.trim().toLowerCase();
     final list = [
@@ -214,7 +198,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
   }
 }
 
-/// One user row with a suspend / reinstate action.
+/// One user row with its suspend / reinstate button and more-actions menu.
 class _UserCard extends StatelessWidget {
   const _UserCard({
     required this.user,
@@ -241,8 +225,11 @@ class _UserCard extends StatelessWidget {
           CircleAvatar(
             radius: 24,
             backgroundColor: context.fairbid.subtleBlue,
-            backgroundImage:
-                user.photoUrl != null ? NetworkImage(user.photoUrl!) : null,
+            backgroundImage: user.photoUrl != null
+                ? ResizeImage(NetworkImage(user.photoUrl!),
+                    width: (48 * MediaQuery.devicePixelRatioOf(context))
+                        .round())
+                : null,
             child: user.photoUrl == null
                 ? Icon(
                     isProvider
@@ -310,26 +297,18 @@ class _UserCard extends StatelessWidget {
                 PopupMenuItem(value: 'mfa', child: Text('Reset two-factor')),
               ],
             ),
-            if (user.suspended)
-              OutlinedButton(
-                onPressed: onReinstate,
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(0, 40),
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                ),
-                child: const Text('Reinstate'),
-              )
-            else
-              OutlinedButton(
-                onPressed: onSuspend,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: context.fairbid.danger,
-                  side: BorderSide(color: context.fairbid.danger),
-                  minimumSize: const Size(0, 40),
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                ),
-                child: const Text('Suspend'),
+            OutlinedButton(
+              onPressed: user.suspended ? onReinstate : onSuspend,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: user.suspended ? null : context.fairbid.danger,
+                side: user.suspended
+                    ? null
+                    : BorderSide(color: context.fairbid.danger),
+                minimumSize: const Size(0, 40),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
               ),
+              child: Text(user.suspended ? 'Reinstate' : 'Suspend'),
+            ),
           ],
         ],
       ),
@@ -337,10 +316,8 @@ class _UserCard extends StatelessWidget {
   }
 }
 
-/// The suspend-reason bottom sheet. A StatefulWidget so it owns and disposes
-/// its own TextEditingController (the sheet outlives the caller's await during
-/// the close animation). Pops the trimmed reason (possibly empty) on Suspend,
-/// or null when cancelled/dismissed.
+/// Suspend-reason sheet; pops the trimmed reason on Suspend, null on cancel.
+/// Stateful so it disposes its own controller after the close animation.
 class _SuspendSheet extends StatefulWidget {
   const _SuspendSheet({required this.userName});
 

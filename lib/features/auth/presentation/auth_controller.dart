@@ -9,13 +9,9 @@ import '../domain/app_user.dart';
 import '../domain/mfa.dart';
 import '../domain/user_role.dart';
 
-/// Holds authentication state for the whole app and exposes the sign-in /
-/// register / sign-out actions the screens call. (The "ViewModel" of the auth
-/// feature.)
-///
-/// It is a [ChangeNotifier] so widgets can `watch` it for the busy spinner and
-/// error text, and so go_router can refresh its redirects when the user signs
-/// in or out.
+/// What:   App-wide auth state and the sign-in / register / sign-out actions.
+/// Input:  [AuthRepository.authStateChanges] and its action methods.
+/// Output: Notifies listeners (busy spinner, error text, router redirects) on every change.
 class AuthController extends ChangeNotifier {
   AuthController(this._repository) {
     _subscription = _repository.authStateChanges().listen((user) {
@@ -33,23 +29,17 @@ class AuthController extends ChangeNotifier {
   bool _busy = false;
   String? _errorMessage;
 
-  /// The signed-in user, or `null` when signed out.
   AppUser? get user => _user;
 
-  /// True until the first auth state is known (used to show a splash screen).
+  /// True until the first auth state is known (the splash screen shows).
   bool get isInitializing => _initializing;
 
-  /// True while a sign-in / register / sign-out call is in flight.
   bool get isBusy => _busy;
 
-  /// The last error message, or `null`. Cleared when a new action starts.
+  /// The last error message; cleared when a new action starts.
   String? get errorMessage => _errorMessage;
 
-  bool get isSignedIn => _user != null;
-
-  /// Runs just before sign-out, while the session is still authenticated -
-  /// the app wires this to detach the device's push token so the next account
-  /// on this device can't receive the previous user's notifications.
+  /// Runs just before sign-out while still authenticated; detaches the device's push token.
   Future<void> Function(String uid)? onBeforeSignOut;
 
   Future<bool> signInWithEmail(String email, String password) {
@@ -84,9 +74,8 @@ class AuthController extends ChangeNotifier {
   Future<bool> sendEmailVerification() =>
       _run(() => _repository.sendEmailVerification());
 
-  /// Asks Firebase whether the email is verified yet, then refreshes [user]
-  /// so the banner disappears on its own. Skips [_run] (fires on every app
-  /// resume) and swallows errors (a failure just leaves the banner up).
+  /// Checks whether the email is verified and refreshes [user]. Skips [_run] and
+  /// swallows errors: it fires on every app resume and a failure just keeps the banner.
   Future<bool> refreshEmailVerified() async {
     try {
       final verified = await _repository.reloadUser();
@@ -101,13 +90,10 @@ class AuthController extends ChangeNotifier {
   Future<bool> reauthenticate({String? password}) =>
       _run(() => _repository.reauthenticate(password: password));
 
+  /// Set when a sign-in or re-auth needs a second factor; see [takePendingChallenge].
   MfaChallenge? _pendingChallenge;
 
-  /// Set when a sign-in or re-auth needs a second factor. The screen that
-  /// started it reads this and prompts for the code.
-  MfaChallenge? get pendingMfaChallenge => _pendingChallenge;
-
-  /// Reads and clears the pending challenge, so it is handled exactly once.
+  /// Reads and clears the pending challenge so it is handled once.
   MfaChallenge? takePendingChallenge() {
     final challenge = _pendingChallenge;
     _pendingChallenge = null;
@@ -116,27 +102,23 @@ class AuthController extends ChangeNotifier {
 
   Future<List<MfaFactor>> enrolledFactors() => _repository.enrolledFactors();
 
-  /// Starts TOTP enrolment. Throws [AuthException] on failure so the setup
-  /// sheet can show it inline.
+  /// Starts TOTP enrolment; throws [AuthException] so the setup sheet shows it inline.
   Future<TotpEnrollment> startTotpEnrollment() =>
       _repository.startTotpEnrollment();
 
   Future<bool> completeTotpEnrollment({
     required TotpEnrollment enrollment,
     required String code,
-    String label = 'Authenticator app',
   }) =>
       _run(() => _repository.completeTotpEnrollment(
             enrollment: enrollment,
             code: code,
-            label: label,
           ));
 
   Future<bool> unenrollFactor(String factorUid) =>
       _run(() => _repository.unenrollFactor(factorUid));
 
-  /// Answers an MFA challenge. Returns false with [errorMessage] set on a
-  /// wrong or expired code.
+  /// Answers an MFA challenge; false with [errorMessage] on a wrong or expired code.
   Future<bool> submitMfaCode(MfaChallenge challenge, String code) =>
       _run(() => _repository.resolveMfa(challenge, code));
 
@@ -146,63 +128,56 @@ class AuthController extends ChangeNotifier {
         if (uid != null && hook != null) {
           try {
             await hook(uid);
-          } catch (_) {
-            // Best-effort: a failed token detach must never block sign-out.
-          }
+          } catch (_) {}
         }
         await _repository.signOut();
       });
 
-  /// Permanently deletes the signed-in account. Returns `false` with
-  /// [errorMessage] set (e.g. a wrong/missing password) if it fails.
+  /// Deletes the signed-in account; false with [errorMessage] on failure.
   Future<bool> deleteAccount({String? password}) =>
       _run(() => _repository.deleteAccount(password: password));
 
-  /// Re-reads the profile after something else (e.g. onboarding) changed it,
-  /// so router redirects react to the new state.
+  /// Re-reads the profile so router redirects react to changes made elsewhere.
   Future<void> refreshUser() async {
     _user = await _repository.currentUser();
     notifyListeners();
   }
 
-  /// Saves the provider's "Jobs near you" reference point, then refreshes.
+  /// Saves the provider's "Jobs near you" point, then refreshes.
   Future<void> setBaseLocation(PickedLocation picked) async {
     final uid = _user?.uid;
     if (uid == null) return;
-    await _repository.updateBaseLocation(
-      uid: uid,
-      lat: picked.lat,
-      lng: picked.lng,
-      address: picked.address,
-      districtCode: picked.region.districtCode,
-      town: picked.region.town,
-    );
+    await _repository.updateBaseLocation(uid: uid, picked: picked);
     await refreshUser();
   }
 
-  /// Saves the editable profile fields (Edit Profile screen), then refreshes so
-  /// the profile reflects the new values immediately.
+  /// Saves the Edit Profile fields, then refreshes.
   Future<void> updateProfile({
     required String displayName,
     String? phone,
     String? location,
     String? bio,
+    PickedLocation? picked,
+    String? category,
+    List<String>? skills,
   }) async {
-    final uid = _user?.uid;
-    if (uid == null) return;
+    final user = _user;
+    if (user == null) return;
     await _repository.updateProfile(
-      uid: uid,
+      uid: user.uid,
       displayName: displayName,
       phone: phone,
       location: location,
       bio: bio,
+      isProvider: user.role == UserRole.provider,
+      picked: picked,
+      category: category,
+      skills: skills,
     );
     await refreshUser();
   }
 
-  /// Uploads/saves the signed-in user's avatar (Edit Profile screen's photo
-  /// control), then refreshes so the header/profile reflect the new photo
-  /// immediately. No-ops when signed out.
+  /// Saves the avatar URL, then refreshes. No-op when signed out.
   Future<void> updateProfilePhoto(String photoUrl) async {
     final uid = _user?.uid;
     if (uid == null) return;
@@ -210,9 +185,7 @@ class AuthController extends ChangeNotifier {
     await refreshUser();
   }
 
-  /// Toggles whether [jobId] is on the signed-in user's watchlist (the
-  /// bookmark on a job card), then refreshes so the change reflects
-  /// immediately. No-ops when signed out.
+  /// Toggles [jobId] on the watchlist, then refreshes. No-op when signed out.
   Future<void> toggleSaved(String jobId) async {
     final user = _user;
     if (user == null) return;
@@ -224,15 +197,13 @@ class AuthController extends ChangeNotifier {
     await refreshUser();
   }
 
-  /// Clears the visible error (e.g. when switching screens).
   void clearError() {
     if (_errorMessage == null) return;
     _errorMessage = null;
     notifyListeners();
   }
 
-  /// Runs an auth [action] while managing the busy flag and error message.
-  /// Returns `true` on success so screens can react (e.g. navigate).
+  /// Runs [action] with the busy flag and error message; true on success.
   Future<bool> _run(Future<void> Function() action) async {
     _busy = true;
     _errorMessage = null;

@@ -3,17 +3,16 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/bid.dart';
 
-/// Thrown by [BidRepository.acceptBid] when the job is no longer open or the
-/// bid is no longer pending - e.g. a second accept, or the bid was withdrawn,
-/// raced this one.
+/// What:   Thrown by acceptBid when the job is no longer open or the bid is no longer pending.
+/// Input:  None.
+/// Output: Exception the UI turns into a retry message.
 class BidAcceptRaceException implements Exception {
   const BidAcceptRaceException();
 }
 
-/// Thrown by [BidRepository.acceptBid] when the requestor's available balance
-/// (wallet balance minus what's already locked against other accepted bids)
-/// can't cover this bid's amount - the server-side gate in the `acceptBid`
-/// Cloud Function.
+/// What:   Thrown when a callable refuses because the requestor's available balance can't cover the amount.
+/// Input:  [shortfallSen], [availableSen], [requiredSen] from the server.
+/// Output: Exception the UI turns into a top-up prompt.
 class InsufficientBalanceException implements Exception {
   const InsufficientBalanceException({
     required this.shortfallSen,
@@ -24,55 +23,61 @@ class InsufficientBalanceException implements Exception {
   final int shortfallSen;
   final int availableSen;
   final int requiredSen;
+
+  /// The shortfall in [e]'s `details`, or null if [e] isn't `insufficient_balance`.
+  static InsufficientBalanceException? from(FirebaseFunctionsException e) {
+    final details = e.details;
+    if (details is! Map || details['reason'] != 'insufficient_balance') {
+      return null;
+    }
+    return InsufficientBalanceException(
+      shortfallSen: (details['shortfallSen'] as num).toInt(),
+      availableSen: (details['availableSen'] as num).toInt(),
+      requiredSen: (details['requiredSen'] as num).toInt(),
+    );
+  }
 }
 
-/// Thrown by [BidRepository.withdrawBid] when the bid is no longer pending
-/// - e.g. it was just accepted or rejected by a concurrent [acceptBid].
+/// What:   Thrown by withdrawBid when the bid is no longer pending (just accepted or rejected).
+/// Input:  None.
+/// Output: Exception the UI turns into a refresh message.
 class BidNotPendingException implements Exception {
   const BidNotPendingException();
 }
 
-/// Thrown by [BidRepository.submitBid] when the backend rejects the write
-/// (`permission-denied`). The usual cause is a stale snapshot: the bid carries
-/// the provider's Trust Score as the sheet saw it, and the security rules pin
-/// that to the profile's current value - so if the score was recomputed
-/// server-side after the sheet opened, the write is refused. It can also mean
-/// the job stopped accepting bids. Either way the fix is to reopen the sheet
-/// (which reloads the fresh profile) and submit again, so the sheet's captured
-/// data isn't re-sent unchanged.
+/// What:   Thrown by submitBid on `permission-denied` (stale Trust Score or the job closed).
+/// Input:  None.
+/// Output: Exception; reopening the sheet and resubmitting fixes it.
 class BidRejectedException implements Exception {
   const BidRejectedException();
 }
 
-/// Reads and writes bids. UI/controllers depend on this interface so tests can
-/// use a fake without Firestore.
+/// What:   Per-job bid reads and writes, behind an interface so tests can fake it.
+/// Input:  Firestore `jobs/{jobId}/bids/{uid}` and the `acceptBid` callable, via FirestoreBidRepository.
+/// Output: Bid streams and writes; failures as the exceptions above.
 abstract interface class BidRepository {
-  /// Creates (or re-creates after a withdrawal) the provider's bid on a job
-  /// and increments the job's `bidCount`.
+  /// Creates the provider's bid (or replaces it) and counts it in `bidCount`.
   Future<void> submitBid(Bid bid);
 
-  /// Deletes the provider's bid and decrements the job's `bidCount`.
+  /// Deletes the provider's pending bid and decrements `bidCount`.
   Future<void> withdrawBid(String jobId, String providerId);
 
-  /// Streams all bids on a job (requestor view). Sorting by price or Trust
-  /// Score is done client-side - a job only ever has a handful of bids.
+  /// Streams all bids on a job; sorted client-side.
   Stream<List<Bid>> watchBids(String jobId);
 
-  /// Streams the provider's own bids across all jobs (newest first), for the
-  /// "Pending Bids" list on the provider side.
+  /// Streams the provider's own bids across all jobs, newest first.
   Stream<List<Bid>> watchMyBids(String providerId);
 
-  /// Streams the provider's existing bid on one job, or null - used by the
-  /// job detail to decide between "Submit a bid" and "Withdraw".
+  /// Streams the provider's bid on one job, or null.
   Stream<Bid?> watchMyBid(String jobId, String providerId);
 
-  /// Accepts [bid]: marks it accepted, rejects the job's other pending bids,
-  /// and moves the job to in_progress with the winner fields set.
+  /// Accepts [bid]: rejects the other pending bids and moves the job to in_progress.
   Future<void> acceptBid(Bid bid);
 }
 
-/// Firestore-backed [BidRepository]. Bids live at `jobs/{jobId}/bids/{uid}` -
-/// the provider's uid as the doc id enforces one bid per provider per job.
+/// What:   Firestore and Cloud Functions [BidRepository].
+/// Input:  Firestore `jobs/{id}/bids/{uid}` (the uid doc id gives one bid per provider) and callables.
+/// Output: Bid streams and writes.
 class FirestoreBidRepository implements BidRepository {
   FirestoreBidRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -91,8 +96,7 @@ class FirestoreBidRepository implements BidRepository {
   @override
   Future<void> submitBid(Bid bid) async {
     final bidRef = _bids(bid.jobId).doc(bid.providerId);
-    // A transaction keeps `bidCount` correct: only count a *new* bid, so
-    // re-submitting over an existing bid doesn't double-count.
+    // Transaction: only a new bid raises `bidCount`.
     try {
       await _firestore.runTransaction((tx) async {
         final existing = await tx.get(bidRef);
@@ -106,8 +110,6 @@ class FirestoreBidRepository implements BidRepository {
         }
       });
     } on FirebaseException catch (e) {
-      // Rules rejected the write (most often the Trust Score pin against a
-      // stale snapshot). Surface it as a typed, recoverable case.
       if (e.code == 'permission-denied') throw const BidRejectedException();
       rethrow;
     }
@@ -116,10 +118,7 @@ class FirestoreBidRepository implements BidRepository {
   @override
   Future<void> withdrawBid(String jobId, String providerId) {
     final bidRef = _bids(jobId).doc(providerId);
-    // Only decrement when a bid actually existed, so a double-withdraw can't
-    // push the count below the real number of bids. Refuse to withdraw a bid
-    // that's already been accepted/rejected - deleting it would orphan the
-    // job's winner fields.
+    // Only decrement if the bid existed; refuse once accepted/rejected, or the winner fields orphan.
     return _firestore.runTransaction((tx) async {
       final existing = await tx.get(bidRef);
       if (!existing.exists) return;
@@ -147,7 +146,7 @@ class FirestoreBidRepository implements BidRepository {
         .snapshots()
         .map((snapshot) => [
               for (final doc in snapshot.docs)
-                // A bid's parent's parent is its job document.
+                // parent.parent is the job.
                 _fromDoc(doc.reference.parent.parent!.id, doc),
             ]);
   }
@@ -160,9 +159,7 @@ class FirestoreBidRepository implements BidRepository {
 
   @override
   Future<void> acceptBid(Bid bid) async {
-    // The `acceptBid` Cloud Function does the race-safe transaction (winner →
-    // accepted, other pending bids → rejected, job → in_progress) plus the
-    // wallet-balance gate that a client write can't be trusted to enforce.
+    // The callable does the race-safe transaction and the balance check.
     try {
       await _functions.httpsCallable('acceptBid').call<void>({
         'jobId': bid.jobId,
@@ -170,21 +167,13 @@ class FirestoreBidRepository implements BidRepository {
       });
     } on FirebaseFunctionsException catch (e) {
       if (e.code != 'failed-precondition') rethrow;
-      final details = e.details;
-      if (details is Map && details['reason'] == 'insufficient_balance') {
-        throw InsufficientBalanceException(
-          shortfallSen: (details['shortfallSen'] as num).toInt(),
-          availableSen: (details['availableSen'] as num).toInt(),
-          requiredSen: (details['requiredSen'] as num).toInt(),
-        );
-      }
-      // `reason: 'race'` (job no longer open / bid no longer pending), or any
-      // other failed-precondition - surface as the race case either way.
+      final shortfall = InsufficientBalanceException.from(e);
+      if (shortfall != null) throw shortfall;
+      // reason 'race' or any other failed-precondition: treat as a race.
       throw const BidAcceptRaceException();
     }
   }
 
-  /// Normalises Firestore Timestamps to DateTime before building the [Bid].
   Bid _fromDoc(String jobId, DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});
     data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();

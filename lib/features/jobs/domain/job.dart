@@ -1,6 +1,7 @@
 import '../../../core/util/money.dart';
+import 'appointment.dart';
+import 'price_change_request.dart';
 
-/// Lifecycle of a job.
 enum JobStatus {
   open,
   inProgress,
@@ -16,7 +17,7 @@ enum JobStatus {
 
   String get label => switch (this) {
         JobStatus.open => 'Open',
-        JobStatus.inProgress => 'In Progress',
+        JobStatus.inProgress => 'In progress',
         JobStatus.completed => 'Completed',
         JobStatus.cancelled => 'Cancelled',
       };
@@ -29,11 +30,9 @@ enum JobStatus {
       };
 }
 
-/// A map-picked location: coordinates plus a human-readable label. [address]
-/// is the composed `Region.label` for locations picked with the structured
-/// picker, or a raw legacy string for older jobs that predate it - either way
-/// it's always safe to display as-is. [districtCode]/[districtName]/[town]
-/// are null on that legacy data.
+/// What:   A job's map-picked location.
+/// Input:  Job doc field `location`.
+/// Output: Coordinates and a display [address]; [districtCode]/[districtName]/[town] are null on old jobs.
 class JobLocation {
   const JobLocation({
     required this.lat,
@@ -70,7 +69,9 @@ class JobLocation {
       );
 }
 
-/// Optional budget: a fixed amount, a range, or an hourly rate. All in sen.
+/// What:   Optional budget: a fixed amount, a range or an hourly rate, in sen.
+/// Input:  Job doc field `budget`.
+/// Output: [label] for display.
 class JobBudget {
   const JobBudget({this.minSen, this.maxSen, this.hourly = false});
 
@@ -78,9 +79,7 @@ class JobBudget {
   final int? maxSen;
   final bool hourly;
 
-  bool get isEmpty => minSen == null && maxSen == null;
-
-  /// Display string, e.g. `RM 100 – RM 250` or `RM 50/hr`.
+  /// e.g. `RM 100 – RM 250` or `RM 50/hr`.
   String? get label =>
       formatBudget(minSen: minSen, maxSen: maxSen, hourly: hourly);
 
@@ -94,8 +93,10 @@ class JobBudget {
       );
 }
 
-/// A job posted by a requestor. Framework-agnostic - the repository handles the
-/// Firestore ↔ [Job] mapping (incl. Timestamp conversion).
+/// What:   A job posted by a requestor (one doc in `jobs`).
+/// Input:  Firestore data via JobRepository._fromDoc (job_repository.dart).
+/// Output: Immutable model; toMap() writes only client-owned fields.
+/// Notes:  Server-owned fields are set by Cloud Functions, never written back.
 class Job {
   const Job({
     required this.id,
@@ -116,23 +117,29 @@ class Job {
     this.acceptedProviderId,
     this.acceptedProviderName,
     this.acceptedBidAmountSen,
+    this.originalBidAmountSen,
+    this.priceChangeCount = 0,
+    this.priceChangeRequest,
     this.cancellationRequestedBy,
     this.cancellationReason,
-    this.cancellationRequestedAt,
-    this.cancelledAt,
     this.cancelledBy,
-    this.planRejectionNote,
+    this.bundleId,
+    this.bundleOrder,
+    this.bundleTaskCount,
+    this.releasedAt,
+    this.schedulingRequired = false,
+    this.appointment,
+    this.appointmentProposal,
+    this.onTheWayAt,
+    this.etaMinutes,
+    this.arrivedAt,
   });
 
   final String id;
   final String requestorId;
   final String requestorName;
 
-  /// Snapshot of the requestor's `profilePhotoUrl` at posting time,
-  /// denormalised so providers see a face without loading the requestor's
-  /// profile - mirrors how [requestorName] is already denormalised. Null if
-  /// the requestor had no photo when they posted. A future Cloud Function
-  /// could refresh this snapshot if the requestor later changes their photo.
+  /// The requestor's photo at posting time; null if none.
   final String? requestorPhotoUrl;
   final String title;
   final String description;
@@ -141,42 +148,80 @@ class Job {
   final JobBudget? budget;
   final List<String> photoUrls;
 
-  /// One optional attached video (see `document_storage_repository.dart`'s
-  /// `uploadJobVideo`); null when the requestor didn't add one.
+  /// A video on older jobs; new jobs can't add one. Null if none.
   final String? videoUrl;
   final JobStatus status;
   final int bidCount;
   final DateTime? createdAt;
   final DateTime? deadline;
 
-  /// Winner details, set when the requestor accepts a bid (null while open).
+  /// Winner details; null while open.
   final String? acceptedProviderId;
   final String? acceptedProviderName;
   final int? acceptedBidAmountSen;
 
-  /// Pending mid-flight cancellation request. Either party may request; the
-  /// counterparty accepts to finalise (the `requestJobCancellation` /
-  /// `respondToJobCancellation` Cloud Functions). `'requestor'` or
-  /// `'provider'`; null when no request is outstanding.
+  /// The price first agreed at accept; null on old jobs until it changes.
+  final int? originalBidAmountSen;
+
+  /// Number of accepted price changes (capped server-side).
+  final int priceChangeCount;
+
+  /// Pending mutual price-change proposal, or null.
+  final PriceChangeRequest? priceChangeRequest;
+
+  /// Whether a price change is awaiting the counterparty's decision.
+  bool get hasPendingPriceChange => priceChangeRequest != null;
+
+  /// Pending cancellation request: `'requestor'` or `'provider'`, else null.
+  /// The other party accepts to finish it.
   final String? cancellationRequestedBy;
   final String? cancellationReason;
-  final DateTime? cancellationRequestedAt;
 
-  /// Set when the job is actually cancelled - the audit trail a bare status
-  /// flip never had. `cancelledBy` is a uid, or `'admin'` for an admin
-  /// override.
-  final DateTime? cancelledAt;
+  /// Set when the job is cancelled: a uid, `'admin'`, or `'dispute'`.
   final String? cancelledBy;
 
   /// Whether a mid-flight cancellation is awaiting the counterparty's decision.
   bool get hasPendingCancellation => cancellationRequestedBy != null;
 
-  /// The requestor's note when they sent a proposed milestone plan back for
-  /// changes; null once the provider re-proposes.
-  final String? planRejectionNote;
+  final String? bundleId;
 
-  /// Fields written to Firestore. `createdAt`/`bidCount`/`status` for a new job
-  /// are set by the repository, so they are omitted here.
+  /// Position of the task within its bundle.
+  final int? bundleOrder;
+
+  /// Bundle size, copied onto each task for the feed card.
+  final int? bundleTaskCount;
+
+  /// Set when this task was left unawarded; it then takes ordinary bids.
+  final DateTime? releasedAt;
+
+  /// The provider can't deliver until a visit time is agreed; absent on older jobs.
+  final bool schedulingRequired;
+
+  /// The agreed visit time, or null until both sides confirm one.
+  final Appointment? appointment;
+
+  /// A pending proposal of visit times, or null.
+  final AppointmentProposal? appointmentProposal;
+
+  /// Visit day: when the provider said on the way, their ETA (15/30/45/60) and arrival.
+  final DateTime? onTheWayAt;
+  final int? etaMinutes;
+  final DateTime? arrivedAt;
+
+  /// What:   Whether delivery is waiting on an agreed visit time.
+  /// Input:  [schedulingRequired] and [appointment].
+  /// Output: True until the visit time is confirmed.
+  bool get needsAppointment => schedulingRequired && appointment == null;
+
+  bool get isBundleTask => bundleId != null;
+
+  /// Not yet released from its bundle; award and cancel happen for the whole bundle.
+  bool get isLiveBundleTask => bundleId != null && releasedAt == null;
+
+  /// [isLiveBundleTask] and still open; false once the bundle is awarded.
+  bool get isBiddingAsBundle => isLiveBundleTask && status == JobStatus.open;
+
+  /// Client-owned fields; the repository adds `createdAt`, `bidCount` and `status`.
   Map<String, dynamic> toMap() => {
         'requestorId': requestorId,
         'requestorName': requestorName,
@@ -191,8 +236,6 @@ class Job {
         if (deadline != null) 'deadline': deadline,
       };
 
-  /// Builds a [Job] from a document id and its (already Timestamp-normalised)
-  /// data map.
   factory Job.fromMap(String id, Map<String, dynamic> m) => Job(
         id: id,
         requestorId: m['requestorId'] as String? ?? '',
@@ -215,11 +258,24 @@ class Job {
         acceptedProviderId: m['acceptedProviderId'] as String?,
         acceptedProviderName: m['acceptedProviderName'] as String?,
         acceptedBidAmountSen: (m['acceptedBidAmountSen'] as num?)?.toInt(),
+        originalBidAmountSen: (m['originalBidAmountSen'] as num?)?.toInt(),
+        priceChangeCount: (m['priceChangeCount'] as num?)?.toInt() ?? 0,
+        priceChangeRequest: PriceChangeRequest.fromMap(
+            m['priceChangeRequest'] as Map<String, dynamic>?),
         cancellationRequestedBy: m['cancellationRequestedBy'] as String?,
         cancellationReason: m['cancellationReason'] as String?,
-        cancellationRequestedAt: m['cancellationRequestedAt'] as DateTime?,
-        cancelledAt: m['cancelledAt'] as DateTime?,
         cancelledBy: m['cancelledBy'] as String?,
-        planRejectionNote: m['planRejectionNote'] as String?,
+        bundleId: m['bundleId'] as String?,
+        bundleOrder: (m['bundleOrder'] as num?)?.toInt(),
+        bundleTaskCount: (m['bundleTaskCount'] as num?)?.toInt(),
+        releasedAt: m['releasedAt'] as DateTime?,
+        schedulingRequired: m['schedulingRequired'] as bool? ?? false,
+        appointment:
+            Appointment.fromMap(m['appointment'] as Map<String, dynamic>?),
+        appointmentProposal: AppointmentProposal.fromMap(
+            m['appointmentProposal'] as Map<String, dynamic>?),
+        onTheWayAt: m['onTheWayAt'] as DateTime?,
+        etaMinutes: (m['etaMinutes'] as num?)?.toInt(),
+        arrivedAt: m['arrivedAt'] as DateTime?,
       );
 }

@@ -1,34 +1,32 @@
 import '../../../../core/util/money.dart';
+import '../../../../core/util/plural.dart';
 import '../../../auth/domain/app_user.dart';
 import '../../../auth/domain/user_role.dart';
 import '../../domain/bid.dart';
+import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 
-/// Who is looking at a job detail screen, resolved from the job and the
-/// signed-in user (plus their own bid, when they have one). Drives which
-/// slots the body shows and which single action the bottom bar offers.
+/// What:   The viewer's relationship to a job.
+/// Input:  Resolved by _resolveRole() from the job, signed-in user and own bid.
+/// Output: Decides which sections show and which bar action is offered.
 enum JobViewerRole {
-  /// The requestor who posted the job.
   owner,
 
-  /// The provider whose bid was accepted.
   acceptedProvider,
 
-  /// A provider with a live (pending) bid on a still-open job.
+  /// Has a pending bid on a still-open job.
   bidder,
 
-  /// A provider (or anyone else) looking at a still-open job without a bid
-  /// on it yet.
+  /// Looking at a still-open job without a bid on it.
   browser,
 
-  /// Nobody in particular: a losing bidder once the job has moved on, or a
-  /// stranger to a job that's no longer open. Nothing to do here.
+  /// A losing bidder or stranger once the job is no longer open.
   outsider,
 }
 
-/// The single thing [JobDetailViewModel.primaryAction] does when tapped.
-/// The widget layer owns the actual callback for each kind - this only
-/// names *what* happens, keeping the view model itself widget-free.
+/// What:   Names what the bottom bar's button does.
+/// Input:  Set on [NextAction.kind] by the _for* builders below.
+/// Output: _handleAction() in job_detail_screen.dart maps each kind to a callback.
 enum JobActionKind {
   /// Scrolls to the bid list (owner) or the viewer's own bid (bidder).
   compareBids,
@@ -36,7 +34,7 @@ enum JobActionKind {
   /// Opens the chat thread with the counterparty.
   message,
 
-  /// Scrolls to the leave-a-review prompt.
+  /// Opens the review sheet.
   leaveReview,
 
   /// Opens the submit-a-bid sheet.
@@ -45,118 +43,108 @@ enum JobActionKind {
   /// Deep-links into provider onboarding/verification.
   getVerified,
 
-  /// Scrolls to the viewer's own bid (paired with a secondary Withdraw).
-  yourBid,
+  /// Opens the submit-a-bid sheet prefilled with the viewer's own bid.
+  editBid,
 
-  /// Scrolls to the milestone tracker to propose a plan.
-  proposeMilestones,
-
-  /// Scrolls to the milestone tracker to mark the current milestone
-  /// delivered.
+  /// Marks the current milestone delivered (with confirmation).
   markDelivered,
 
-  /// Scrolls to the milestone tracker to fund the current milestone.
-  fundMilestone,
-
-  /// Scrolls to the milestone tracker to release the current milestone.
+  /// Releases the current milestone (with confirmation).
   releaseMilestone,
 
-  /// Scrolls to the milestone tracker to approve/request changes on a
-  /// proposed plan.
-  reviewPlan,
+  /// Opens the sheet to propose visit times.
+  proposeTime,
+
+  /// Confirms the other party's proposed visit time.
+  confirmTime,
+
+  /// Opens the bundle's award screen, where a still-open live bundle task's
+  /// bids are compared rather than in this job's own (empty) bid list.
+  viewBundle,
 }
 
-/// A role-resolved call to action: a label, what it does ([kind]), an
-/// optional short money/context line shown alongside it, and - for the
-/// bidder's "Your bid RM X" - an optional secondary label (Withdraw).
+/// What:   The bottom bar's call to action.
+/// Input:  Built by the _for* builders below.
+/// Output: Button [label], what it does ([kind]) and an optional [contextLine].
 class NextAction {
   const NextAction({
     required this.label,
     required this.kind,
     this.contextLine,
-    this.secondaryLabel,
   });
 
   final String label;
   final JobActionKind kind;
   final String? contextLine;
-  final String? secondaryLabel;
 }
 
-/// The pure, widget-free result of looking at one job as one viewer: what
-/// role they're in, a one-sentence summary of whose turn it is, the single
-/// action they can take right now (if any), and which body slots apply to
-/// them. Built by [buildJobDetailVm] - see that function for how the
-/// role/status matrix maps onto these fields.
+/// What:   Widget-free view of one job for one viewer.
+/// Input:  Built by buildJobDetailVm() from job, signed-in user, own bid and bundle bid.
+/// Output: Role, headline, the bar's action or waiting line, and which sections show.
 class JobDetailViewModel {
   const JobDetailViewModel({
     required this.role,
     required this.statusHeadline,
     this.primaryAction,
     this.waitingLine,
-    required this.showBids,
-    required this.showMilestones,
-    required this.showAddress,
-    required this.showReviewPrompt,
-    required this.showCancel,
+    this.showBids = false,
+    this.showMilestones = false,
+    this.showAddress = false,
+    this.showReviewPrompt = false,
+    this.showCancel = false,
     this.showCancellationResponse = false,
+    this.showPriceChangeCard = false,
   });
 
   final JobViewerRole role;
 
-  /// One plain-language sentence for the status headline strip: whose turn
-  /// it is, or what just happened.
+  /// One sentence on whose turn it is, or what just happened.
   final String statusHeadline;
 
-  /// The bottom bar's single CTA, or null when the viewer has nothing to do
-  /// (the bar hides) or a muted [waitingLine] should show instead.
+  /// Null hides the bar button (or [waitingLine] shows instead).
   final NextAction? primaryAction;
 
-  /// A muted status line for the bottom bar when it's the other party's
-  /// move - shown instead of [primaryAction], never both.
+  /// Muted bar text when it's the other party's move; never with [primaryAction].
   final String? waitingLine;
 
-  /// Slot 7: the bid list (owner) or the submit/withdraw bid action
-  /// (provider). True exactly while the job is open.
+  /// The bid list (owner) or the submit/withdraw bid action (provider).
   final bool showBids;
 
-  /// Slot 8: the milestone tracker.
+  /// The milestone tracker.
   final bool showMilestones;
 
-  /// Slot 9: the private service address card and the message/chat entry.
+  /// The private service address card and the message entry.
   final bool showAddress;
 
-  /// Slot 10: the leave-a-review prompt.
+  /// The leave-a-review prompt.
   final bool showReviewPrompt;
 
-  /// Whether a cancel-related menu entry belongs in the app bar's overflow
-  /// menu ("Cancel job" while open, "Request cancellation" while in
-  /// progress). The exact label is resolved from [role] and the job's own
-  /// status by the widget layer, which already has both.
+  /// Whether "Cancel job" / "Ask to cancel the job" belongs in the problem sheet.
   final bool showCancel;
 
-  /// Slot 3: a mid-flight cancellation request is outstanding and needs
-  /// this viewer's response.
+  /// A cancellation request is waiting for this viewer's answer.
   final bool showCancellationResponse;
+
+  /// A price change is pending: the responder gets Accept/Decline, the proposer Withdraw.
+  final bool showPriceChangeCard;
 }
 
-/// Builds the [JobDetailViewModel] for [me] looking at [job], with [myBid]
-/// set when they're a provider who has already bid on it. Pure and
-/// widget-free - safe to unit test directly over the role × status matrix
-/// without pumping any widgets.
-JobDetailViewModel buildJobDetailVm(Job job, AppUser? me, Bid? myBid) {
-  switch (_resolveRole(job, me, myBid)) {
-    case JobViewerRole.owner:
-      return _forOwner(job);
-    case JobViewerRole.acceptedProvider:
-      return _forAcceptedProvider(job);
-    case JobViewerRole.bidder:
-      return _forBidder(job, myBid!);
-    case JobViewerRole.browser:
-      return _forBrowser(job, me);
-    case JobViewerRole.outsider:
-      return _forOutsider(job);
-  }
+/// What:   Builds the view model for [me] looking at [job].
+/// Input:  [myBid] if they bid; [myBundleBid] for a live bundle task (which has no per-job bid).
+/// Output: A [JobDetailViewModel]; pure, so tests cover the role x status matrix directly.
+JobDetailViewModel buildJobDetailVm(
+  Job job,
+  AppUser? me,
+  Bid? myBid, {
+  BundleBid? myBundleBid,
+}) {
+  return switch (_resolveRole(job, me, myBid)) {
+    JobViewerRole.owner => _forOwner(job),
+    JobViewerRole.acceptedProvider => _forAcceptedProvider(job),
+    JobViewerRole.bidder => _forBidder(job, myBid!),
+    JobViewerRole.browser => _forBrowser(job, me, myBundleBid),
+    JobViewerRole.outsider => _forOutsider(job),
+  };
 }
 
 JobViewerRole _resolveRole(Job job, AppUser? me, Bid? myBid) {
@@ -185,6 +173,21 @@ JobDetailViewModel _forOwner(Job job) {
   switch (job.status) {
     case JobStatus.open:
       final n = job.bidCount;
+      // bidCount on a live bundle task counts package bids on the whole bundle.
+      if (job.isLiveBundleTask) {
+        return JobDetailViewModel(
+          role: JobViewerRole.owner,
+          statusHeadline: n > 0
+              ? '${plural(n, 'bundle bid')} ${n == 1 ? 'covers' : 'cover'} this task.'
+              : 'Waiting for providers to bid on this bundle.',
+          primaryAction: const NextAction(
+            label: 'View bundle',
+            kind: JobActionKind.viewBundle,
+          ),
+          waitingLine: n > 0 ? null : 'No bids yet. Check back soon.',
+          showCancel: true,
+        );
+      }
       return JobDetailViewModel(
         role: JobViewerRole.owner,
         statusHeadline: n > 0
@@ -192,16 +195,13 @@ JobDetailViewModel _forOwner(Job job) {
             : 'Waiting for providers to bid on this job.',
         primaryAction: n > 0
             ? NextAction(
-                label: 'Compare $n bid${n == 1 ? '' : 's'}',
+                label: n == 1 ? 'View 1 bid' : 'Compare $n bids',
                 kind: JobActionKind.compareBids,
                 contextLine: job.budget?.label ?? job.location.address,
               )
             : null,
         waitingLine: n > 0 ? null : 'No bids yet. Check back soon.',
         showBids: true,
-        showMilestones: false,
-        showAddress: false,
-        showReviewPrompt: false,
         showCancel: true,
       );
     case JobStatus.inProgress:
@@ -210,18 +210,21 @@ JobDetailViewModel _forOwner(Job job) {
         role: JobViewerRole.owner,
         statusHeadline: job.hasPendingCancellation
             ? 'A cancellation request needs your response.'
-            : '$providerName is on the job. Fund and release each '
-                  'milestone as work is approved.',
+            : job.priceChangeRequest?.by == 'provider'
+            ? 'A price change request needs your response.'
+            : job.needsAppointment
+            ? 'Agree a visit time with $providerName.'
+            : '$providerName is on the job. Your payment is secured in '
+                  'escrow; release it once the work is done.',
         primaryAction: const NextAction(
           label: 'Message provider',
           kind: JobActionKind.message,
         ),
-        showBids: false,
         showMilestones: showMilestones,
         showAddress: showAddress,
-        showReviewPrompt: false,
         showCancel: true,
         showCancellationResponse: job.hasPendingCancellation,
+        showPriceChangeCard: job.hasPendingPriceChange,
       );
     case JobStatus.completed:
       final providerName = job.acceptedProviderName ?? 'your provider';
@@ -233,21 +236,18 @@ JobDetailViewModel _forOwner(Job job) {
           kind: JobActionKind.leaveReview,
           contextLine: job.title,
         ),
-        showBids: false,
         showMilestones: showMilestones,
         showAddress: showAddress,
         showReviewPrompt: true,
-        showCancel: false,
       );
     case JobStatus.cancelled:
       return JobDetailViewModel(
         role: JobViewerRole.owner,
-        statusHeadline: 'This job was cancelled.',
-        showBids: false,
-        showMilestones: false,
+        statusHeadline: job.cancelledBy == 'dispute'
+            ? 'This job ended after a dispute. The money held was refunded '
+                  'to you.'
+            : 'This job was cancelled.',
         showAddress: showAddress,
-        showReviewPrompt: false,
-        showCancel: false,
       );
   }
 }
@@ -259,18 +259,21 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
         role: JobViewerRole.acceptedProvider,
         statusHeadline: job.hasPendingCancellation
             ? 'A cancellation request needs your response.'
+            : job.priceChangeRequest?.by == 'requestor'
+            ? 'A price change request needs your response.'
+            : job.needsAppointment
+            ? 'Agree a visit time with ${job.requestorName}.'
             : "You're working on \"${job.title}\" for "
                   '${job.requestorName}.',
         primaryAction: const NextAction(
           label: 'Message client',
           kind: JobActionKind.message,
         ),
-        showBids: false,
         showMilestones: true,
         showAddress: true,
-        showReviewPrompt: false,
         showCancel: true,
         showCancellationResponse: job.hasPendingCancellation,
+        showPriceChangeCard: job.hasPendingPriceChange,
       );
     case JobStatus.completed:
       return JobDetailViewModel(
@@ -282,63 +285,79 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
           kind: JobActionKind.leaveReview,
           contextLine: job.title,
         ),
-        showBids: false,
         showMilestones: true,
         showAddress: true,
         showReviewPrompt: true,
-        showCancel: false,
       );
     case JobStatus.cancelled:
-      return const JobDetailViewModel(
+      return JobDetailViewModel(
         role: JobViewerRole.acceptedProvider,
-        statusHeadline: 'This job was cancelled.',
-        showBids: false,
-        showMilestones: false,
+        statusHeadline: job.cancelledBy == 'dispute'
+            ? 'This job ended after a dispute. An admin refunded the client.'
+            : 'This job was cancelled.',
         showAddress: true,
-        showReviewPrompt: false,
-        showCancel: false,
       );
     case JobStatus.open:
-      // Unreachable in practice - an accepted provider implies the job left
-      // `open` - but every JobStatus needs a branch, so fail safe rather
-      // than throw.
+      // Unreachable (an accepted provider means the job left `open`); needed for exhaustiveness.
       return const JobDetailViewModel(
         role: JobViewerRole.acceptedProvider,
         statusHeadline: 'You are assigned to this job.',
-        showBids: false,
-        showMilestones: false,
         showAddress: true,
-        showReviewPrompt: false,
-        showCancel: false,
       );
   }
 }
 
 JobDetailViewModel _forBidder(Job job, Bid myBid) {
+  final deadlinePassed =
+      job.deadline != null && job.deadline!.isBefore(DateTime.now());
   return JobDetailViewModel(
     role: JobViewerRole.bidder,
     statusHeadline:
         'Your bid of ${formatRm(myBid.amountSen)} is waiting '
         'for ${job.requestorName} to decide.',
-    primaryAction: NextAction(
-      label: 'Your bid ${formatRm(myBid.amountSen)}',
-      kind: JobActionKind.yourBid,
-      contextLine: myBid.estimatedDuration,
-      secondaryLabel: 'Withdraw',
-    ),
+    // No edit once bidding has closed.
+    primaryAction: deadlinePassed
+        ? null
+        : NextAction(
+            label: 'Edit bid',
+            kind: JobActionKind.editBid,
+            contextLine:
+                '${formatRm(myBid.amountSen)} - ${myBid.estimatedDuration}',
+          ),
     showBids: true,
-    showMilestones: false,
-    showAddress: false,
-    showReviewPrompt: false,
-    showCancel: false,
   );
 }
 
-JobDetailViewModel _forBrowser(Job job, AppUser? me) {
+JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
   final isProvider = me?.role == UserRole.provider;
   final verified = me?.verificationStatus == 'approved';
   final deadlinePassed =
       job.deadline != null && job.deadline!.isBefore(DateTime.now());
+
+  // Checked first: a package bid leaves the provider a plain browser here.
+  if (isProvider &&
+      job.isLiveBundleTask &&
+      myBundleBid != null &&
+      myBundleBid.status == BundleBidStatus.pending &&
+      myBundleBid.coversTask(job.id)) {
+    final price = myBundleBid.priceFor(job.id)!;
+    return JobDetailViewModel(
+      role: JobViewerRole.browser,
+      statusHeadline: 'You bid ${formatRm(price)} on this task as part of '
+          'a bundle bid.',
+      primaryAction: const NextAction(
+        label: 'Edit bundle bid',
+        kind: JobActionKind.submitBid,
+      ),
+      // The screen shows a "Your bundle bid" card instead of "Submit a bid".
+    );
+  }
+
+  // A pending bundle bid that misses this task is still edited via the sheet.
+  final editsBundleBid = isProvider &&
+      job.isLiveBundleTask &&
+      myBundleBid != null &&
+      myBundleBid.status == BundleBidStatus.pending;
 
   final String headline;
   NextAction? action;
@@ -353,9 +372,16 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me) {
   } else if (deadlinePassed) {
     headline = "This job's bidding window has ended.";
   } else {
-    headline = 'Review the job, then submit your bid.';
+    headline = editsBundleBid
+        ? "Your bundle bid doesn't include this task yet. "
+            'Edit it to add this task.'
+        : 'Review the job, then submit your bid.';
     action = NextAction(
-      label: 'Submit a bid',
+      label: editsBundleBid
+          ? 'Edit bundle bid'
+          : job.isLiveBundleTask
+              ? 'Bid on this bundle'
+              : 'Submit a bid',
       kind: JobActionKind.submitBid,
       contextLine: job.budget?.label ?? job.location.address,
     );
@@ -366,10 +392,6 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me) {
     statusHeadline: headline,
     primaryAction: action,
     showBids: true,
-    showMilestones: false,
-    showAddress: false,
-    showReviewPrompt: false,
-    showCancel: false,
   );
 }
 
@@ -379,10 +401,5 @@ JobDetailViewModel _forOutsider(Job job) {
     statusHeadline: job.status == JobStatus.cancelled
         ? 'This job was cancelled.'
         : 'This job is no longer open for bids.',
-    showBids: false,
-    showMilestones: false,
-    showAddress: false,
-    showReviewPrompt: false,
-    showCancel: false,
   );
 }

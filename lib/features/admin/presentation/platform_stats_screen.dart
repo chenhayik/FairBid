@@ -6,8 +6,9 @@ import '../../../core/widgets/app_widgets.dart';
 import '../data/stats_repository.dart';
 import '../domain/platform_stats.dart';
 
-/// Admin Home › Stats tab: the marketplace's headline numbers, loaded once
-/// via aggregation queries with pull-to-refresh.
+/// What:   Admin Stats tab with the marketplace's main numbers.
+/// Input:  PlatformStats via StatsRepository.load() (stats_repository.dart), loaded once.
+/// Output: Stat cards; pull to refresh; button to recompute Trust Scores.
 class PlatformStatsScreen extends StatefulWidget {
   const PlatformStatsScreen({super.key});
 
@@ -31,8 +32,6 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
     await fresh;
   }
 
-  /// Runs the idempotent server-side Trust Score backfill/repair (recounts
-  /// completed jobs and lost disputes for every user).
   Future<void> _recomputeTrust() async {
     setState(() => _recomputing = true);
     try {
@@ -60,11 +59,11 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
         builder: (context, snapshot) {
           final stats = snapshot.data;
           return ListView(
-            // Always scrollable so pull-to-refresh works even when short.
+            // Always scrollable so pull-to-refresh works on short pages.
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(24),
             children: [
-              Text('Platform Statistics',
+              Text('Platform statistics',
                   style: theme.textTheme.headlineMedium),
               const SizedBox(height: 4),
               Text('A live snapshot of the marketplace. Pull to refresh.',
@@ -86,12 +85,42 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
                 )
               else ...[
                 StatCard(
-                  label: 'Released Volume',
+                  label: 'Released volume',
                   value: formatRm(stats.releasedVolumeSen),
                   icon: Icons.payments_outlined,
                 ),
                 const SizedBox(height: 12),
-                _StatGrid(stats: stats),
+                _CardGrid(cells: [
+                  ('Clients', formatCount(stats.requestors),
+                      Icons.person_outline),
+                  ('Providers', formatCount(stats.providers),
+                      Icons.handyman_outlined),
+                  ('Open jobs', formatCount(stats.openJobs),
+                      Icons.work_outline),
+                  ('In progress', formatCount(stats.inProgressJobs),
+                      Icons.timelapse_outlined),
+                  ('Completed', formatCount(stats.completedJobs),
+                      Icons.task_alt_outlined),
+                  ('Pending checks', formatCount(stats.pendingVerifications),
+                      Icons.verified_user_outlined),
+                  ('Open disputes', formatCount(stats.openDisputes),
+                      Icons.gavel_rounded),
+                  ('Total users', formatCount(stats.totalUsers),
+                      Icons.groups_outlined),
+                ]),
+                const SizedBox(height: 24),
+                Text('Bundles', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 12),
+                _CardGrid(cells: [
+                  ('Bundles awarded', formatCount(stats.bundlesAwarded),
+                      Icons.inventory_2_outlined),
+                  (
+                    'Split awards',
+                    '${formatCount(stats.splitAwards)} '
+                        '(${(stats.splitAwardRate * 100).toStringAsFixed(0)}%)',
+                    Icons.call_split
+                  ),
+                ]),
                 const SizedBox(height: 24),
                 SecondaryButton(
                   label: _recomputing
@@ -108,39 +137,39 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
   }
 }
 
-/// Two-column grid of the count metrics.
-class _StatGrid extends StatelessWidget {
-  const _StatGrid({required this.stats});
+/// Two stat cards per row, equal height.
+class _CardGrid extends StatelessWidget {
+  const _CardGrid({required this.cells});
 
-  final PlatformStats stats;
+  final List<(String, String, IconData)> cells;
+
+  static const _columns = 2;
+  static const _spacing = 12.0;
 
   @override
   Widget build(BuildContext context) {
-    final cells = <(String, String, IconData)>[
-      ('Clients', '${stats.requestors}', Icons.person_outline),
-      ('Providers', '${stats.providers}', Icons.handyman_outlined),
-      ('Open Jobs', '${stats.openJobs}', Icons.work_outline),
-      ('In Progress', '${stats.inProgressJobs}', Icons.timelapse_outlined),
-      ('Completed', '${stats.completedJobs}', Icons.task_alt_outlined),
-      (
-        'Pending Checks',
-        '${stats.pendingVerifications}',
-        Icons.verified_user_outlined
-      ),
-      ('Open Disputes', '${stats.openDisputes}', Icons.gavel_rounded),
-      ('Total Users', '${stats.totalUsers}', Icons.groups_outlined),
-    ];
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.9,
-      children: [
-        for (final (label, value, icon) in cells)
-          StatCard(label: label, value: value, icon: icon),
-      ],
-    );
+    final rows = <Widget>[];
+    for (var i = 0; i < cells.length; i += _columns) {
+      final rowCells = cells.skip(i).take(_columns).toList();
+      if (i > 0) rows.add(const SizedBox(height: _spacing));
+      rows.add(
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (j, (label, value, icon)) in rowCells.indexed) ...[
+                if (j > 0) const SizedBox(width: _spacing),
+                Expanded(
+                  child: StatCard(label: label, value: value, icon: icon),
+                ),
+              ],
+              // A lone last card keeps its normal width.
+              if (rowCells.length < _columns) const Spacer(),
+            ],
+          ),
+        ),
+      );
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows);
   }
 }

@@ -30,7 +30,7 @@ env:
   NODE_VERSION: "22"
   # android/app/build.gradle.kts targets JavaVersion.VERSION_17, and the
   # Firestore emulator needs a JDK too.
-  JAVA_VERSION: "17"
+  JAVA_VERSION: "21"
 
 jobs:
   analyze-and-test:
@@ -85,12 +85,13 @@ jobs:
         working-directory: firestore-tests
         run: npm ci
 
-      # emulators:exec reads ../firebase.json for the port, starts the
-      # emulator, runs mocha against it, and tears it down. firebase-tools is
-      # pinned to a major so an upstream release cannot break CI silently.
+      # emulators:exec reads ../firebase.json for the ports, starts the
+      # emulators (storage.rules.test.js needs Storage as well as Firestore),
+      # runs mocha against them, and tears them down. firebase-tools is pinned
+      # to a major so an upstream release cannot break CI silently.
       - name: Run rules suite against the emulator
         working-directory: firestore-tests
-        run: npx --yes firebase-tools@15 emulators:exec --only firestore "npm test"
+        run: npx --yes firebase-tools@15 emulators:exec --only firestore,storage "npm test"
 
   functions:
     name: Lint and test (Cloud Functions)
@@ -115,10 +116,10 @@ jobs:
         working-directory: functions
         run: npm run lint
 
-      # Guards the scoring maths in functions/trust.js against the Dart mirror
-      # in PlatformConfig, pinned by test/fixtures/trust_vectors.json. These
-      # two implementations must never drift.
-      - name: Check trust vectors
+      # Runs the trust-vector parity check (functions/trust.js against the Dart
+      # mirror in PlatformConfig, pinned by test/fixtures/trust_vectors.json)
+      # and the node:test unit tests.
+      - name: Test functions
         working-directory: functions
         run: npm test
 
@@ -148,9 +149,14 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost
           df -h
 
-
       # Debug, not release: signing keystores are deliberately gitignored, so
       # a release build cannot work here without secrets. Debug still exercises
-      # Gradle, AGP, the NDK and plugin registration.
+      # Gradle, AGP, the NDK and plugin registration. One ABI only: a debug
+      # build otherwise packages native libraries for three, which is slower
+      # and uses more of the runner's limited disk for no extra coverage.
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Disk space after build
+        if: always()
+        run: df -h /

@@ -3,17 +3,20 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/util/mykad_number.dart';
 import '../../../../core/util/ssm_number.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../../../core/widgets/form_widgets.dart';
 import '../../../../core/widgets/image_source_sheet.dart';
 import '../../../auth/presentation/validators.dart';
+import '../../domain/id_extract.dart';
 import '../../domain/onboarding_data.dart';
 import '../../domain/ssm_extract.dart';
 import '../onboarding_controller.dart';
 
-/// Stage 3 - "Verify your identity": ID and selfie uploads, plus - for a
-/// registered business - the SSM registration number and its document.
+/// What:   Provider stage 3: consent, ID and selfie uploads, plus SSM details for businesses.
+/// Input:  [OnboardingController] (data, uploads, ID/SSM extracts).
+/// Output: Form; Continue is enabled once the "Still needed" list is empty.
 class IdentityStep extends StatefulWidget {
   const IdentityStep({super.key});
 
@@ -24,11 +27,14 @@ class IdentityStep extends StatefulWidget {
 class _IdentityStepState extends State<IdentityStep> {
   late final TextEditingController _businessName;
   late final TextEditingController _ssmNumber;
+  late final TextEditingController _icNumber;
 
   @override
   void initState() {
     super.initState();
     final data = context.read<OnboardingController>().data;
+    _icNumber = TextEditingController(text: data.icNumber)
+      ..addListener(_writeThrough);
     _businessName = TextEditingController(text: data.businessName)
       ..addListener(_writeThrough);
     _ssmNumber = TextEditingController(text: data.ssmNumber)
@@ -39,20 +45,36 @@ class _IdentityStepState extends State<IdentityStep> {
   void dispose() {
     _businessName.dispose();
     _ssmNumber.dispose();
+    _icNumber.dispose();
     super.dispose();
   }
 
-  /// Mirrors both fields into the controller on every keystroke, so the
-  /// Continue gate always reflects what is on screen and nothing is lost when
-  /// the stage rebuilds.
+  /// Friendly text for the first issue, shown once 12+ digits are typed.
+  static String? _icError(String? value) {
+    final text = value ?? '';
+    final issues = MyKadNumber.issues(text);
+    if (issues.isEmpty || text.replaceAll(RegExp(r'\D'), '').length < 12) {
+      return null;
+    }
+    return switch (issues.first) {
+      'wrong-length' => 'A MyKad number has exactly 12 digits.',
+      'invalid-date' => 'The birth date in this number is not a real date.',
+      'invalid-pb-code' => 'The place-of-birth code in this number is invalid.',
+      'underage' => 'You must be 18 or older to offer services.',
+      _ => 'Enter a valid MyKad number.',
+    };
+  }
+
+  /// Mirrors the fields into the controller on every keystroke so Continue matches the screen.
   void _writeThrough() {
     final onboarding = context.read<OnboardingController>();
     onboarding.data.businessName = _businessName.text.trim();
     onboarding.setSsmNumber(_ssmNumber.text);
+    onboarding.setIcNumber(_icNumber.text);
     setState(() {});
   }
 
-  /// Lets the user pick camera or gallery, then runs [upload] with the choice.
+  /// Asks for camera or gallery, then runs [upload].
   Future<void> _chooseAndUpload(
     BuildContext context,
     String title,
@@ -62,8 +84,7 @@ class _IdentityStepState extends State<IdentityStep> {
     if (source != null) await upload(source);
   }
 
-  /// Copies the server's proposals into the fields. Only ever reached through
-  /// the explicit "Use these details" button.
+  /// Copies the server's proposals into the fields ("Use these details").
   void _useExtract() {
     final onboarding = context.read<OnboardingController>()..applySsmExtract();
     _businessName.text = onboarding.data.businessName;
@@ -77,15 +98,19 @@ class _IdentityStepState extends State<IdentityStep> {
     final data = onboarding.data;
     final isBusiness = data.providerType == ProviderType.business;
 
-    // Everything still standing between the applicant and Continue, phrased
-    // for display. Deriving the button's state FROM this list - rather than
-    // computing the two separately - is what stops the hint ever disagreeing
-    // with the button.
-    //
-    // The server's verdict is deliberately not in here: being held up by a
-    // failed automated check on a genuine document is worse than letting an
-    // admin look at it, which is what the review queue is for.
+    // What still blocks Continue; the button derives from it so the hint can't disagree.
+    // The server verdict is excluded on purpose: an admin reviews failures.
+    final isMyKad = data.idDocumentType == IdDocumentType.mykad;
+    final icValid = MyKadNumber.parse(data.icNumber) != null;
+    final consented = data.idConsentAt != null;
+    final idLocked = (isMyKad && !icValid) || !consented;
+    final idBusy = onboarding.isUploading('id_document');
+    final selfieBusy = onboarding.isUploading('selfie');
+    final busyLabel =
+        onboarding.checkingFace ? 'Checking photo…' : 'Uploading…';
     final missing = <String>[
+      if (!consented) 'your consent to identity checks',
+      if (isMyKad && !icValid) 'a valid MyKad number',
       if (data.idDocumentUrl == null) 'a photo of your ID',
       if (data.selfieUrl == null) 'a selfie holding your ID',
       if (isBusiness) ...[
@@ -121,25 +146,88 @@ class _IdentityStepState extends State<IdentityStep> {
           ErrorBanner(onboarding.errorMessage!),
         Text('Upload Documents', style: theme.textTheme.labelLarge),
         const SizedBox(height: 12),
-        Text('Front of ID (MyKad or Passport)',
+        // PDPA: face images are sensitive data, so nothing uploads before this.
+        CheckboxListTile(
+          value: consented,
+          onChanged: (v) => onboarding.setIdConsent(v ?? false),
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text(
+              'I agree to FairBid processing my ID and face photos to verify '
+              'my identity. Photos are deleted once our team has reviewed '
+              'them; only a masked IC number and the check result are '
+              'kept.'),
+        ),
+        const SizedBox(height: 8),
+        SegmentedButton<IdDocumentType>(
+          segments: const [
+            ButtonSegment(value: IdDocumentType.mykad, label: Text('MyKad')),
+            ButtonSegment(
+                value: IdDocumentType.passport, label: Text('Passport')),
+          ],
+          selected: {data.idDocumentType},
+          onSelectionChanged: (s) => onboarding.setIdDocumentType(s.first),
+        ),
+        const SizedBox(height: 16),
+        if (isMyKad)
+          AppTextField(
+            controller: _icNumber,
+            label: 'MyKad Number',
+            hint: 'e.g. 900101-07-1234',
+            prefixIcon: Icons.badge_outlined,
+            keyboardType: TextInputType.number,
+            helperText: 'Type it before uploading the photo.',
+            validator: _icError,
+          ),
+        Text(isMyKad ? 'Front of MyKad' : 'Passport photo page',
             style: theme.textTheme.bodyMedium),
         const SizedBox(height: 8),
-        UploadBox(
-          onTap: () => _chooseAndUpload(
-              context, 'Add your ID', onboarding.pickIdDocument),
-          icon: Icons.badge_outlined,
-          hint: 'Take a photo or choose one\nJPEG, PNG up to 10MB',
-          pickedName: data.idDocumentUrl == null ? null : 'Document uploaded',
+        // Locked until consent is given and the number is valid (the photo is checked against it).
+        IgnorePointer(
+          ignoring: idLocked,
+          child: Opacity(
+            // Not greyed while uploading, so the spinner reads as progress.
+            opacity: idLocked && !idBusy ? 0.5 : 1,
+            child: UploadBox(
+              onTap: () => _chooseAndUpload(
+                  context, 'Add your ID', onboarding.pickIdDocument),
+              busy: idBusy,
+              busyLabel: busyLabel,
+              icon: Icons.badge_outlined,
+              hint: 'Take a photo or choose one\nJPEG, PNG up to 10MB',
+              pickedName:
+                  data.idDocumentUrl == null ? null : 'Document uploaded',
+            ),
+          ),
         ),
+        // Advisory only; not part of `missing`.
+        if (isMyKad && data.idDocumentUrl != null && !idBusy) ...[
+          const SizedBox(height: 12),
+          if (onboarding.idExtract == null)
+            _CheckingCard(
+                timedOut: onboarding.idCheckTimedOut,
+                message: 'Checking your card - you can carry on filling in '
+                    'the form.')
+          else
+            _IdResultCard(extract: onboarding.idExtract!),
+        ],
         const SizedBox(height: 16),
         Text('Selfie holding your ID', style: theme.textTheme.bodyMedium),
         const SizedBox(height: 8),
-        UploadBox(
-          onTap: () =>
-              _chooseAndUpload(context, 'Add your selfie', onboarding.pickSelfie),
-          icon: Icons.portrait_outlined,
-          hint: 'Take a photo or choose one\nMake sure face and ID are clear',
-          pickedName: data.selfieUrl == null ? null : 'Photo uploaded',
+        IgnorePointer(
+          ignoring: !consented,
+          child: Opacity(
+            opacity: consented || selfieBusy ? 1 : 0.5,
+            child: UploadBox(
+              onTap: () => _chooseAndUpload(
+                  context, 'Add your selfie', onboarding.pickSelfie),
+              busy: selfieBusy,
+              busyLabel: busyLabel,
+              icon: Icons.portrait_outlined,
+              hint: 'Take a photo or choose one\nMake sure face and ID are clear',
+              pickedName: data.selfieUrl == null ? null : 'Photo uploaded',
+            ),
+          ),
         ),
         if (isBusiness) ...[
           const SizedBox(height: 24),
@@ -152,10 +240,7 @@ class _IdentityStepState extends State<IdentityStep> {
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
-          // The fields come BEFORE the upload deliberately. The extract trigger
-          // fires the moment the bytes land and cross-checks the document
-          // against the number already on record, so the natural order has to
-          // put the number in first for that check to have anything to compare.
+          // Fields come before the upload: the server cross-checks the number already on record.
           AppTextField(
             controller: _businessName,
             label: 'Registered Business Name',
@@ -180,10 +265,7 @@ class _IdentityStepState extends State<IdentityStep> {
             pickedName:
                 data.ssmDocumentUrl == null ? null : 'SSM document added',
           ),
-          // Three states, not two. The upload box covers "sending"; this
-          // covers the gap between the bytes landing and the server reporting
-          // back, which is otherwise blank - and on a re-upload would show the
-          // previous card vanishing, reading as a failure rather than progress.
+          // Covers the gap between the upload landing and the server reporting back.
           if (data.ssmDocumentUrl != null && !onboarding.isSsmUploading) ...[
             const SizedBox(height: 12),
             if (onboarding.ssmExtract == null)
@@ -195,10 +277,7 @@ class _IdentityStepState extends State<IdentityStep> {
                 onUse: _useExtract,
               ),
           ],
-          // Optional, and deliberately so. A Certificate proves the business
-          // exists; only the Profile ties it to a person. Requiring it would
-          // mean every provider buying a document that carries their NRIC,
-          // date of birth and home address - excessive for verifying a trade.
+          // Optional: the Profile carries the owner's NRIC and address, too much to require.
           const SizedBox(height: 20),
           Text('Confirm you are the owner (optional)',
               style: theme.textTheme.labelLarge),
@@ -280,14 +359,36 @@ class _IdentityStepState extends State<IdentityStep> {
   }
 }
 
-/// Shown while the document is up but the server has not reported back yet.
-/// Says explicitly that the wait is not blocking, because it is not: the
-/// Continue gate never waits on the verdict.
-class _CheckingCard extends StatelessWidget {
-  const _CheckingCard({required this.timedOut});
+/// Check icon or info icon with a title, for the verdict cards.
+Widget _verdictHeader(
+    BuildContext context, bool passed, String passedText, String reviewText) {
+  return Row(
+    children: [
+      Icon(passed ? Icons.check_circle_outline : Icons.info_outline,
+          size: 18,
+          color: passed
+              ? context.fairbid.successText
+              : context.fairbid.warningText),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(passed ? passedText : reviewText,
+            style: Theme.of(context).textTheme.labelLarge),
+      ),
+    ],
+  );
+}
 
-  /// Set once the wait has run long enough that a spinner would be a lie -
-  /// a cold-started or crashed function must not leave one turning forever.
+/// Progress card shown until the server reports; never blocks Continue.
+class _CheckingCard extends StatelessWidget {
+  const _CheckingCard({
+    required this.timedOut,
+    this.message = 'Checking your document - you can carry on filling in the '
+        'form.',
+  });
+
+  final String message;
+
+  /// Swaps the spinner for a message so a stuck function can't spin forever.
   final bool timedOut;
 
   @override
@@ -312,8 +413,7 @@ class _CheckingCard extends StatelessWidget {
               timedOut
                   ? 'We will finish checking this in the background. Our team '
                       'reviews it before your account is approved.'
-                  : 'Checking your document - you can carry on filling in the '
-                      'form.',
+                  : message,
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -324,9 +424,7 @@ class _CheckingCard extends StatelessWidget {
   }
 }
 
-/// Shows what the server read out of the uploaded document, and why it is or
-/// is not satisfied. Nothing here reaches the profile until the applicant taps
-/// "Use these details".
+/// What the server read from the SSM document and why it is or isn't satisfied; applied only via [onUse].
 class _ExtractCard extends StatelessWidget {
   const _ExtractCard({
     required this.extract,
@@ -336,9 +434,7 @@ class _ExtractCard extends StatelessWidget {
 
   final SsmExtract extract;
 
-  /// What the applicant typed, compared here as well as on the server. The
-  /// server can only cross-check a number already saved when the upload landed;
-  /// this covers the applicant who uploads first and types afterwards.
+  /// The typed number, compared here too to cover applicants who type after uploading.
   final String typedNumber;
   final VoidCallback onUse;
 
@@ -353,22 +449,8 @@ class _ExtractCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(passed ? Icons.check_circle_outline : Icons.info_outline,
-                  size: 18,
-                  color: passed
-                      ? context.fairbid.successText
-                      : context.fairbid.warningText),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  passed ? 'Document checks passed' : 'We need a closer look',
-                  style: theme.textTheme.labelLarge,
-                ),
-              ),
-            ],
-          ),
+          _verdictHeader(
+              context, passed, 'Document checks passed', 'We need a closer look'),
           if (extract.hasProposals) ...[
             const SizedBox(height: 8),
             Text('We read:',
@@ -401,6 +483,45 @@ class _ExtractCard extends StatelessWidget {
           if (extract.hasProposals) ...[
             const SizedBox(height: 12),
             SecondaryButton(label: 'Use these details', onPressed: onUse),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Advisory result of the automated MyKad check; an admin decides.
+class _IdResultCard extends StatelessWidget {
+  const _IdResultCard({required this.extract});
+
+  final IdExtract extract;
+
+  static const _retake = {'ic-mismatch', 'no-ic-found'};
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final passed = extract.verdict == IdVerdict.passed;
+    final muted = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _verdictHeader(
+              context, passed, 'Card details look good', 'We need a closer look'),
+          if (!passed) ...[
+            for (final f in extract.failures) ...[
+              const SizedBox(height: 6),
+              Text(idFailureLabel(f), style: muted),
+            ],
+            if (extract.failures.any(_retake.contains)) ...[
+              const SizedBox(height: 6),
+              Text('Try retaking a clear, well-lit photo of the front.',
+                  style: muted),
+            ],
+            const SizedBox(height: 6),
+            Text('An admin will review your documents.', style: muted),
           ],
         ],
       ),

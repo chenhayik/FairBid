@@ -1,5 +1,8 @@
-/// A compact relative-time label, e.g. `just now`, `5m ago`, `2h ago`,
-/// `3d ago`, `2w ago`. Returns an empty string for null.
+import 'plural.dart';
+
+/// What:   Compact relative-time label.
+/// Input:  A DateTime (null gives an empty string).
+/// Output: `just now`, `5m ago`, `2h ago`, `3d ago` or `2w ago`.
 String timeAgo(DateTime? time) {
   if (time == null) return '';
   final d = DateTime.now().difference(time);
@@ -10,19 +13,16 @@ String timeAgo(DateTime? time) {
   return '${(d.inDays / 7).floor()}w ago';
 }
 
-/// A short label for a job's bidding [deadline], e.g. `Closes in 3 days` /
-/// `Closes in 5 hours` / `Closing soon` (under an hour left) / `Bidding
-/// closed` (already past). Returns an empty string for null. [now] lets
-/// callers (tests) pin the clock; defaults to the real current time.
+/// What:   Label for a job's bidding [deadline].
+/// Input:  The deadline (null gives an empty string); [now] pins the clock in tests.
+/// Output: `Closes in 3 days`, `Closes in 5 hours`, `Closing soon` (under an hour) or `Bidding closed`.
 String deadlineLabel(DateTime? deadline, {DateTime? now}) {
   if (deadline == null) return '';
   final remaining = deadline.difference(now ?? DateTime.now());
   if (remaining.isNegative) return 'Bidding closed';
   if (remaining.inHours < 1) return 'Closing soon';
   if (remaining.inHours < 24) {
-    final hours = remaining.inHours;
-    return 'Closes in $hours hour${hours == 1 ? '' : 's'}';
+    return 'Closes in ${plural(remaining.inHours, 'hour')}';
   }
-  final days = remaining.inDays;
-  return 'Closes in $days day${days == 1 ? '' : 's'}';
+  return 'Closes in ${plural(remaining.inDays, 'day')}';
 }

@@ -10,10 +10,9 @@ import '../domain/mfa.dart';
 import 'auth_controller.dart';
 import 'reauth_dialog.dart';
 
-/// Profile → Security: turn two-factor authentication on or off.
-///
-/// The whole enrolment runs on this screen because Firebase's TOTP secret
-/// lives only in memory - leaving and coming back means starting over.
+/// What:   Profile > Security screen to turn two-factor authentication on or off.
+/// Input:  [AuthController] (enrolled factors, TOTP enrolment, unenrol).
+/// Output: Status or setup card; enrolment runs here because the TOTP secret lives in memory only.
 class SecurityScreen extends StatefulWidget {
   const SecurityScreen({super.key});
 
@@ -24,7 +23,7 @@ class SecurityScreen extends StatefulWidget {
 class _SecurityScreenState extends State<SecurityScreen> {
   late Future<List<MfaFactor>> _factors;
 
-  /// Non-null while the user is part-way through setting up 2FA.
+  /// Non-null while setting up 2FA.
   TotpEnrollment? _enrollment;
   final _code = TextEditingController();
   bool _busy = false;
@@ -51,7 +50,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
     });
   }
 
-  /// Re-authenticates, then asks Firebase for a fresh TOTP secret.
   Future<void> _startSetup() async {
     final auth = context.read<AuthController>();
     final user = auth.user;
@@ -115,29 +113,15 @@ class _SecurityScreenState extends State<SecurityScreen> {
   }
 
   Future<void> _turnOff(MfaFactor factor) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Turn off two-factor?'),
-        content: const Text(
-          'Your account will be protected by your password alone. You can '
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Turn off two-factor?',
+      body: 'Your account will be protected by your password alone. You can '
           'turn it back on at any time.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: context.fairbid.danger),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Turn off'),
-          ),
-        ],
-      ),
+      actionLabel: 'Turn off',
+      danger: true,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     final auth = context.read<AuthController>();
     final ok = await auth.unenrollFactor(factor.uid);
@@ -202,7 +186,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
   }
 }
 
-/// "Two-factor authentication: On/Off" with the matching action.
+/// The On/Off status with its turn-on or turn-off action.
 class _StatusCard extends StatelessWidget {
   const _StatusCard({
     required this.factor,
@@ -278,7 +262,7 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-/// The QR / key / code panel shown while setting 2FA up.
+/// The QR, key and code panel shown during setup.
 class _SetupCard extends StatelessWidget {
   const _SetupCard({
     required this.enrollment,
@@ -310,7 +294,7 @@ class _SetupCard extends StatelessWidget {
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
-          // White background always: the QR is unreadable on a dark surface.
+          // Always white: the QR is unreadable on a dark surface.
           Center(
             child: Container(
               padding: const EdgeInsets.all(12),

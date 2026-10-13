@@ -1,16 +1,10 @@
-/// Lifecycle of a bid on a job.
 enum BidStatus {
   pending,
   accepted,
   rejected,
   withdrawn;
 
-  String get storage => switch (this) {
-        BidStatus.pending => 'pending',
-        BidStatus.accepted => 'accepted',
-        BidStatus.rejected => 'rejected',
-        BidStatus.withdrawn => 'withdrawn',
-      };
+  String get storage => name;
 
   String get label => switch (this) {
         BidStatus.pending => 'Pending',
@@ -19,17 +13,13 @@ enum BidStatus {
         BidStatus.withdrawn => 'Withdrawn',
       };
 
-  static BidStatus fromStorage(String? value) => switch (value) {
-        'accepted' => BidStatus.accepted,
-        'rejected' => BidStatus.rejected,
-        'withdrawn' => BidStatus.withdrawn,
-        _ => BidStatus.pending,
-      };
+  static BidStatus fromStorage(String? value) =>
+      values.asNameMap()[value] ?? BidStatus.pending;
 }
 
-/// A provider's offer on a job. Stored at `jobs/{jobId}/bids/{providerId}` -
-/// the provider's uid as the doc id enforces one bid per provider per job.
-/// Framework-agnostic; the repository handles Firestore ↔ [Bid] mapping.
+/// What:   A provider's offer on a job (`jobs/{jobId}/bids/{providerId}`).
+/// Input:  Firestore data via FirestoreBidRepository (bid_repository.dart).
+/// Output: Immutable model; the uid doc id gives one bid per provider per job.
 class Bid {
   const Bid({
     required this.jobId,
@@ -45,12 +35,7 @@ class Bid {
     this.createdAt,
   });
 
-  /// Returns a copy carrying the provider's *current* reputation.
-  ///
-  /// [providerTrustScore] is denormalised at bid time so the bid list renders
-  /// from one query. That snapshot is fine to show, but ranking on it would
-  /// order today's bids by the provider's reputation as it was when they bid.
-  /// The bid list resolves the live score and applies it through this.
+  /// A copy carrying the provider's current score; the bid-time snapshot is stale for ranking.
   Bid withTrust({required int trustScore, required bool scoreVisible}) => Bid(
         jobId: jobId,
         providerId: providerId,
@@ -65,25 +50,18 @@ class Bid {
         createdAt: createdAt,
       );
 
-  /// The parent job's id (the doc's path, not a stored field).
+  /// From the doc path, not a stored field.
   final String jobId;
   final String providerId;
   final String providerName;
 
-  /// Snapshot of the provider's `profilePhotoUrl` at bid time, denormalised
-  /// so the requestor sees a face without loading each provider's profile -
-  /// mirrors how [providerName]/[providerTrustScore] are already denormalised.
-  /// Null if the provider had no photo when they bid. A future Cloud Function
-  /// could refresh this snapshot if the provider later changes their photo.
+  /// Photo at bid time, denormalised so the requestor sees a face without extra reads.
   final String? providerPhotoUrl;
 
-  /// Snapshot of the provider's Trust Score (0–1000) at bid time, denormalised
-  /// so the requestor can sort bids without loading each provider profile.
+  /// Trust Score (0-1000) at bid time.
   final int providerTrustScore;
 
-  /// Snapshot of whether the provider had earned a visible score at bid time.
-  /// When false the card shows a "New provider" state instead of the number
-  /// (the score still feeds Best Value ranking either way).
+  /// False shows "New provider" instead of the number; the score still feeds Best Value.
   final bool providerScoreVisible;
 
   final int amountSen;
@@ -94,8 +72,7 @@ class Bid {
   final BidStatus status;
   final DateTime? createdAt;
 
-  /// Fields written to Firestore. `status`/`createdAt` for a new bid are set
-  /// by the repository, so they are omitted here.
+  /// Client-owned fields; the repository sets `status` and `createdAt`.
   Map<String, dynamic> toMap() => {
         'providerId': providerId,
         'providerName': providerName,
@@ -107,8 +84,6 @@ class Bid {
         'message': message,
       };
 
-  /// Builds a [Bid] from its job id, doc id and (already
-  /// Timestamp-normalised) data map.
   factory Bid.fromMap(String jobId, String providerId, Map<String, dynamic> m) =>
       Bid(
         jobId: jobId,
@@ -116,8 +91,7 @@ class Bid {
         providerName: m['providerName'] as String? ?? 'Provider',
         providerPhotoUrl: m['providerPhotoUrl'] as String?,
         providerTrustScore: (m['providerTrustScore'] as num?)?.toInt() ?? 0,
-        // Legacy bids (pre-v2) default to visible so established providers
-        // aren't mislabelled "New".
+        // Older bids default to visible so established providers aren't labelled "New".
         providerScoreVisible: m['providerScoreVisible'] as bool? ?? true,
         amountSen: (m['amountSen'] as num?)?.toInt() ?? 0,
         estimatedDuration: m['estimatedDuration'] as String? ?? '',

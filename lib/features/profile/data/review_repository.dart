@@ -2,43 +2,45 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../domain/review.dart';
 
-/// Thrown by [ReviewRepository.leaveReview] when the reviewer has already
-/// reviewed this job (one review per reviewer per job).
+/// What:   Thrown by [ReviewRepository.leaveReview] when the reviewer already reviewed this job or bundle.
+/// Input:  Raised inside the leaveReview transaction.
+/// Output: The review form shows an "already reviewed" message.
 class ReviewAlreadyExistsException implements Exception {
   const ReviewAlreadyExistsException();
 }
 
-/// Reads and writes reviews left on a user's profile. UI depends on this
-/// interface so tests can use a fake without Firestore.
+/// What:   Review API for a user's profile.
+/// Input:  Firestore `users/{uid}/reviews` via FirebaseReviewRepository; a fake in tests.
+/// Output: Review streams, pages and writes.
 abstract interface class ReviewRepository {
-  /// Streams the [limit] newest reviews on [userId]'s profile, newest first,
-  /// excluding admin-hidden ones. Capped so a heavily-reviewed profile never
-  /// streams its entire subcollection just to show a short preview list. A
-  /// single-field `orderBy('createdAt')` inside one subcollection needs no
-  /// composite index (hidden is filtered client-side for the same reason).
+  /// The [limit] newest visible reviews on [userId]'s profile; hidden ones are filtered client-side (no composite index).
   Stream<List<Review>> watchReviews(String userId, {int limit = 20});
 
-  /// One page of [userId]'s reviews, newest first, for a paged "See all
-  /// reviews" screen. Pass the previous page's last review's `createdAt` as
-  /// [startAfter] to fetch the next page; null for the first page. Like
-  /// [watchReviews], hidden reviews are filtered out after the query runs, so
-  /// a page can come back shorter than [limit] even when more reviews exist.
+  /// One page of visible reviews, newest first; pass the last review's `createdAt` as [startAfter].
+  /// Hidden ones are filtered after the query, so a page can be shorter than [limit].
   Future<List<Review>> fetchReviewPage(
     String userId, {
     int limit = 20,
     DateTime? startAfter,
   });
 
-  /// Records [review] on [revieweeId]'s profile. A Cloud Function recomputes
-  /// their Bayesian Trust Score (plan §3.4.3) shortly after. Throws
-  /// [ReviewAlreadyExistsException] if the reviewer already reviewed this job.
+  /// Records [review] on [revieweeId]'s profile; a Cloud Function then recomputes their Trust Score.
+  /// Throws [ReviewAlreadyExistsException] on a repeat for the job (or [bundleId]).
   Future<void> leaveReview({
     required String revieweeId,
     required Review review,
+    String? bundleId,
   });
 
-  /// Reports a review on [revieweeId]'s profile as unfair/abusive, queueing
-  /// it for admin moderation. The review stays visible until an admin rules.
+  /// Whether [reviewerId] already reviewed [revieweeId] for [jobId] (or [bundleId]).
+  Future<bool> hasReviewed({
+    required String revieweeId,
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
+  });
+
+  /// Reports a review as unfair/abusive for admin moderation; it stays visible until ruled on.
   Future<void> flagReview({
     required String revieweeId,
     required String reviewId,
@@ -47,8 +49,9 @@ abstract interface class ReviewRepository {
   });
 }
 
-/// Firestore-backed [ReviewRepository]. Reviews live at
-/// `users/{userId}/reviews/{reviewId}`.
+/// What:   Firestore-backed [ReviewRepository].
+/// Input:  `users/{userId}/reviews/{reviewId}`.
+/// Output: Reviews as [Review] models.
 class FirebaseReviewRepository implements ReviewRepository {
   FirebaseReviewRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -58,6 +61,13 @@ class FirebaseReviewRepository implements ReviewRepository {
   CollectionReference<Map<String, dynamic>> _reviews(String userId) =>
       _firestore.collection('users').doc(userId).collection('reviews');
 
+  /// One review per reviewer per job, or per bundle when [bundleId] is given.
+  String _reviewId({
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
+  }) => '${bundleId ?? jobId}_$reviewerId';
+
   @override
   Stream<List<Review>> watchReviews(String userId, {int limit = 20}) {
     return _reviews(userId)
@@ -66,7 +76,7 @@ class FirebaseReviewRepository implements ReviewRepository {
         .snapshots()
         .map((snapshot) => [
               for (final doc in snapshot.docs)
-                if (_fromDoc(doc) case final review when !review.hidden)
+                if (reviewFromDoc(doc) case final review when !review.hidden)
                   review,
             ]);
   }
@@ -85,7 +95,7 @@ class FirebaseReviewRepository implements ReviewRepository {
     final snapshot = await query.get();
     return [
       for (final doc in snapshot.docs)
-        if (_fromDoc(doc) case final review when !review.hidden) review,
+        if (reviewFromDoc(doc) case final review when !review.hidden) review,
     ];
   }
 
@@ -93,11 +103,16 @@ class FirebaseReviewRepository implements ReviewRepository {
   Future<void> leaveReview({
     required String revieweeId,
     required Review review,
+    String? bundleId,
   }) {
-    // Deterministic id → a reviewer can leave at most one review per job; the
-    // transaction below aborts if it already exists.
-    final reviewRef =
-        _reviews(revieweeId).doc('${review.jobId}_${review.reviewerId}');
+    // Deterministic id: the transaction aborts on a repeat review.
+    final reviewRef = _reviews(revieweeId).doc(
+      _reviewId(
+        jobId: review.jobId ?? '',
+        reviewerId: review.reviewerId,
+        bundleId: bundleId,
+      ),
+    );
     return _firestore.runTransaction((tx) async {
       final existing = await tx.get(reviewRef);
       if (existing.exists) throw const ReviewAlreadyExistsException();
@@ -109,25 +124,40 @@ class FirebaseReviewRepository implements ReviewRepository {
   }
 
   @override
+  Future<bool> hasReviewed({
+    required String revieweeId,
+    required String jobId,
+    required String reviewerId,
+    String? bundleId,
+  }) async {
+    final id = _reviewId(
+      jobId: jobId,
+      reviewerId: reviewerId,
+      bundleId: bundleId,
+    );
+    final doc = await _reviews(revieweeId).doc(id).get();
+    return doc.exists;
+  }
+
+  @override
   Future<void> flagReview({
     required String revieweeId,
     required String reviewId,
     required String reason,
     required String flaggedByUid,
   }) {
-    // Plain guarded write (see firestore.rules): anyone signed-in may set the
-    // flag fields once; hiding/keeping is admin-function-only.
+    // Rules let any signed-in user set the flag fields once; ruling is admin-function-only.
     return _reviews(revieweeId).doc(reviewId).update({
       'flagged': true,
       'flagReason': reason.trim(),
       'flaggedByUid': flaggedByUid,
     });
   }
+}
 
-  /// Normalises Firestore Timestamps to DateTime before building the [Review].
-  Review _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = Map<String, dynamic>.of(doc.data() ?? {});
-    data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
-    return Review.fromMap(doc.id, data);
-  }
+/// Builds a [Review] from a doc, converting its Timestamp to DateTime.
+Review reviewFromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+  final data = Map<String, dynamic>.of(doc.data() ?? {});
+  data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();
+  return Review.fromMap(doc.id, data);
 }

@@ -7,7 +7,9 @@ import 'admin_home_screen.dart';
 import 'provider_home_screen.dart';
 import 'requestor_home_screen.dart';
 
-/// The Home tab. Dispatches to the role-specific dashboard.
+/// What:   The Home tab.
+/// Input:  Signed-in user's role from [AuthController].
+/// Output: The provider, admin or requestor dashboard.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 

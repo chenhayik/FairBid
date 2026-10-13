@@ -6,24 +6,21 @@ import '../../../../core/widgets/form_widgets.dart';
 import '../../../auth/presentation/validators.dart';
 import '../../domain/service_address.dart';
 
-/// Modal form to add or edit a job's private [ServiceAddress]. Only shared
-/// with the job's hired provider - never with other bidders (see
-/// `firestore.rules` and `job_address_card.dart`).
-class ServiceAddressSheet extends StatelessWidget {
+/// What:   Modal form to add or edit a job's private [ServiceAddress].
+/// Input:  [initial] to edit; [defaultCity] and [hint] pre-fill a new one.
+/// Output: Resolves to the saved [ServiceAddress], or null on dismiss.
+/// Notes:  Only the hired provider can read it (firestore.rules).
+class ServiceAddressSheet extends StatefulWidget {
   const ServiceAddressSheet(
       {super.key, this.initial, this.defaultCity, this.hint});
 
   final ServiceAddress? initial;
   final String? defaultCity;
 
-  /// Street-level suggestion reverse-geocoded from the job's map pin, used to
-  /// pre-fill a *new* address only. An [initial] address always wins, and
-  /// [defaultCity] - a curated town from the picker - beats the geocoder's
-  /// own city label.
+  /// Reverse-geocoded from the map pin; pre-fills a new address only.
+  /// [defaultCity] beats its city.
   final AddressHint? hint;
 
-  /// Opens the sheet. Resolves to the entered [ServiceAddress] on save, or
-  /// `null` on cancel/dismiss.
   static Future<ServiceAddress?> show(
     BuildContext context, {
     ServiceAddress? initial,
@@ -43,36 +40,16 @@ class ServiceAddressSheet extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      // Keep the form above the keyboard.
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: _ServiceAddressForm(
-          initial: initial, defaultCity: defaultCity, hint: hint),
-    );
-  }
+  State<ServiceAddressSheet> createState() => _ServiceAddressSheetState();
 }
 
-class _ServiceAddressForm extends StatefulWidget {
-  const _ServiceAddressForm({this.initial, this.defaultCity, this.hint});
-  final ServiceAddress? initial;
-  final String? defaultCity;
-  final AddressHint? hint;
-
-  @override
-  State<_ServiceAddressForm> createState() => _ServiceAddressFormState();
-}
-
-class _ServiceAddressFormState extends State<_ServiceAddressForm> {
+class _ServiceAddressSheetState extends State<ServiceAddressSheet> {
   final _formKey = GlobalKey<FormState>();
 
-  /// Only pre-fill from the map pin when adding an address from scratch -
-  /// never overwrite what the requestor already saved.
+  // Never overwrite a saved address with the pin's guess.
   AddressHint? get _hint => widget.initial == null ? widget.hint : null;
 
-  /// True when the geocoder actually supplied a street or postcode, so the
-  /// form can tell the requestor those values are guesses worth checking.
+  // True when the form shows guessed values worth checking.
   bool get _prefilled =>
       _hint != null && (_hint!.line1 != null || _hint!.postcode != null);
 
@@ -112,7 +89,13 @@ class _ServiceAddressFormState extends State<_ServiceAddressForm> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      // Keeps the form above the keyboard.
+      padding: EdgeInsets.fromLTRB(
+        24,
+        24,
+        24,
+        24 + MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: Form(
         key: _formKey,
         child: Column(
@@ -201,9 +184,7 @@ class _ServiceAddressFormState extends State<_ServiceAddressForm> {
                 ),
               ],
             ),
-            // State is fixed to Penang (FairBid's launch scope), so it's
-            // shown as pre-set context rather than an editable, easy-to-miss
-            // field.
+            // Fixed to Penang (launch scope), so shown as context, not a field.
             Padding(
               padding: const EdgeInsets.only(top: 4, bottom: 16),
               child: Row(

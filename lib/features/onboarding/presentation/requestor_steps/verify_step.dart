@@ -8,8 +8,9 @@ import '../../../../core/widgets/form_widgets.dart';
 import '../../../auth/presentation/auth_controller.dart';
 import '../requestor_onboarding_controller.dart';
 
-/// Stage 3 - optional "Verified Client / Business" document, a wallet/escrow
-/// intro, and the finish actions.
+/// What:   Requestor stage 3: optional verification document, escrow intro and finish actions.
+/// Input:  [RequestorOnboardingController]; [AuthController] to refresh the user.
+/// Output: Finish completes onboarding (with the document under review); Skip clears the document first.
 class VerifyStep extends StatelessWidget {
   const VerifyStep({super.key});
 
@@ -19,7 +20,6 @@ class VerifyStep extends StatelessWidget {
   }) async {
     final onboarding = context.read<RequestorOnboardingController>();
     final auth = context.read<AuthController>();
-    // "Skip" completes without submitting a document for review.
     if (!withVerification) onboarding.data.clientDocumentUrl = null;
     final ok = await onboarding.finish();
     if (!ok || !context.mounted) return;
@@ -61,6 +61,7 @@ class VerifyStep extends StatelessWidget {
         const SizedBox(height: 8),
         UploadBox(
           onTap: onboarding.pickVerificationDocument,
+          busy: onboarding.isUploading('client_document'),
           icon: Icons.badge_outlined,
           hint: 'JPEG, PNG up to 10MB',
           pickedName:

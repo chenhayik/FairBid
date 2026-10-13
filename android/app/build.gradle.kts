@@ -47,10 +47,16 @@ android {
     }
 }
 
+// Use the Play-services face model instead of bundling it (~26 MB smaller APK).
+configurations.all {
+    exclude(group = "com.google.mlkit", module = "face-detection")
+}
+
 dependencies {
     // Required by the desugaring enabled in compileOptions above.
     // flutter_local_notifications 22.x needs 2.1.4 or newer.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
 }
 
 flutter {

@@ -1,5 +1,6 @@
-/// One snapshot of the marketplace's headline numbers, read via Firestore
-/// server-side aggregation queries (no documents are downloaded).
+/// What:   Snapshot of the marketplace's main numbers.
+/// Input:  Aggregate queries in FirestoreStatsRepository.load() (stats_repository.dart).
+/// Output: Counts and released volume for PlatformStatsScreen.
 class PlatformStats {
   const PlatformStats({
     required this.requestors,
@@ -10,6 +11,8 @@ class PlatformStats {
     required this.pendingVerifications,
     required this.openDisputes,
     required this.releasedVolumeSen,
+    required this.bundlesAwarded,
+    required this.splitAwards,
   });
 
   final int requestors;
@@ -20,10 +23,17 @@ class PlatformStats {
   final int pendingVerifications;
   final int openDisputes;
 
-  /// Total escrow ever released to providers (the `release` ledger rows), in
-  /// sen - the money the marketplace has actually moved.
+  /// Money released to providers, in sen.
   final int releasedVolumeSen;
 
+  final int bundlesAwarded;
+
+  /// Awarded bundles split across providers.
+  final int splitAwards;
+
   int get totalUsers => requestors + providers;
-  int get totalJobs => openJobs + inProgressJobs + completedJobs;
+
+  /// Share of awarded bundles that were split; 0 if none.
+  double get splitAwardRate =>
+      bundlesAwarded == 0 ? 0 : splitAwards / bundlesAwarded;
 }

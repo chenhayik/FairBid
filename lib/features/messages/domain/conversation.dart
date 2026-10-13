@@ -1,8 +1,6 @@
-/// A chat thread between a job's requestor and its accepted provider, stored
-/// at `conversations/{jobId}_{providerId}`. The deterministic id means either
-/// side opening the chat lazily creates (or finds) the same document - no
-/// duplicate threads for one job. Framework-agnostic; the repository handles
-/// the Firestore ↔ [Conversation] mapping.
+/// What:   A chat thread between a job's requestor and accepted provider.
+/// Input:  `conversations/{jobId}_{providerId}` via Conversation.fromMap (chat_repository.dart).
+/// Output: Immutable model; the deterministic id means either side finds the same thread.
 class Conversation {
   const Conversation({
     required this.id,
@@ -15,7 +13,6 @@ class Conversation {
     required this.providerName,
     this.providerPhotoUrl,
     this.lastMessageText = '',
-    this.lastMessageSenderId,
     this.lastMessageAt,
     this.unreadCounts = const {},
     this.chatClosesAt,
@@ -30,39 +27,28 @@ class Conversation {
   final String requestorId;
   final String requestorName;
 
-  /// Snapshots of each party's `profilePhotoUrl` at conversation-creation
-  /// time, denormalised so the thread and list show faces without loading
-  /// either profile - mirrors how [requestorName]/[providerName] are already
-  /// denormalised. Null if that party had no photo yet. A future Cloud
-  /// Function could refresh these snapshots on a later photo change.
+  /// Each party's photo at creation time, denormalised like the names; null if none.
   final String? requestorPhotoUrl;
   final String providerId;
   final String providerName;
   final String? providerPhotoUrl;
 
-  /// Preview of the newest message, denormalised onto the conversation so the
-  /// list renders without reading any message documents.
+  /// Preview of the newest message, so the list reads no message docs.
   final String lastMessageText;
-  final String? lastMessageSenderId;
   final DateTime? lastMessageAt;
 
-  /// Per-participant unread counters, keyed by uid. Incremented for the
-  /// recipient on every send; zeroed when they open the thread.
+  /// Unread counters by uid; +1 for the recipient on send, zeroed on open.
   final Map<String, int> unreadCounts;
 
-  /// When the thread stops accepting new messages. Set by a Cloud Function to
-  /// 14 days after the job ends (completed/cancelled), and cleared back to null
-  /// while a dispute is open or a milestone is in rework. Null means the chat
-  /// is open. History stays readable forever regardless.
+  /// When the thread stops accepting messages: 14 days after the job ends (set by a Cloud Function),
+  /// null while open or a dispute is open. History stays readable.
   final DateTime? chatClosesAt;
 
-  /// Whether the composer should be enabled: open while [chatClosesAt] is unset
-  /// or still in the future.
+  /// Whether new messages are allowed at [now].
   bool isOpenAt(DateTime now) =>
       chatClosesAt == null || now.isBefore(chatClosesAt!);
 
-  /// Both participants' uids - mirrors the stored `participantIds` array that
-  /// backs the "my conversations" query.
+  /// Both uids; mirrors the stored `participantIds` used by the list query.
   List<String> get participantIds => [requestorId, providerId];
 
   /// The counterparty's uid from [uid]'s point of view.
@@ -73,16 +59,14 @@ class Conversation {
   String otherPartyName(String uid) =>
       uid == providerId ? requestorName : providerName;
 
-  /// The counterparty's photo URL from [uid]'s point of view, or null when
-  /// they have none.
+  /// The counterparty's photo URL from [uid]'s point of view, or null.
   String? otherPartyPhotoUrl(String uid) =>
       uid == providerId ? requestorPhotoUrl : providerPhotoUrl;
 
   /// [uid]'s unread-message count on this thread.
   int unreadFor(String uid) => unreadCounts[uid] ?? 0;
 
-  /// Immutable identity fields written at creation. The preview fields,
-  /// counters and timestamps are maintained by the repository.
+  /// Identity fields written at creation; the repository maintains the rest.
   Map<String, dynamic> toMap() => {
         'jobId': jobId,
         'jobTitle': jobTitle,
@@ -95,8 +79,6 @@ class Conversation {
         'participantIds': participantIds,
       };
 
-  /// Builds a [Conversation] from a document id and its (already
-  /// Timestamp-normalised) data map.
   factory Conversation.fromMap(String id, Map<String, dynamic> m) =>
       Conversation(
         id: id,
@@ -109,7 +91,6 @@ class Conversation {
         providerName: m['providerName'] as String? ?? 'Provider',
         providerPhotoUrl: m['providerPhotoUrl'] as String?,
         lastMessageText: m['lastMessageText'] as String? ?? '',
-        lastMessageSenderId: m['lastMessageSenderId'] as String?,
         lastMessageAt: m['lastMessageAt'] as DateTime?,
         unreadCounts: {
           for (final e in ((m['unreadCount'] as Map?) ?? const {}).entries)

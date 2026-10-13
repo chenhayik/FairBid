@@ -1,24 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// Files a "report this user" complaint raised from a public profile.
-///
-/// Distinct from `ReviewRepository.flagReview`, which reports one *review* on
-/// the reviewee's own behalf: this reports a *person*, from a cold profile
-/// view, by anyone signed in.
-///
-/// Reports land in the top-level `reports` collection, readable only by
-/// admins (see `firestore.rules`). There is deliberately no client read
-/// method: a reporter cannot list or re-read what they filed, which keeps the
-/// collection admin-only in practice as well as in the rules.
-///
-/// NOTE: no admin triage UI reads this collection yet, so a filed report is
-/// recorded and auditable but is not yet actioned by anyone. The user-facing
-/// copy in `public_profile_screen.dart` is deliberately worded to promise
-/// only what actually happens (it was received), never a review timeline.
+/// What:   "Report this user" API for complaints raised from a public profile (unlike flagReview, which reports one review).
+/// Input:  Firestore via FirestoreUserReportRepository; a fake in tests.
+/// Output: A document in the admin-read-only `reports` collection; there is deliberately no client read.
+/// Notes:  No admin screen reads `reports` yet, so the profile copy only promises it was received.
 abstract interface class UserReportRepository {
-  /// Files a report against [reportedUid] with the reporter's written
-  /// [reason]. Throws on failure so the caller can tell the user it did not
-  /// send, rather than silently swallowing it.
+  /// Files a report against [reportedUid]; throws on failure so the caller can say it didn't send.
   Future<void> reportUser({
     required String reporterId,
     required String reportedUid,
@@ -26,8 +13,9 @@ abstract interface class UserReportRepository {
   });
 }
 
-/// Firestore-backed [UserReportRepository]. `status` starts at `'open'` so a
-/// future moderation queue can filter on it without a migration.
+/// What:   Firestore-backed [UserReportRepository].
+/// Input:  Reporter, reported uid and reason.
+/// Output: A `reports` doc with `status: 'open'`.
 class FirestoreUserReportRepository implements UserReportRepository {
   FirestoreUserReportRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;

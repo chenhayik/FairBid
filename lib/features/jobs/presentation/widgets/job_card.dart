@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/util/plural.dart';
 import '../../../../core/util/time_ago.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/job.dart';
+import 'status_colors.dart';
 
-/// Compact job summary used in the feed, "Jobs near you" and My Jobs.
+/// What:   Compact job summary card.
+/// Input:  [job]; [distanceLabel]; [saved] and [onToggleSave] for the bookmark.
+/// Output: Tappable card used in the feed, Jobs near you, My Jobs and Saved jobs.
 class JobCard extends StatelessWidget {
   const JobCard({
     super.key,
@@ -19,15 +23,11 @@ class JobCard extends StatelessWidget {
   final Job job;
   final VoidCallback? onTap;
 
-  /// Optional "2.5 km" shown on provider-facing lists.
+  /// e.g. "2.5 km".
   final String? distanceLabel;
-
-  /// Whether this job is on the signed-in user's watchlist. Only meaningful
-  /// when [onToggleSave] is set.
   final bool saved;
 
-  /// Shows a bookmark toggle in the top pill row when set; cards that omit it
-  /// (e.g. My Jobs) render unchanged.
+  /// Shows the bookmark toggle when set.
   final VoidCallback? onToggleSave;
 
   @override
@@ -42,25 +42,33 @@ class JobCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                // Flexible (not Expanded) so the pill hugs its text instead of
-                // stretching to fill the row.
-                Flexible(
-                  child: PillBadge(
-                    label: job.category,
-                    color: theme.colorScheme.onSurfaceVariant,
+                // Wrap, so a third pill flows to a second line instead of squeezing.
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      PillBadge(
+                        label: job.category,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      PillBadge(
+                        label: job.status.label,
+                        color: jobStatusColor(context, job.status),
+                      ),
+                      if (job.isBiddingAsBundle &&
+                          job.bundleTaskCount != null &&
+                          job.bundleTaskCount! > 1)
+                        PillBadge(
+                          label: 'Part of a ${job.bundleTaskCount}-task '
+                              'bundle',
+                          color: context.fairbid.verified,
+                        ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: job.status == JobStatus.open
-                      ? PillBadge(
-                          label: 'Open', color: context.fairbid.verified)
-                      : PillBadge(
-                          label: job.status.label,
-                          color: theme.colorScheme.onSurfaceVariant),
-                ),
-                if (onToggleSave != null) ...[
-                  const Spacer(),
+                if (onToggleSave != null)
                   IconButton(
                     tooltip: saved ? 'Saved' : 'Save job',
                     icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
@@ -69,7 +77,6 @@ class JobCard extends StatelessWidget {
                         : theme.colorScheme.onSurfaceVariant,
                     onPressed: onToggleSave,
                   ),
-                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -105,26 +112,18 @@ class JobCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                if (budget != null)
-                  Flexible(
-                    child: Text(budget,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelLarge
-                            ?.copyWith(color: context.fairbid.verified)),
-                  ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '${job.bidCount} bids  •  ${timeAgo(job.createdAt)}',
-                    textAlign: TextAlign.end,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
+            // Own line: sharing a row with the bid count clips it.
+            if (budget != null) ...[
+              Text(budget,
+                  style: theme.textTheme.labelLarge
+                      ?.copyWith(color: context.fairbid.verified)),
+              const SizedBox(height: 4),
+            ],
+            Text(
+              '${plural(job.bidCount, 'bid')}  •  ${timeAgo(job.createdAt)}',
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             if (job.status == JobStatus.open && job.deadline != null) ...[
               const SizedBox(height: 6),
@@ -136,8 +135,7 @@ class JobCard extends StatelessWidget {
   }
 }
 
-/// Small "Closes in..." row shown on an open job's card once it has a
-/// bidding deadline. Turns warning-coloured once under 24 hours remain.
+// "Closes in..." row; warning-coloured under 24 hours.
 class _DeadlineChip extends StatelessWidget {
   const _DeadlineChip({required this.deadline});
   final DateTime deadline;
@@ -146,21 +144,17 @@ class _DeadlineChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final urgent = deadline.difference(DateTime.now()).inHours < 24;
+    final color = urgent
+        ? context.fairbid.warningText
+        : theme.colorScheme.onSurfaceVariant;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.timer_outlined,
-            size: 14,
-            color: urgent
-                ? context.fairbid.warningText
-                : theme.colorScheme.onSurfaceVariant),
+        Icon(Icons.timer_outlined, size: 14, color: color),
         const SizedBox(width: 4),
         Text(
           deadlineLabel(deadline),
-          style: theme.textTheme.bodySmall?.copyWith(
-              color: urgent
-                  ? context.fairbid.warningText
-                  : theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(color: color),
         ),
       ],
     );

@@ -1,36 +1,24 @@
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../domain/public_profile.dart';
 
-/// Read-only access to another user's publicly-safe profile. UI depends on
-/// this interface (not `AuthRepository`/`AppUser`) so it can never
-/// accidentally read a private field the signed-in user's own profile stream
-/// happens to carry - see [PublicProfile] for exactly which fields are
-/// excluded and why.
+/// What:   Read-only access to another user's public-safe profile.
+/// Input:  Firestore `users/{uid}` via FirebasePublicProfileRepository; a fake in tests.
+/// Output: [PublicProfile] (see its doc for the excluded private fields) and live trust scores.
 abstract interface class PublicProfileRepository {
-  /// Streams [uid]'s public profile, or `null` if the account doesn't exist
-  /// (e.g. it was deleted). Never writes.
+  /// [uid]'s public profile; `null` if the account doesn't exist.
   Stream<PublicProfile?> watchProfile(String uid);
 
-  /// Current trust scores for [uids], keyed by uid; absent entries mean the
-  /// account could not be read.
-  ///
-  /// Bids carry a `providerTrustScore` copied at bid time, which is fine for
-  /// display but wrong to rank on: a provider's score moves after they bid
-  /// (a new review, a completed job, a lost dispute), so Best Value would
-  /// order today's bids by last week's reputation. Callers resolve the live
-  /// score through this before sorting.
+  /// Current trust scores for [uids], keyed by uid (unreadable accounts are absent).
+  /// Bids carry a stale `providerTrustScore`, so Best Value ranks on these live scores.
   Future<Map<String, ProviderTrust>> fetchTrust(Iterable<String> uids);
 }
 
-/// A provider's current, server-computed reputation.
 typedef ProviderTrust = ({int trustScore, bool scoreVisible});
 
-/// Firestore-backed [PublicProfileRepository]. Reads only the top-level
-/// `users/{uid}` document - the sensitive `private/verification` and
-/// `private/payout` subdocuments are never queried here.
+/// What:   Firestore-backed [PublicProfileRepository].
+/// Input:  Only the top-level `users/{uid}` doc; the private subdocs are never queried.
+/// Output: PublicProfile values and a uid-to-ProviderTrust map.
 class FirebasePublicProfileRepository implements PublicProfileRepository {
   FirebasePublicProfileRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -52,9 +40,7 @@ class FirebasePublicProfileRepository implements PublicProfileRepository {
     final ids = uids.toSet().toList();
     if (ids.isEmpty) return const {};
 
-    // whereIn caps at 30 values per query, so chunk. Bid lists are far
-    // smaller than that in practice; the chunking is here so an unusually
-    // busy job cannot silently drop the tail of its own bid list.
+    // whereIn caps at 30 values per query.
     const chunkSize = 30;
     final result = <String, ProviderTrust>{};
     for (var i = 0; i < ids.length; i += chunkSize) {

@@ -3,9 +3,9 @@ import 'package:image_picker/image_picker.dart';
 
 import '../theme/app_theme.dart';
 
-/// Asks whether to take a new photo or pick an existing one, so uploads are
-/// never locked to a single source. Resolves to the chosen [ImageSource], or
-/// null if the sheet was dismissed.
+/// What:   Sheet asking for a new photo or an existing one.
+/// Input:  [context] and a [title].
+/// Output: The chosen [ImageSource], or null if dismissed.
 Future<ImageSource?> showImageSourceSheet(
   BuildContext context, {
   String title = 'Add a photo',

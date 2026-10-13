@@ -11,8 +11,9 @@ import '../../jobs/domain/job.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
 import 'home_app_bar.dart';
 
-/// Requestor Home: greeting, a prominent "Post a Job" call to action, and the
-/// requestor's active jobs.
+/// What:   Requestor Home: greeting, "Post a job" button and active jobs.
+/// Input:  JobRepository.watchMyJobs(uid) (job_repository.dart).
+/// Output: Up to 5 active (not completed or cancelled) job cards.
 class RequestorHomeScreen extends StatelessWidget {
   const RequestorHomeScreen({super.key});
 
@@ -37,11 +38,11 @@ class RequestorHomeScreen extends StatelessWidget {
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             const SizedBox(height: 24),
             PrimaryButton(
-              label: '+ Post a Job',
+              label: '+ Post a job',
               onPressed: () => context.push('/post-job'),
             ),
             const SizedBox(height: 32),
-            Text('Active Jobs', style: theme.textTheme.titleLarge),
+            Text('Active jobs', style: theme.textTheme.titleLarge),
             const SizedBox(height: 12),
             if (user == null)
               const SizedBox.shrink()
@@ -63,7 +64,9 @@ class RequestorHomeScreen extends StatelessWidget {
                     );
                   }
                   final jobs = (snapshot.data ?? [])
-                      .where((j) => j.status != JobStatus.completed)
+                      .where((j) =>
+                          j.status != JobStatus.completed &&
+                          j.status != JobStatus.cancelled)
                       .toList();
                   if (jobs.isEmpty) {
                     return const AppCard(

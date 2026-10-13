@@ -1,18 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/location/region.dart';
+import '../../../core/location/region_picker_screen.dart';
+import '../../../core/util/service_categories.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/form_widgets.dart';
+import '../../../core/widgets/location_field.dart';
 import '../../../core/widgets/user_avatar.dart';
+import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/validators.dart';
 import '../../onboarding/data/document_storage_repository.dart';
 
-/// Pushed form for editing the signed-in user's profile: full name, phone,
-/// location and About text. Email is shown read-only. One Save writes through
-/// [AuthController.updateProfile] and pops back to the profile.
+/// Comma-separated skills -> trimmed, de-duplicated list (empties dropped).
+List<String> _parseSkills(String text) => {
+      for (final s in text.split(','))
+        if (s.trim().isNotEmpty) s.trim(),
+    }.toList();
+
+/// What:   Edit Profile form: name, phone, map location, About and (providers) category and skills.
+/// Input:  [AuthController.user]; email is read-only.
+/// Output: One Save calls [AuthController.updateProfile] and pops.
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
 
@@ -24,8 +36,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _phone;
-  late final TextEditingController _location;
+  late final TextEditingController _skills;
   late final TextEditingController _bio;
+  String? _category;
+  String? _locationLabel;
+  PickedLocation? _picked;
   bool _saving = false;
 
   @override
@@ -34,28 +49,68 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final user = context.read<AuthController>().user;
     _name = TextEditingController(text: user?.displayName ?? '');
     _phone = TextEditingController(text: user?.phone ?? '');
-    _location = TextEditingController(text: user?.location ?? '');
+    _skills = TextEditingController(text: user?.skills.join(', ') ?? '');
     _bio = TextEditingController(text: user?.bio ?? '');
+    _locationLabel = user?.location;
+    // The dropdown asserts its value is one of the items.
+    _category = kServiceCategories.contains(user?.category)
+        ? user!.category
+        : null;
   }
 
   @override
   void dispose() {
     _name.dispose();
     _phone.dispose();
-    _location.dispose();
+    _skills.dispose();
     _bio.dispose();
     super.dispose();
+  }
+
+  /// Opens the Penang map picker; the pick is saved with the Save button.
+  Future<void> _pickLocation() async {
+    final user = context.read<AuthController>().user;
+    final isProvider = user?.role == UserRole.provider;
+    final lat = isProvider ? user?.baseLat : user?.defaultLat;
+    final lng = isProvider ? user?.baseLng : user?.defaultLng;
+    final code = isProvider ? user?.baseDistrictCode : user?.defaultDistrictCode;
+    final picked = await RegionPickerScreen.show(
+      context,
+      initialCenter: lat == null || lng == null ? null : LatLng(lat, lng),
+      initialRegion: Region.fromMap({
+        'districtCode': code,
+        'town': isProvider ? user?.baseTown : user?.defaultTown,
+      }),
+    );
+    if (picked == null) return;
+    setState(() {
+      _picked = picked;
+      _locationLabel = picked.address;
+    });
   }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
-    await context.read<AuthController>().updateProfile(
-          displayName: _name.text,
-          phone: _phone.text,
-          location: _location.text,
-          bio: _bio.text,
-        );
+    final isProvider =
+        context.read<AuthController>().user?.role == UserRole.provider;
+    try {
+      await context.read<AuthController>().updateProfile(
+            displayName: _name.text,
+            phone: _phone.text,
+            location: _locationLabel,
+            bio: _bio.text,
+            picked: _picked,
+            category: isProvider ? _category : null,
+            skills: isProvider ? _parseSkills(_skills.text) : null,
+          );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not save your profile')));
+      return;
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     context.pop();
@@ -87,11 +142,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 keyboardType: TextInputType.phone,
                 textInputAction: TextInputAction.next,
               ),
-              AppTextField(
-                controller: _location,
-                label: 'Location',
-                textInputAction: TextInputAction.next,
+              Text('Location', style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 6),
+              LocationField(
+                label: _locationLabel,
+                placeholder: 'Pick your location in Penang',
+                onTap: _pickLocation,
               ),
+              const SizedBox(height: 16),
               AppTextField(
                 controller: _bio,
                 label: 'About',
@@ -99,6 +157,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 maxLines: 5,
                 maxLength: 500,
               ),
+              if (user?.role == UserRole.provider) ...[
+                Text('Your services',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                Text('Primary Service Category',
+                    style: Theme.of(context).textTheme.labelLarge),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  initialValue: _category,
+                  hint: const Text('Select a category...'),
+                  items: [
+                    for (final category in kServiceCategories)
+                      DropdownMenuItem(value: category, child: Text(category)),
+                  ],
+                  onChanged: (value) => setState(() => _category = value),
+                ),
+                const SizedBox(height: 16),
+                AppTextField(
+                  controller: _skills,
+                  label: 'Skills',
+                  hint: 'E.g. Pipe repair, Water heater, Aircon servicing',
+                  helperText: 'Separate skills with commas.',
+                ),
+              ],
               const SizedBox(height: 8),
               PrimaryButton(
                 label: 'Save',
@@ -113,11 +195,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 }
 
-/// The profile-photo control at the top of the form: the current avatar (or
-/// the placeholder, via [UserAvatar]) with a "Change photo" / "Add photo"
-/// action beneath it. Picking a photo uploads it immediately and saves the
-/// resulting URL, rather than waiting for the form's own Save button -
-/// mirroring how the other upload boxes in the app behave.
+/// Avatar with a "Change photo" / "Add photo" action; picking uploads and saves the URL at once, not on Save.
 class _AvatarPicker extends StatefulWidget {
   const _AvatarPicker({required this.photoUrl});
 
@@ -132,8 +210,7 @@ class _AvatarPickerState extends State<_AvatarPicker> {
   bool _uploading = false;
 
   Future<void> _pick() async {
-    // Capture everything context-derived before the first await, so nothing
-    // below ever touches BuildContext across an async gap.
+    // Captured before the first await to avoid using context across the gap.
     final auth = context.read<AuthController>();
     final storage = context.read<DocumentStorageRepository>();
     final messenger = ScaffoldMessenger.of(context);
@@ -199,8 +276,7 @@ class _AvatarPickerState extends State<_AvatarPicker> {
   }
 }
 
-/// A non-editable field styled like [AppTextField] for values the user can view
-/// but not change here (e.g. their email address).
+/// A non-editable field styled like [AppTextField] (e.g. the email).
 class _ReadOnlyField extends StatelessWidget {
   const _ReadOnlyField({required this.label, required this.value});
 

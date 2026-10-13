@@ -3,17 +3,16 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/util/money.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
-import '../../auth/domain/user_role.dart';
 import '../data/verification_repository.dart';
 import '../domain/pending_verification.dart';
 
-/// Admin Home › Verifications tab: the live verification queue. Lists every
-/// user awaiting review so an admin can open each one, inspect their
-/// documents, and approve or reject - the gate that lets an approved provider
-/// start bidding. Hosted (Scaffold and all) by AdminHomeScreen's tabs.
+/// What:   Admin Verifications tab: users awaiting review.
+/// Input:  Pending users via VerificationRepository.watchPending() (verification_repository.dart).
+/// Output: Cards that open the detail screen; hosted by AdminHomeScreen.
 class VerificationQueueScreen extends StatelessWidget {
   const VerificationQueueScreen({super.key});
 
@@ -36,7 +35,7 @@ class VerificationQueueScreen extends StatelessWidget {
             const SizedBox(height: 24),
             StatCard(
               label: 'Pending Review',
-              value: items == null ? '-' : '${items.length}',
+              value: items == null ? '-' : formatCount(items.length),
               icon: Icons.verified_user_outlined,
             ),
             const SizedBox(height: 24),
@@ -79,7 +78,6 @@ class VerificationQueueScreen extends StatelessWidget {
   }
 }
 
-/// One pending applicant in the queue list.
 class _QueueCard extends StatelessWidget {
   const _QueueCard({required this.item, required this.onTap});
 
@@ -122,7 +120,17 @@ class _QueueCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Flexible(child: _RolePill(item: item)),
+                      Flexible(
+                        child: PillBadge(
+                          label: item.roleSummary,
+                          icon: item.isProvider
+                              ? Icons.handyman_outlined
+                              : Icons.person_outline,
+                          color: item.isProvider
+                              ? context.fairbid.verified
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                       const SizedBox(width: 8),
                       if (item.submittedAt != null)
                         Text(timeAgo(item.submittedAt),
@@ -139,25 +147,5 @@ class _QueueCard extends StatelessWidget {
           ],
         ),
       );
-  }
-}
-
-/// Small tinted pill describing the applicant's role/type, colour-coded so
-/// providers (blue) and requestors (neutral) read apart at a glance.
-class _RolePill extends StatelessWidget {
-  const _RolePill({required this.item});
-
-  final PendingVerification item;
-
-  @override
-  Widget build(BuildContext context) {
-    final isProvider = item.role == UserRole.provider;
-    return PillBadge(
-      label: item.roleSummary,
-      icon: isProvider ? Icons.handyman_outlined : Icons.person_outline,
-      color: isProvider
-          ? context.fairbid.verified
-          : Theme.of(context).colorScheme.onSurfaceVariant,
-    );
   }
 }

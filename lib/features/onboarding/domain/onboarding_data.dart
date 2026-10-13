@@ -1,4 +1,6 @@
-/// How the provider operates on FairBid (onboarding stage 2).
+import 'face_box.dart';
+
+/// How the provider operates on FairBid (stage 2).
 enum ProviderType {
   individual,
   business;
@@ -8,28 +10,29 @@ enum ProviderType {
         ProviderType.business => 'Registered Business',
       };
 
-  static ProviderType? fromStorage(String? value) => switch (value) {
-        'individual' => ProviderType.individual,
-        'business' => ProviderType.business,
-        _ => null,
-      };
+  static ProviderType? fromStorage(String? value) => values.asNameMap()[value];
 }
 
-/// Everything a provider fills in during the 6-stage onboarding flow.
-/// Persisted as one `onboarding` map on the `users/{uid}` document so progress
-/// survives app restarts.
-///
-/// A deliberately simple mutable data class - the controller owns the single
-/// instance and saves it after each stage.
+/// Which government ID the provider is verifying with.
+enum IdDocumentType {
+  mykad,
+  passport;
+
+  static IdDocumentType fromStorage(String? value) =>
+      values.asNameMap()[value] ?? IdDocumentType.mykad;
+}
+
+/// What:   Everything a provider fills in during the 6-stage onboarding.
+/// Input:  `onboarding` map on `users/{uid}` plus `private/verification`, via OnboardingRepository.
+/// Output: Mutable draft owned by OnboardingController; [toMap] is public, [privateMap] owner+admin only.
 class OnboardingData {
   OnboardingData();
 
-  /// Current stage (2–6). Stage 1 is account creation itself.
+  /// Current stage (2-6); stage 1 is account creation.
   int step = firstStep;
 
   static const firstStep = 2;
   static const lastStep = 6;
-  static const totalStages = 6;
 
   // Stage 2 - provider type.
   ProviderType? providerType;
@@ -37,14 +40,18 @@ class OnboardingData {
   // Stage 3 - identity verification. Firebase Storage download URLs.
   String? idDocumentUrl;
   String? selfieUrl;
+  IdDocumentType idDocumentType = IdDocumentType.mykad;
 
-  // Stage 3 (business providers only) - SSM registration. The number is
-  // deliberately NOT in [toMap]: `users/{uid}` is readable by any signed-in
-  // user, and for a sole proprietorship - which has no legal personality
-  // separate from its owner - the registration number is personal data. It
-  // lives in [privateMap] with the identity photos. The business *name* stays
-  // public: a business trading under a name expects it to be seen, and
-  // counterparties need it to know who they are hiring.
+  // MyKad number: sensitive, so it lives in [privateMap] only.
+  String icNumber = '';
+
+  // Face locations from the on-device check and the PDPA consent time; all private.
+  FaceBox? idFaceBox;
+  FaceBox? selfieFaceBox;
+  DateTime? idConsentAt;
+
+  // Stage 3 (business only) - SSM. The number is personal data for a sole
+  // proprietorship, so it is in [privateMap], not [toMap]; the name stays public.
   String businessName = '';
   String ssmNumber = '';
   String ssmNumberNormalized = '';
@@ -57,57 +64,32 @@ class OnboardingData {
   List<String> certificateUrls = [];
   List<String> portfolioLinks = [];
 
-  // Stage 5 - service profile. `coverageArea` mirrors `Region.label` (kept as
-  // a plain string for backward-compatible display); `districtCode`/`town`/
-  // `lat`/`lng` are the structured pick behind it, from the Penang-scoped
-  // location picker.
+  // Stage 5 - service profile. `coverageArea` mirrors `Region.label`; the rest is the structured pick.
   String? category;
   String coverageArea = '';
   String? districtCode;
   String? town;
   double? lat;
   double? lng;
-  String hourlyRate = '';
   List<String> portfolioImageUrls = [];
 
-  // Stage 6 - payout details. `accountNumber` is held only in memory while the
-  // form is open; only its last 4 digits are ever persisted (see toMap).
-  String bankName = '';
-  String accountHolder = '';
-  String accountNumber = '';
-  String branchCode = '';
-
-  /// The only part of the account number we store - the full number never
-  /// reaches Firestore (the `users` doc is readable by any signed-in user).
-  String get accountLast4 => accountNumber.length >= 4
-      ? accountNumber.substring(accountNumber.length - 4)
-      : '';
-
-  /// Sensitive identity photos - stored in the owner+admin-only
-  /// `users/{uid}/private/verification` doc, never in the world-readable
-  /// `onboarding` map.
+  /// Sensitive fields, stored in owner+admin-only `private/verification`.
   Map<String, dynamic> privateMap() => {
         'idDocumentUrl': idDocumentUrl,
         'selfieUrl': selfieUrl,
         'ssmDocumentUrl': ssmDocumentUrl,
+        'icNumber': icNumber,
+        'idFaceBox': idFaceBox?.toMap(),
+        'selfieFaceBox': selfieFaceBox?.toMap(),
+        'idConsentAt': idConsentAt,
         'ssmNumber': ssmNumber,
         'ssmNumberNormalized': ssmNumberNormalized,
-      };
-
-  /// Payout bank details - stored in the owner+admin-only
-  /// `users/{uid}/private/payout` doc, never in the world-readable
-  /// `onboarding` map (the full account number never reaches Firestore at
-  /// all; only its last 4 digits are persisted).
-  Map<String, dynamic> payoutMap() => {
-        'bankName': bankName,
-        'accountHolder': accountHolder,
-        'accountLast4': accountLast4,
-        'branchCode': branchCode,
       };
 
   Map<String, dynamic> toMap() => {
         'step': step,
         'providerType': providerType?.name,
+        'idDocumentType': idDocumentType.name,
         'businessName': businessName,
         'displayName': displayName,
         'bio': bio,
@@ -120,7 +102,6 @@ class OnboardingData {
         'town': town,
         'lat': lat,
         'lng': lng,
-        'hourlyRate': hourlyRate,
         'portfolioImageUrls': portfolioImageUrls,
       };
 
@@ -135,6 +116,8 @@ class OnboardingData {
       ..step = (map['step'] as num?)?.toInt().clamp(firstStep, lastStep) ??
           firstStep
       ..providerType = ProviderType.fromStorage(map['providerType'] as String?)
+      ..idDocumentType =
+          IdDocumentType.fromStorage(map['idDocumentType'] as String?)
       ..idDocumentUrl = map['idDocumentUrl'] as String?
       ..selfieUrl = map['selfieUrl'] as String?
       ..businessName = map['businessName'] as String? ?? ''
@@ -149,12 +132,7 @@ class OnboardingData {
       ..town = map['town'] as String?
       ..lat = (map['lat'] as num?)?.toDouble()
       ..lng = (map['lng'] as num?)?.toDouble()
-      ..hourlyRate = map['hourlyRate'] as String? ?? ''
-      ..portfolioImageUrls = strings(map['portfolioImageUrls'])
-      ..bankName = map['bankName'] as String? ?? ''
-      ..accountHolder = map['accountHolder'] as String? ?? ''
-      ..accountNumber = map['accountNumber'] as String? ?? ''
-      ..branchCode = map['branchCode'] as String? ?? '';
+      ..portfolioImageUrls = strings(map['portfolioImageUrls']);
     return data;
   }
 }

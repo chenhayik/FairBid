@@ -3,11 +3,9 @@ import 'package:provider/provider.dart';
 
 import 'auth_controller.dart';
 
-/// Shown to a user whose account an admin has suspended. The router redirects
-/// every other route here, so it stands in for the whole app; it offers only
-/// sign-out. An admin reinstates the account, after which the live profile
-/// stream clears [AppUser.suspended] and the router lets the user back in
-/// automatically - no re-login needed.
+/// What:   Full-app lock screen for a suspended account.
+/// Input:  [AuthController.user] suspensionReason; the router redirects every route here.
+/// Output: Message and Sign Out; reinstatement clears it live via the profile stream.
 class SuspendedScreen extends StatelessWidget {
   const SuspendedScreen({super.key});
 

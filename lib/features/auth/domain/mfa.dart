@@ -1,22 +1,16 @@
-/// A second factor the user has enrolled (currently always an authenticator
-/// app). [uid] is the stable id used to build a sign-in assertion.
+/// What:   An enrolled second factor (always an authenticator app).
+/// Input:  Firebase MultiFactorInfo via FirebaseAuthRepository.enrolledFactors().
+/// Output: [uid] used to build a sign-in assertion.
 class MfaFactor {
-  const MfaFactor({
-    required this.uid,
-    required this.displayName,
-    this.enrolledAt,
-  });
+  const MfaFactor({required this.uid});
 
   final String uid;
-  final String displayName;
-  final DateTime? enrolledAt;
 }
 
-/// A TOTP secret mid-enrolment: what to show the user, plus an opaque
-/// [handle] holding Firebase's secret object, passed back to complete it.
-///
-/// Not persistable - the handle only lives in memory, so enrolment must
-/// finish in one session (see the security screen).
+/// What:   A TOTP secret mid-enrolment.
+/// Input:  FirebaseAuthRepository.startTotpEnrollment().
+/// Output: Key and QR URL to show; the opaque [handle] is passed back to complete it.
+/// Notes:  The handle lives in memory only, so enrolment must finish in one session.
 class TotpEnrollment {
   const TotpEnrollment({
     required this.secretKey,
@@ -33,18 +27,18 @@ class TotpEnrollment {
   final Object handle;
 }
 
-/// A sign-in or re-auth blocked pending a second factor. [resolver] is
-/// Firebase's resolver, opaque to the UI; reuse the same challenge across
-/// retries rather than restarting sign-in.
+/// What:   A sign-in or re-auth blocked pending a second factor.
+/// Input:  Firebase's resolver, opaque to the UI.
+/// Output: Reuse the same challenge across retries rather than restarting sign-in.
 class MfaChallenge {
-  const MfaChallenge({required this.hints, required this.resolver});
+  const MfaChallenge({required this.resolver});
 
-  final List<MfaFactor> hints;
   final Object resolver;
 }
 
-/// Thrown instead of an [AuthException] when a sign-in or re-auth needs a
-/// second factor. Carries the [challenge] the UI must resolve.
+/// What:   Thrown instead of [AuthException] when a second factor is needed.
+/// Input:  Raised by FirebaseAuthRepository._guardValue.
+/// Output: Carries the [challenge] the UI must resolve.
 class MfaRequiredException implements Exception {
   const MfaRequiredException(this.challenge);
   final MfaChallenge challenge;

@@ -5,12 +5,15 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/face_crop.dart';
+import '../../onboarding/domain/id_extract.dart';
 import '../data/verification_repository.dart';
 import '../domain/pending_verification.dart';
 import 'widgets/document_gallery.dart';
 
-/// The review screen an admin opens from the queue. Shows the applicant's
-/// profile and uploaded documents, then records an Approve / Reject decision.
+/// What:   Admin review screen for one applicant.
+/// Input:  [verification] from the queue; identity photos and the ID check via VerificationRepository.
+/// Output: Profile, documents, face comparison and ID checks; Approve / Reject calls decide() then pops.
 class VerificationDetailScreen extends StatefulWidget {
   const VerificationDetailScreen({super.key, required this.verification});
 
@@ -24,38 +27,27 @@ class VerificationDetailScreen extends StatefulWidget {
 class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
   bool _busy = false;
   late final Future<List<VerificationDocument>> _identityDocs;
+  late final Future<IdExtract?> _idExtract;
 
   PendingVerification get v => widget.verification;
 
   @override
   void initState() {
     super.initState();
-    // The sensitive ID/selfie photos live in the applicant's private doc.
     _identityDocs =
         context.read<VerificationRepository>().loadIdentityDocuments(v.uid);
+    _idExtract = context.read<VerificationRepository>().loadIdExtract(v.uid);
   }
 
   Future<void> _approve() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Approve verification?'),
-        content: Text(
-            '${v.displayName} will be granted verified marketplace access'
-            '${v.isProvider ? ' and can start bidding on jobs' : ''}.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Approve'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Approve verification?',
+      body: '${v.displayName} will be granted verified marketplace access'
+          '${v.isProvider ? ' and can start bidding on jobs' : ''}.',
+      actionLabel: 'Approve',
     );
-    if (confirmed == true) {
+    if (confirmed) {
       await _decide(approved: true);
     }
   }
@@ -65,15 +57,14 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
       context: context,
       builder: (context) => const _RejectReasonDialog(),
     );
-    // Null → the admin cancelled; a string (possibly empty) → proceed.
+    // Null means cancelled; an empty string is a valid "no reason".
     if (reason != null) {
       await _decide(approved: false, reason: reason);
     }
   }
 
   Future<void> _decide({required bool approved, String? reason}) async {
-    // Capture the messenger before the async gap and the pop, so the snackbar
-    // shows on the queue (this screen's context is gone once we pop).
+    // Captured early: this screen's context is gone after the pop, and the snackbar belongs on the queue.
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
@@ -119,8 +110,7 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
                     builder: (context, snap) {
                       final loading =
                           snap.connectionState == ConnectionState.waiting;
-                      // Identity photos first (the ones that matter most),
-                      // then the public certificates/portfolio.
+                      // Identity photos first, then public certificates and portfolio.
                       final all = [
                         ...?snap.data,
                         ...v.documents,
@@ -128,6 +118,7 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          _FaceComparisonCard(documents: snap.data ?? const []),
                           Row(
                             children: [
                               Expanded(
@@ -160,6 +151,16 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
                     },
                   ),
                   const SizedBox(height: 24),
+                  Text('Automated ID checks', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  FutureBuilder<IdExtract?>(
+                    future: _idExtract,
+                    builder: (context, snap) => _IdChecksCard(
+                      extract: snap.data,
+                      loading: snap.connectionState == ConnectionState.waiting,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
                   const InfoBanner(
                     icon: Icons.gpp_good_outlined,
                     title: 'Before you decide',
@@ -179,7 +180,109 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
   }
 }
 
-/// Sticky bottom action bar with the two decision buttons.
+/// ID face beside selfie face for a visual match; hidden unless both photos exist.
+class _FaceComparisonCard extends StatelessWidget {
+  const _FaceComparisonCard({required this.documents});
+
+  final List<VerificationDocument> documents;
+
+  VerificationDocument? _find(String label) =>
+      documents.where((d) => d.label == label).firstOrNull;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = _find(VerificationDocument.idLabel);
+    final selfie = _find(VerificationDocument.selfieLabel);
+    if (id == null || selfie == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    Widget face(String label, VerificationDocument d, double size) => Column(
+          children: [
+            FaceCrop(url: d.url, box: d.faceBox, size: size),
+            const SizedBox(height: 6),
+            Text(label, style: theme.textTheme.labelLarge),
+          ],
+        );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Face comparison', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text('Compare the two faces before approving.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 12),
+            // Each crop is half the card's width.
+            LayoutBuilder(builder: (context, constraints) {
+              const gap = 12.0;
+              final size = (constraints.maxWidth - gap) / 2;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  face('On ID', id, size),
+                  const SizedBox(width: gap),
+                  face('Selfie', selfie, size),
+                ],
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The server's advisory MyKad check; the admin decides.
+class _IdChecksCard extends StatelessWidget {
+  const _IdChecksCard({required this.extract, required this.loading});
+
+  final IdExtract? extract;
+  final bool loading;
+
+  static String _tri(bool? v, String yes, String no) =>
+      v == null ? 'Unknown' : (v ? yes : no);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final e = extract;
+    if (e == null) {
+      return AppCard(
+        child: Text(loading ? 'Loading…' : 'No automated check yet',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+      );
+    }
+    final (label, color) = switch (e.verdict) {
+      IdVerdict.passed => ('Passed', context.fairbid.successText),
+      IdVerdict.needsReview => ('Needs review', context.fairbid.warningText),
+      IdVerdict.rejected => ('Rejected', context.fairbid.danger),
+    };
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PillBadge(label: label, color: color),
+          const SizedBox(height: 12),
+          ..._keyValueRows([
+            ('IC number', e.maskedIc ?? 'Not read'),
+            ('Age', _tri(e.ageOk, '18 or older', 'Under 18')),
+            ('Name', _tri(e.nameMatches, 'Matches account', 'Does not match')),
+            ('Gender', _tri(e.genderConsistent, 'Consistent', 'Inconsistent')),
+          ], 8),
+          for (final f in e.failures) ...[
+            const SizedBox(height: 8),
+            Text('• ${idFailureLabel(f)}', style: theme.textTheme.bodySmall),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Sticky bottom bar with Reject and Approve.
 class _DecisionBar extends StatelessWidget {
   const _DecisionBar({
     required this.busy,
@@ -228,7 +331,7 @@ class _DecisionBar extends StatelessWidget {
   }
 }
 
-/// Avatar, name, role pill and submission metadata.
+/// Avatar, name, role pill and submission details.
 class _ApplicantHeader extends StatelessWidget {
   const _ApplicantHeader({required this.item});
 
@@ -330,7 +433,7 @@ class _MetaRow extends StatelessWidget {
   }
 }
 
-/// Profile fields captured during onboarding, rendered as labelled rows.
+/// Onboarding profile fields as labelled rows.
 class _DetailsCard extends StatelessWidget {
   const _DetailsCard({required this.item});
 
@@ -340,22 +443,15 @@ class _DetailsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final rows = <(String, String)>[
-      if (item.phone != null && item.phone!.isNotEmpty)
-        ('Phone', item.phone!),
-      if (item.location != null && item.location!.isNotEmpty)
-        ('Location', item.location!),
-      if (item.category != null && item.category!.isNotEmpty)
-        ('Service', item.category!),
-      if (item.coverageArea != null && item.coverageArea!.isNotEmpty)
-        ('Coverage', item.coverageArea!),
-      if (item.hourlyRate != null && item.hourlyRate!.isNotEmpty)
-        ('Hourly Rate', 'RM ${item.hourlyRate}'),
-      if (item.companyName != null && item.companyName!.isNotEmpty)
-        ('Company', item.companyName!),
-      if (item.ssmNumber != null && item.ssmNumber!.isNotEmpty)
-        ('SSM No.', item.ssmNumber!),
-      if (item.bankName != null && item.bankName!.isNotEmpty)
-        ('Payout Bank', item.bankName!),
+      for (final (label, value) in [
+        ('Phone', item.phone),
+        ('Location', item.location),
+        ('Service', item.category),
+        ('Coverage', item.coverageArea),
+        ('Company', item.companyName),
+        ('SSM No.', item.ssmNumber),
+      ])
+        if (value != null && value.isNotEmpty) (label, value),
     ];
 
     return AppCard(
@@ -366,10 +462,7 @@ class _DetailsCard extends StatelessWidget {
             Text('No additional profile details were provided.',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          for (var i = 0; i < rows.length; i++) ...[
-            if (i > 0) const SizedBox(height: 12),
-            _KeyValue(label: rows[i].$1, value: rows[i].$2),
-          ],
+          ..._keyValueRows(rows, 12),
           if (item.skills.isNotEmpty) ...[
             if (rows.isNotEmpty) const SizedBox(height: 16),
             Text('SKILLS', style: theme.textTheme.labelMedium),
@@ -395,6 +488,14 @@ class _DetailsCard extends StatelessWidget {
     );
   }
 }
+
+/// [rows] as `_KeyValue`s separated by [gap].
+List<Widget> _keyValueRows(List<(String, String)> rows, double gap) => [
+      for (final (i, (label, value)) in rows.indexed) ...[
+        if (i > 0) SizedBox(height: gap),
+        _KeyValue(label: label, value: value),
+      ],
+    ];
 
 class _KeyValue extends StatelessWidget {
   const _KeyValue({required this.label, required this.value});
@@ -424,8 +525,7 @@ class _KeyValue extends StatelessWidget {
   }
 }
 
-/// Reject dialog with an optional reason. Returns the reason string on confirm
-/// (empty allowed) or null on cancel.
+/// Reject dialog with an optional reason; pops the text on confirm, null on cancel.
 class _RejectReasonDialog extends StatefulWidget {
   const _RejectReasonDialog();
 

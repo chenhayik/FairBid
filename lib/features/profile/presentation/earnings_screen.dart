@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/config/platform_config.dart';
@@ -11,18 +14,20 @@ import '../../../core/widgets/app_widgets.dart';
 import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/reauth_dialog.dart';
+import '../../jobs/data/job_repository.dart';
 import '../../jobs/data/milestone_repository.dart';
+import '../../jobs/domain/job.dart';
 import '../../jobs/domain/milestone.dart';
 import '../../wallet/data/wallet_repository.dart';
 import '../../wallet/domain/ledger_entry.dart';
+import '../../wallet/domain/payout_method.dart';
+import '../../wallet/presentation/payout_method_screen.dart';
 import '../../wallet/presentation/toyyibpay_webview_screen.dart';
 import '../../wallet/presentation/wallet_amount_sheet.dart';
 
-/// The wallet screen. Providers see Earnings & Payouts - Available (with
-/// Withdraw), In Escrow and Total Earnings from their milestones, and their
-/// payout method. Requestors see their wallet with a real toyyibPay
-/// (sandbox) Top Up - plus a demo top-up kept around for testing without the
-/// gateway. Both share the transaction history.
+/// What:   Wallet screen: Earnings & payouts for providers, My wallet for requestors.
+/// Input:  WalletRepository (ledger, payout method), MilestoneRepository / JobRepository for escrow figures.
+/// Output: Providers: Available with Withdraw, In escrow, Total earnings, payout method. Requestors: toyyibPay (sandbox) Top Up, optional demo top-up, held-in-escrow card. Both: transaction history.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 
@@ -31,9 +36,22 @@ class EarningsScreen extends StatefulWidget {
 }
 
 class _EarningsScreenState extends State<EarningsScreen> {
-  // Cached so rebuilds don't resubscribe to Firestore.
+  // Created once so rebuilds don't resubscribe.
   Stream<List<LedgerEntry>>? _transactions;
   Stream<List<Milestone>>? _milestones;
+
+  /// Where withdrawals go; null until set up.
+  PayoutMethod? _payout;
+
+  /// The client's own jobs, to show how much is held for them.
+  Stream<List<Job>>? _myJobs;
+  StreamSubscription<PayoutMethod?>? _payoutSub;
+
+  @override
+  void dispose() {
+    _payoutSub?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -45,20 +63,46 @@ class _EarningsScreenState extends State<EarningsScreen> {
     if (user.role == UserRole.provider) {
       _milestones =
           context.read<MilestoneRepository>().watchProviderMilestones(user.uid);
+    } else if (user.role == UserRole.requestor) {
+      _myJobs = context.read<JobRepository>().watchMyJobs(user.uid);
+    }
+    if (user.role != UserRole.admin) {
+      _payoutSub = context
+          .read<WalletRepository>()
+          .watchPayoutMethod(user.uid)
+          .listen((m) => setState(() => _payout = m));
     }
   }
 
-  /// Runs after a successful top-up/withdraw so the Available figure (read
-  /// from the profile) reflects the new balance immediately.
+  /// Asks for a payout method before the first withdrawal.
+  Future<void> _askForPayoutMethod() async {
+    final add = await showConfirmDialog(
+      context,
+      title: 'Where should we send it?',
+      body: 'Add a DuitNow ID or bank account before your first withdrawal.',
+      cancelLabel: 'Not now',
+      actionLabel: 'Add payout method',
+    );
+    if (add && mounted) await PayoutMethodScreen.open(context);
+  }
+
+  /// Re-reads the profile so Available reflects a new balance at once.
   Future<void> _refreshBalance() =>
       context.read<AuthController>().refreshUser();
 
   Future<void> _withdraw(int balanceSen) async {
     final user = context.read<AuthController>().user;
     if (user == null) return;
+    final payout = _payout;
+    if (payout == null) return _askForPayoutMethod();
+    if (payout.onHold()) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('You changed your payout method, so withdrawals '
+              'resume ${DateFormat('d MMM, h:mm a').format(payout.availableAt!)}.')));
+      return;
+    }
 
-    // Step up before money leaves the account: a stolen unlocked phone
-    // shouldn't be enough to drain a wallet.
+    // Step-up auth: an unlocked stolen phone shouldn't drain the wallet.
     final confirmed = await ReauthDialog.show(
       context,
       user: user,
@@ -72,7 +116,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final ok = await WalletAmountSheet.show(
       context,
       title: 'Withdraw',
-      subtitle: 'Move money from your FairBid balance to your bank account.',
+      subtitle: 'Sent to ${payout.masked}. Demo: no real transfer is made.',
       actionLabel: 'Withdraw',
       maxSen: balanceSen,
       onSubmit: (sen) async {
@@ -85,19 +129,13 @@ class _EarningsScreenState extends State<EarningsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
-              '${formatRm(amountSen ?? 0)} withdrawn to your bank account.')));
+              '${formatRm(amountSen ?? 0)} sent to ${payout.masked} (demo).')));
     }
   }
 
-  /// Real top-up: asks for an amount, creates a toyyibPay (sandbox) bill and
-  /// opens its hosted payment page in a WebView. The wallet balance only
-  /// updates once the server independently confirms the bill was paid - the
-  /// WebView returning is just a UX cue, never trusted on its own - so this
-  /// reconciles with the server immediately after, as a backstop for a
-  /// webhook toyyibPay hasn't delivered yet. The WebView's return status is
-  /// only ever used to pick which copy to show below (cancelled vs.
-  /// attempted); [WalletRepository.reconcileTopUp] is the sole source of
-  /// truth for whether money actually moved.
+  /// Top-up: asks for an amount, opens a toyyibPay (sandbox) bill in a WebView, then reconciles with
+  /// the server (backstop for a missed webhook). The WebView status only picks the copy;
+  /// [WalletRepository.reconcileTopUp] decides whether money moved.
   Future<void> _topUp() async {
     final wallet = context.read<WalletRepository>();
     String? billCode;
@@ -105,7 +143,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
     int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
-      title: 'Top Up Wallet',
+      title: 'Top up wallet',
       subtitle: 'Pay by FPX or online banking (toyyibPay sandbox).',
       actionLabel: 'Continue to Payment',
       maxSen: PlatformConfig.maxTopUpSen,
@@ -127,10 +165,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
     logPayment('topup.webview.returned',
         data: {'billCode': billCode, 'statusHint': status?.name});
 
-    // The user backed out before the browser ever reached toyyibPay's return
-    // URL: most likely nothing was attempted, so there is nothing to
-    // reconcile - reconciling anyway would just report "not paid" and read
-    // as a false alarm.
+    // Backed out before the return URL: nothing to reconcile (it would read as a false alarm).
     if (status == null || status == ToyyibpayReturnStatus.cancelled) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Payment cancelled. Nothing was charged.')));
@@ -142,21 +177,13 @@ class _EarningsScreenState extends State<EarningsScreen> {
     bool credited;
     try {
       credited = await wallet.reconcileTopUp(billCode!);
-    } on FirebaseFunctionsException catch (e) {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          e.message ??
+          (e is FirebaseFunctionsException ? e.message : null) ??
               "Couldn't confirm your payment. If you were charged, it will "
                   'appear in your transaction history automatically once '
                   "processed. Don't pay again.")));
-      return;
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              "Couldn't confirm your payment. If you were charged, it will "
-              'appear in your transaction history automatically once '
-              "processed. Don't pay again.")));
       return;
     }
 
@@ -175,16 +202,15 @@ class _EarningsScreenState extends State<EarningsScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Demo-only top-up standing in for the gateway (kept for testing without
-  /// driving the real toyyibPay flow); untouched by the change above.
+  /// Demo top-up for testing without the real gateway.
   Future<void> _topUpDemo() async {
     final wallet = context.read<WalletRepository>();
     int? amountSen;
     final ok = await WalletAmountSheet.show(
       context,
-      title: 'Demo Top Up',
+      title: 'Demo top up',
       subtitle: 'Demo top-up: this stands in for a payment gateway.',
-      actionLabel: 'Top Up',
+      actionLabel: 'Top up',
       maxSen: PlatformConfig.maxTopUpSen,
       onSubmit: (sen) async {
         await wallet.topUp(sen);
@@ -210,13 +236,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
 
     return Scaffold(
       appBar:
-          AppBar(title: Text(isProvider ? 'Earnings & Payouts' : 'My Wallet')),
+          AppBar(title: Text(isProvider ? 'Earnings & payouts' : 'My wallet')),
       body: SafeArea(
-        // The top-up failure copy tells users their payment will show up here,
-        // and people reach for a pull-to-refresh at exactly that moment. The
-        // balance and ledger are live streams so this is mostly reassurance,
-        // but an unresponsive pull right after paying reads as "my money is
-        // gone". AlwaysScrollable so the gesture works on a short list too.
+        // Pull-to-refresh is mostly reassurance (the data is live) but is expected right after paying.
         child: RefreshIndicator(
           onRefresh: _refreshBalance,
           child: ListView(
@@ -225,9 +247,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
             children: [
             _AvailableCard(
               balanceSen: user.walletBalanceSen,
-              actionLabel: isProvider ? 'Withdraw' : 'Top Up',
+              actionLabel: isProvider ? 'Withdraw' : 'Top up',
               onAction: isProvider
-                  ? () => _withdraw(user.walletBalanceSen)
+                  ? () => _withdraw(user.availableBalanceSen)
                   : _topUp,
             ),
             if (!isProvider && PlatformConfig.demoTopUpEnabled) ...[
@@ -243,12 +265,21 @@ class _EarningsScreenState extends State<EarningsScreen> {
             if (isProvider) ...[
               const SizedBox(height: 16),
               _EscrowStats(stream: _milestones),
-              const SizedBox(height: 16),
-              _PayoutMethodCard(
-                bankName: user.payoutBankName,
-                accountLast4: user.payoutAccountLast4,
+            ] else ...[
+              const SizedBox(height: 8),
+              // Refunds land here, so clients can take money back out too.
+              SecondaryButton(
+                label: 'Withdraw',
+                onPressed: () => _withdraw(user.availableBalanceSen),
               ),
+              const SizedBox(height: 16),
+              _HeldForJobsCard(stream: _myJobs),
             ],
+            const SizedBox(height: 16),
+            _PayoutMethodCard(
+              method: _payout,
+              onEdit: () => PayoutMethodScreen.open(context),
+            ),
             const SizedBox(height: 16),
             _TransactionHistoryCard(stream: _transactions, myUid: user.uid),
             ],
@@ -305,8 +336,7 @@ class _AvailableCard extends StatelessWidget {
   }
 }
 
-/// In Escrow (funded + delivered milestones) and Total Earnings (released),
-/// summed live from the provider's milestones across all their jobs.
+/// In Escrow (funded + submitted) and Total Earnings (released), summed from the provider's milestones.
 class _EscrowStats extends StatelessWidget {
   const _EscrowStats({required this.stream});
   final Stream<List<Milestone>>? stream;
@@ -325,46 +355,31 @@ class _EscrowStats extends StatelessWidget {
             ),
           );
         }
-        // Without this, the first frame renders "RM 0.00" for both figures,
-        // so a provider opening the wallet is briefly told their escrowed
-        // money is zero. Dashes match the stat cards on provider home.
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Column(
-            children: [
-              StatCard(
-                label: 'In Escrow',
-                value: '-',
-                icon: Icons.lock_outline,
-              ),
-              SizedBox(height: 12),
-              StatCard(label: 'Total Earnings', value: '-'),
-            ],
-          );
-        }
-        final milestones = snapshot.data ?? [];
+        // Dashes while loading, so RM 0.00 isn't shown as fact.
+        final loading = snapshot.connectionState == ConnectionState.waiting;
+        final milestones = loading ? const <Milestone>[] : snapshot.data ?? [];
         int inEscrowSen = 0, earnedSen = 0;
         for (final m in milestones) {
           switch (m.status) {
             case MilestoneStatus.funded || MilestoneStatus.submitted:
               inEscrowSen += m.amountSen;
-            // A dispute won by the provider now writes `released` (counted
-            // above). `resolved` only appears on legacy documents from before
-            // that change; count it here so a past dispute win still shows up.
+            // `resolved` only exists on legacy dispute wins.
             case MilestoneStatus.released || MilestoneStatus.resolved:
               earnedSen += m.amountSen;
             default:
               break;
           }
         }
+        String show(int sen) => loading ? '-' : formatRm(sen);
         return Column(
           children: [
             StatCard(
-              label: 'In Escrow',
-              value: formatRm(inEscrowSen),
+              label: 'In escrow',
+              value: show(inEscrowSen),
               icon: Icons.lock_outline,
             ),
             const SizedBox(height: 12),
-            StatCard(label: 'Total Earnings', value: formatRm(earnedSen)),
+            StatCard(label: 'Total earnings', value: show(earnedSen)),
           ],
         );
       },
@@ -372,55 +387,92 @@ class _EscrowStats extends StatelessWidget {
   }
 }
 
-class _PayoutMethodCard extends StatelessWidget {
-  const _PayoutMethodCard({this.bankName, this.accountLast4});
+/// Money a client has in escrow for in-progress jobs.
+class _HeldForJobsCard extends StatelessWidget {
+  const _HeldForJobsCard({required this.stream});
+  final Stream<List<Job>>? stream;
 
-  final String? bankName;
-  final String? accountLast4;
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Job>>(
+      stream: stream,
+      builder: (context, snapshot) {
+        // A job is paid in full at award and holds its whole price until released.
+        final heldSen = (snapshot.data ?? const <Job>[])
+            .where((j) => j.status == JobStatus.inProgress)
+            .fold<int>(0, (sum, j) => sum + (j.acceptedBidAmountSen ?? 0));
+        return StatCard(
+          label: 'Held in escrow for your jobs',
+          value: snapshot.hasData ? formatRm(heldSen) : '-',
+          icon: Icons.lock_outline,
+        );
+      },
+    );
+  }
+}
+
+class _PayoutMethodCard extends StatelessWidget {
+  const _PayoutMethodCard({required this.method, required this.onEdit});
+
+  final PayoutMethod? method;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasMethod = bankName != null && bankName!.isNotEmpty;
+    final muted = theme.textTheme.bodyMedium
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final m = method;
 
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Payout Method', style: theme.textTheme.titleLarge),
-          const SizedBox(height: 16),
-          if (hasMethod)
+          Row(
+            children: [
+              Expanded(
+                child: Text('Payout method', style: theme.textTheme.titleLarge),
+              ),
+              TextButton(
+                onPressed: onEdit,
+                child: Text(m == null ? 'Add' : 'Change'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (m == null)
+            Text('Not set up yet. Add a DuitNow ID or bank account before '
+                'your first withdrawal.', style: muted)
+          else
             Row(
               children: [
                 CircleAvatar(
                   backgroundColor: context.fairbid.subtleBlue,
-                  child: Icon(Icons.account_balance,
-                      color: context.fairbid.verified),
+                  child: Icon(
+                    m.isDuitNow ? Icons.qr_code_2 : Icons.account_balance,
+                    color: context.fairbid.verified,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(bankName!, style: theme.textTheme.bodyLarge),
-                      if (accountLast4 != null)
-                        Text('•••• $accountLast4',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant)),
+                      Text(m.masked, style: theme.textTheme.bodyLarge),
+                      Text(m.holderName, style: muted),
+                      if (m.onHold())
+                        Text(
+                          'Usable from '
+                          '${DateFormat('d MMM, h:mm a').format(m.availableAt!)}'
+                          ' (24-hour safety hold).',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: context.fairbid.warningText),
+                        ),
                     ],
                   ),
                 ),
-                PillBadge(
-                  label: 'Verified',
-                  icon: Icons.verified,
-                  color: context.fairbid.verified,
-                ),
               ],
-            )
-          else
-            Text('Not set',
-                style: theme.textTheme.bodyLarge
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            ),
         ],
       ),
     );
@@ -439,7 +491,7 @@ class _TransactionHistoryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Transaction History', style: theme.textTheme.titleLarge),
+          Text('Transaction history', style: theme.textTheme.titleLarge),
           const SizedBox(height: 8),
           StreamBuilder<List<LedgerEntry>>(
             stream: stream,
@@ -451,8 +503,7 @@ class _TransactionHistoryCard extends StatelessWidget {
                   message: 'Please check your connection and try again.',
                 );
               }
-              // Check loading before empty, otherwise "No transactions yet"
-              // is asserted as fact while the ledger is still arriving.
+              // Loading before empty, so "No transactions yet" isn't asserted early.
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24),
@@ -495,6 +546,7 @@ class _TransactionRow extends StatelessWidget {
       LedgerType.release => Icons.handshake_outlined,
       LedgerType.topup => Icons.add_card_outlined,
       LedgerType.withdraw => Icons.account_balance_outlined,
+      LedgerType.refund => Icons.undo_rounded,
       LedgerType.disputeRelease ||
       LedgerType.disputeRefund =>
         Icons.gavel_rounded,

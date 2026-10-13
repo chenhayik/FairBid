@@ -3,14 +3,9 @@ import 'package:go_router/go_router.dart';
 
 import 'user_avatar.dart';
 
-/// A tappable user identity - avatar, name and an optional subtitle (e.g.
-/// `★4.8 (12) · Verified`) - that pushes `/users/{uid}` on tap. The app's one
-/// reusable entry point into a public profile, used from a bid card's
-/// identity row, a chat thread's app-bar title and a review's author name.
-///
-/// [showAvatar] and [showChevron] can be turned off for compact, text-only
-/// contexts (e.g. a reviewer's name inline in `ReviewCard`) while keeping the
-/// same tap target and navigation everywhere else.
+/// What:   Tappable user identity (avatar, name, optional subtitle) and the app's one entry into a public profile.
+/// Input:  [uid], [name], optional [photoUrl] and [subtitle]; [showAvatar] / [showChevron] allow compact text-only use.
+/// Output: Pushes `/users/{uid}` on tap.
 class UserChip extends StatelessWidget {
   const UserChip({
     super.key,
@@ -22,24 +17,24 @@ class UserChip extends StatelessWidget {
     this.showAvatar = true,
     this.showChevron = true,
     this.nameStyle,
+    this.subtitleMaxLines = 1,
   });
 
-  /// The profile this chip opens, via `/users/$uid`.
   final String uid;
   final String name;
   final String? photoUrl;
 
-  /// A short second line under the name, e.g. a trust label. Null hides it.
+  /// Second line under the name, e.g. a trust label; null hides it.
   final String? subtitle;
 
-  /// Passed straight to the inner [UserAvatar]; null uses its default.
   final double? avatarRadius;
   final bool showAvatar;
   final bool showChevron;
 
-  /// Style for the name line. Null defers to the ambient text style, so this
-  /// reads correctly dropped straight into an `AppBar` title.
+  /// Name style; null uses the ambient style (right for an AppBar title).
   final TextStyle? nameStyle;
+
+  final int subtitleMaxLines;
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +65,7 @@ class UserChip extends StatelessWidget {
                   if (subtitle != null)
                     Text(
                       subtitle!,
-                      maxLines: 1,
+                      maxLines: subtitleMaxLines,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,

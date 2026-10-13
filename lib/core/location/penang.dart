@@ -1,35 +1,30 @@
 import 'package:flutter_map/flutter_map.dart' show LatLngBounds;
 import 'package:latlong2/latlong.dart';
 
-/// FairBid is scoped to Penang for this launch: country and state are fixed
-/// constants rather than user input.
+// FairBid is Penang-only, so country and state are constants.
 const kCountry = 'Malaysia';
 const kState = 'Penang';
 
-/// One of Penang's 5 administrative districts: a stable [code] used in
-/// storage plus its English and Malay display names.
+/// What:   One of Penang's 5 districts.
+/// Input:  [kPenangDistricts].
+/// Output: A stored [code] and the Malay display name.
 class PenangDistrict {
-  const PenangDistrict(this.code, this.nameEn, this.nameMs);
+  const PenangDistrict(this.code, this.nameMs);
 
-  /// Stable short code - never shown to the user, only stored.
+  /// Stored code, never shown.
   final String code;
-  final String nameEn;
   final String nameMs;
 }
 
-/// Penang's 5 districts. Order matches the plan's TL/BD/SPU/SPT/SPS listing.
 const kPenangDistricts = [
-  PenangDistrict('TL', 'Northeast', 'Timur Laut'),
-  PenangDistrict('BD', 'Southwest', 'Barat Daya'),
-  PenangDistrict('SPU', 'North Seberang Perai', 'Seberang Perai Utara'),
-  PenangDistrict('SPT', 'Central Seberang Perai', 'Seberang Perai Tengah'),
-  PenangDistrict('SPS', 'South Seberang Perai', 'Seberang Perai Selatan'),
+  PenangDistrict('TL', 'Timur Laut'),
+  PenangDistrict('BD', 'Barat Daya'),
+  PenangDistrict('SPU', 'Seberang Perai Utara'),
+  PenangDistrict('SPT', 'Seberang Perai Tengah'),
+  PenangDistrict('SPS', 'Seberang Perai Selatan'),
 ];
 
-/// Each district's administrative seat: the point used both to build
-/// [kPenangDistricts]' assignment in the shipped GeoJSON (see
-/// `assets/geo/penang_districts.geojson`) and as the map's recenter target
-/// when a district is picked without (yet) narrowing to a town.
+/// Each district's seat: the map recenter target when a district is picked without a town.
 const kDistrictCenters = <String, LatLng>{
   'TL': LatLng(5.4141, 100.3288), // George Town
   'BD': LatLng(5.3488, 100.2337), // Balik Pulau
@@ -41,15 +36,13 @@ const kDistrictCenters = <String, LatLng>{
 /// George Town - the picker's default map centre.
 const kGeorgeTown = LatLng(5.4141, 100.3288);
 
-/// The picker's map camera is constrained to this bounding box (see
-/// `CameraConstraint.contain` in `RegionPickerScreen`). Not `const` - flutter_map's
-/// [LatLngBounds] is a plain mutable class, only reachable via its factory.
+/// Bounds the picker's map camera (not const: flutter_map's LatLngBounds is mutable).
 final kPenangBounds = LatLngBounds(
   const LatLng(5.10, 100.15),
   const LatLng(5.60, 100.58),
 );
 
-/// Known towns per district, for the picker's (optional) Town dropdown.
+/// Known towns per district for the picker's Town dropdown.
 const kPenangTowns = <String, List<String>>{
   'TL': [
     'George Town',

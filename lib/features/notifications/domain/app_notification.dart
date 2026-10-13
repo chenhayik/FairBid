@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// What a notification is about - drives its leading icon in the list.
+/// What a notification is about; picks its list icon.
 enum NotificationType {
   bidReceived,
   bidAccepted,
@@ -10,7 +10,8 @@ enum NotificationType {
   dispute,
   payment,
   review,
-  cancellation;
+  cancellation,
+  appointment;
 
   IconData get icon => switch (this) {
         NotificationType.bidReceived => Icons.gavel_rounded,
@@ -22,6 +23,7 @@ enum NotificationType {
         NotificationType.payment => Icons.account_balance_wallet_outlined,
         NotificationType.review => Icons.star_outline,
         NotificationType.cancellation => Icons.cancel_outlined,
+        NotificationType.appointment => Icons.event_outlined,
       };
 
   static NotificationType fromStorage(String? value) => switch (value) {
@@ -33,13 +35,14 @@ enum NotificationType {
         'payment' => NotificationType.payment,
         'review' => NotificationType.review,
         'cancellation' => NotificationType.cancellation,
+        'appointment' => NotificationType.appointment,
         _ => NotificationType.message,
       };
 }
 
-/// One entry in `users/{uid}/notifications`. Read-only on the client - the
-/// Cloud Functions write them (see `notify()` in functions/index.js), so
-/// there is no `toMap()`; the only client-writable field is `read`.
+/// What:   One entry in `users/{uid}/notifications`.
+/// Input:  Doc data via AppNotification.fromMap (notification_repository.dart); written by `notify()` in functions.
+/// Output: Read-only model; the client only flips `read`.
 class AppNotification {
   const AppNotification({
     required this.id,
@@ -56,13 +59,11 @@ class AppNotification {
   final String title;
   final String body;
 
-  /// In-app deep link (e.g. `/jobs/abc123`), or null for no tap-through.
+  /// In-app deep link (e.g. `/jobs/abc123`); null for none.
   final String? route;
   final bool read;
   final DateTime? createdAt;
 
-  /// Builds an [AppNotification] from its doc id and (already
-  /// Timestamp-normalised) data map.
   factory AppNotification.fromMap(String id, Map<String, dynamic> m) =>
       AppNotification(
         id: id,
