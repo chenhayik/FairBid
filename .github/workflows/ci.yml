@@ -149,9 +149,14 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost
           df -h
 
-
       # Debug, not release: signing keystores are deliberately gitignored, so
       # a release build cannot work here without secrets. Debug still exercises
-      # Gradle, AGP, the NDK and plugin registration.
+      # Gradle, AGP, the NDK and plugin registration. One ABI only: a debug
+      # build otherwise packages native libraries for three, which is slower
+      # and uses more of the runner's limited disk for no extra coverage.
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Disk space after build
+        if: always()
+        run: df -h /
