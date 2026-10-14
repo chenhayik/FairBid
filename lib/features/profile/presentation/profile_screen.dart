@@ -345,7 +345,8 @@ class _TrustScoreCard extends StatelessWidget {
             percent: trust?.trackRecordScore ?? 0,
             hint: (trust?.trackRecordScore ?? 0) < 100
                 ? 'Each completed job adds '
-                    '+${PlatformConfig.trackRecordPerJob}.'
+                    '+${PlatformConfig.trackRecordPerJob}; each lost dispute '
+                    'takes off ${PlatformConfig.disputeLostPenalty}.'
                 : null,
           ),
           TrustScoreBar(

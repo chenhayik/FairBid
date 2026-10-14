@@ -50,7 +50,7 @@ class PlatformConfig {
   /// Track record: +[trackRecordPerJob] per completed job up to [trackRecordJobCap]; -[disputeLostPenalty] per dispute lost.
   static const int trackRecordPerJob = 10;
   static const int trackRecordJobCap = 10;
-  static const int disputeLostPenalty = 20;
+  static const int disputeLostPenalty = 10;
 
   /// Verification sub-score while awaiting admin review.
   static const int verificationPendingScore = 40;

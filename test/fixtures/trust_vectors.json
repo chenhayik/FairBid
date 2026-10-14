@@ -41,7 +41,7 @@
       "ratingSum": 25, "ratingCount": 5, "verificationStatus": "approved",
       "jobsCompleted": 5, "disputesLost": 2,
       "hasDisplayName": true, "hasPhone": true, "hasBio": true, "hasPhoto": true, "hasLocation": true,
-      "expected": { "reviewScore": 80, "trackRecordScore": 10, "verificationScore": 100, "profileScore": 100, "composite": 685, "scoreVisible": true }
+      "expected": { "reviewScore": 80, "trackRecordScore": 30, "verificationScore": 100, "profileScore": 100, "composite": 735, "scoreVisible": true }
     },
     {
       "name": "track record clamps at 0 (1 job, 3 disputes lost)",

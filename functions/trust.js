@@ -19,7 +19,7 @@ const PROFILE_WEIGHT_PCT = 10;
 
 const TRACK_RECORD_PER_JOB = 10;
 const TRACK_RECORD_JOB_CAP = 10;
-const DISPUTE_LOST_PENALTY = 20;
+const DISPUTE_LOST_PENALTY = 10;
 const VERIFICATION_PENDING_SCORE = 40;
 
 // The score stays hidden ("New Provider") until admin-approved AND this many
