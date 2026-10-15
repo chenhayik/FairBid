@@ -28,13 +28,32 @@ import '../../features/profile/presentation/public_profile_screen.dart';
 import '../../features/profile/presentation/user_reviews_screen.dart';
 import '../../features/wallet/presentation/payout_method_screen.dart';
 import '../navigation/app_shell.dart';
+import 'package:flutter/foundation.dart';
+
+/// What:   A listenable that fires only when an input to the redirects changes.
+/// Input:  [auth].
+/// Output: Notifies on sign in/out, role, suspension or onboarding changes only.
+/// Notes:  Refreshing the router on every profile edit swallows a pop made in the same frame.
+Listenable _redirectInputs(AuthController auth) {
+  final inputs = ValueNotifier<Object?>(null);
+  void sync() {
+    final user = auth.user;
+    // Records compare by value, so unchanged inputs don't notify.
+    inputs.value = (auth.isInitializing, user?.uid, user?.role,
+    user?.suspended, user?.needsOnboarding);
+  }
+
+  sync();
+  auth.addListener(sync);
+  return inputs;
+}
 
 /// What:   Builds the app's GoRouter.
 /// Input:  [auth]; its changes (sign in/out, onboarding, suspension) re-run the redirects.
 /// Output: Routes for auth, onboarding, pushed screens and the four-tab shell.
 GoRouter buildRouter(AuthController auth) {
   return GoRouter(
-    refreshListenable: auth,
+    refreshListenable: _redirectInputs(auth),
     initialLocation: '/login',
     redirect: (context, state) {
       // Stay put while the first auth state loads.

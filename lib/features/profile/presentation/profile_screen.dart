@@ -74,6 +74,7 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 16),
               ReviewList(
                 uid: user.uid,
+                seeAllCount: user.ratingCount,
                 header: Text('Reviews (${user.ratingCount})',
                     style: Theme.of(context).textTheme.titleLarge),
                 onFlag: (review) => _flagReview(context, user, review),
