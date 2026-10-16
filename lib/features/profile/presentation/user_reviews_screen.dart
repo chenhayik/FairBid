@@ -33,6 +33,9 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
     _loadFirstPage();
   }
 
+  /// What:   Loads the first page of reviews.
+  /// Input:  ReviewRepository.fetchReviewPage() (review_repository.dart), 20 per page.
+  /// Output: Replaces the list; sets the error state on failure.
   Future<void> _loadFirstPage() async {
     setState(() {
       _loading = true;
@@ -60,6 +63,9 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
     }
   }
 
+  /// What:   Loads the next page when the list nears the end.
+  /// Input:  The newest-first cursor from the last review's createdAt.
+  /// Output: Appends the page; stops when a page is short or the cursor is missing.
   Future<void> _loadMore() async {
     if (_loadingMore || !_hasMore || _reviews.isEmpty) return;
     final cursor = _reviews.last.createdAt;
@@ -97,6 +103,9 @@ class _UserReviewsScreenState extends State<UserReviewsScreen> {
     );
   }
 
+  /// What:   The screen body for the current load state.
+  /// Input:  [_loading], [_error] and [_reviews].
+  /// Output: Spinner, error, empty state, or the paged review list.
   Widget _body() {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());

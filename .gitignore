@@ -55,3 +55,8 @@ app.*.map.json
 
 # Claude-generated docs
 docs/*.md
+
+# Local admin script and service-account keys
+functions/mark_verified.js
+*-firebase-adminsdk-*.json
+serviceAccountKey*.json

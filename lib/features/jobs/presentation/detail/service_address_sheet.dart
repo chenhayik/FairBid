@@ -21,6 +21,9 @@ class ServiceAddressSheet extends StatefulWidget {
   /// [defaultCity] beats its city.
   final AddressHint? hint;
 
+  /// What:   Opens the sheet as a modal bottom sheet.
+  /// Input:  Optional [initial] address, [defaultCity] and map [hint].
+  /// Output: Future of the entered ServiceAddress, or null if dismissed.
   static Future<ServiceAddress?> show(
     BuildContext context, {
     ServiceAddress? initial,
@@ -46,10 +49,12 @@ class ServiceAddressSheet extends StatefulWidget {
 class _ServiceAddressSheetState extends State<ServiceAddressSheet> {
   final _formKey = GlobalKey<FormState>();
 
-  // Never overwrite a saved address with the pin's guess.
+  /// What:   The pin's guess to pre-fill the form.
+  /// Output: The hint for a new address only; a saved address is never overwritten.
   AddressHint? get _hint => widget.initial == null ? widget.hint : null;
 
-  // True when the form shows guessed values worth checking.
+  /// What:   Whether the form shows guessed values worth checking.
+  /// Output: True when the hint supplied a street or postcode.
   bool get _prefilled =>
       _hint != null && (_hint!.line1 != null || _hint!.postcode != null);
 
@@ -73,6 +78,8 @@ class _ServiceAddressSheetState extends State<ServiceAddressSheet> {
     super.dispose();
   }
 
+  /// What:   Save button handler.
+  /// Output: Validates the form, then pops with the ServiceAddress (blank optional fields as null).
   void _save() {
     if (!_formKey.currentState!.validate()) return;
     Navigator.of(context).pop(ServiceAddress(

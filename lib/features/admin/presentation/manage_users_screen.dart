@@ -24,7 +24,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
   String _query = '';
   String? _busyUid; // the user whose action is in flight
 
-  /// Opens the reason sheet (null result = cancelled), then suspends.
+  /// What:   Suspends [user] after the admin enters an optional reason.
+  /// Input:  [user] from the list; reason from the _SuspendSheet (null = cancelled).
+  /// Output: Calls UserAdminRepository.setSuspended(suspended: true) via _act.
   Future<void> _suspend(ManagedUser user) async {
     final reason = await showModalBottomSheet<String>(
       context: context,
@@ -43,6 +45,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     );
   }
 
+  /// What:   Reinstates a suspended [user] after a confirm dialog.
+  /// Input:  [user] from the list.
+  /// Output: Calls UserAdminRepository.setSuspended(suspended: false) via _act.
   Future<void> _reinstate(ManagedUser user) async {
     final confirmed = await showConfirmDialog(
       context,
@@ -61,7 +66,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     );
   }
 
-  /// Runs [call] with [uid] marked busy, then shows the [done] or [failed] snackbar.
+  /// What:   Runs one admin action on a user with a busy marker and result snackbar.
+  /// Input:  [uid] of the user; [call] to run; [done] / [failed] snackbar texts.
+  /// Output: Sets _busyUid while [call] runs, then shows [done] or [failed].
   Future<void> _act(
     String uid,
     Future<void> Function() call, {
@@ -82,7 +89,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     }
   }
 
-  /// Confirms, then clears every second factor (recovery for a lost authenticator app).
+  /// What:   Resets [user]'s two-factor after a confirm dialog (lost authenticator recovery).
+  /// Input:  [user] from the list.
+  /// Output: Calls UserAdminRepository.clearMfa(uid) via _act.
   Future<void> _clearMfa(ManagedUser user) async {
     final confirmed = await showConfirmDialog(
       context,
@@ -100,7 +109,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     );
   }
 
-  /// Non-admin users matching the search; suspended first, then by name.
+  /// What:   Users the list should show.
+  /// Input:  [all] users from the stream; the search text in _query.
+  /// Output: Non-admins matching the query on name or email, suspended first then by name.
   List<ManagedUser> _visible(List<ManagedUser> all) {
     final q = _query.trim().toLowerCase();
     final list = [
@@ -198,7 +209,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
   }
 }
 
-/// One user row with its suspend / reinstate button and more-actions menu.
+/// What:   One user row with avatar, role and suspended pills, the suspend / reinstate button and a more-actions menu.
+/// Input:  [user]; [busy] while an action runs; [onSuspend], [onReinstate], [onClearMfa] callbacks.
+/// Output: AppCard; a spinner replaces the actions while [busy].
 class _UserCard extends StatelessWidget {
   const _UserCard({
     required this.user,
@@ -316,8 +329,10 @@ class _UserCard extends StatelessWidget {
   }
 }
 
-/// Suspend-reason sheet; pops the trimmed reason on Suspend, null on cancel.
-/// Stateful so it disposes its own controller after the close animation.
+/// What:   Bottom sheet asking for an optional suspension reason.
+/// Input:  [userName] of the user being suspended.
+/// Output: Pops the trimmed reason on Suspend, null on Cancel.
+/// Notes:  Stateful so it disposes its own text controller after the close animation.
 class _SuspendSheet extends StatefulWidget {
   const _SuspendSheet({required this.userName});
 

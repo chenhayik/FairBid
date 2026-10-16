@@ -51,8 +51,9 @@ class FirebaseWalletRepository implements WalletRepository {
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
 
-  /// Calls the `name` function with [args], logging `<step>.requested`, then
-  /// `<step>.<resultStep>` (with [log]'s extras) or `<step>.error`.
+  /// What:   Calls a wallet Cloud Function with payment logging.
+  /// Input:  Function [name], [args], and the log [step] (plus [resultStep] and [log] extras).
+  /// Output: The function's data; logs `<step>.requested`, then `<step>.<resultStep>` or `<step>.error` and rethrows.
   Future<Object?> _call(
     String name,
     Map<String, Object?> args, {

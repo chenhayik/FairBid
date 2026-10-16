@@ -16,7 +16,9 @@ class BundleBidRejectedException implements Exception {
 /// Output: BundleBid streams and writes; failures as [BundleBidRejectedException].
 /// Notes:  firestore.rules denies client writes; the server stamps name, photo and Trust Score.
 abstract interface class BundleBidRepository {
-  /// Submits or replaces the caller's bid; [taskPrices] maps job id to sen.
+  /// What:   Submits or replaces the caller's package bid.
+  /// Input:  [taskPrices] maps job id to sen; optional [bundlePriceSen] for the whole bundle, [estimatedDuration], [message].
+  /// Output: Writes through the server callable.
   Future<void> submit({
     required String bundleId,
     required Map<String, int> taskPrices,
@@ -25,19 +27,23 @@ abstract interface class BundleBidRepository {
     String message = '',
   });
 
-  /// Withdraws the caller's bid on [bundleId].
+  /// What:   Withdraws the caller's bid on [bundleId].
   Future<void> withdraw(String bundleId);
 
-  /// Streams the provider's own bid, or null (rules allow only their own).
+  /// What:   Live view of the provider's own bid.
+  /// Output: The bid, or null (rules allow only their own).
   Stream<BundleBid?> watchMyBundleBid(String bundleId, String providerId);
 
-  /// One-shot read of the provider's own bid, or null; avoids a stale cache hit.
+  /// What:   One-shot read of the provider's own bid.
+  /// Output: The bid, or null; avoids a stale cache hit.
   Future<BundleBid?> getMyBundleBid(String bundleId, String providerId);
 
-  /// Streams every bid on [bundleId] (owner only).
+  /// What:   Live list of every bid on [bundleId].
+  /// Notes:  Owner only.
   Stream<List<BundleBid>> watchBundleBids(String bundleId);
 
-  /// Streams the provider's bundle bids across bundles, newest first.
+  /// What:   Live list of the provider's bundle bids across bundles.
+  /// Output: Bids, newest first.
   Stream<List<BundleBid>> watchMyBundleBids(String providerId);
 }
 

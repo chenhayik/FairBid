@@ -1,4 +1,6 @@
-/// Whether the requestor hires as an individual or a company.
+/// What:   Whether the requestor hires as an individual or a company.
+/// Input:  Chosen in AccountTypeStep via RequestorType.fromStorage().
+/// Output: individual or business, with a display [label].
 enum RequestorType {
   individual,
   business;
@@ -44,7 +46,9 @@ class RequestorOnboardingData {
 
   bool get isBusiness => type == RequestorType.business;
 
-  /// Public fields for the user doc; the document URL and phone are in [privateMap] / [payoutMap].
+  /// What:   Public fields for the user doc.
+  /// Input:  The draft: step, type, name, photo, location and company name.
+  /// Output: Map merged into `users/{uid}`; the document URL and phone go through [privateMap] / [payoutMap].
   Map<String, dynamic> toMap() => {
         'requestorOnboardingStep': step,
         'requestorType': type?.name,
@@ -58,17 +62,23 @@ class RequestorOnboardingData {
         'companyName': companyName,
       };
 
-  /// Document URL and SSM number (personal data for a sole proprietorship) for owner+admin-only
-  /// `private/verification`. The company name stays public in [toMap].
+  /// What:   Fields for the owner+admin-only `private/verification` doc.
+  /// Input:  Document URL and SSM number (personal data for a sole proprietorship).
+  /// Output: Map written by FirestoreRequestorOnboardingRepository; the company name stays public in [toMap].
   Map<String, dynamic> privateMap() => {
         'clientDocumentUrl': clientDocumentUrl,
         'ssmNumber': ssmNumber,
         'ssmNumberNormalized': ssmNumberNormalized,
       };
 
-  /// Phone number for owner+admin-only `private/payout`.
+  /// What:   Phone number for the owner+admin-only `private/payout` doc.
+  /// Input:  [phone].
+  /// Output: Map with the phone.
   Map<String, dynamic> payoutMap() => {'phone': phone};
 
+  /// What:   Rebuilds a draft from the saved user doc.
+  /// Input:  [map] of `users/{uid}` fields, possibly null.
+  /// Output: A draft with the step clamped to the valid range and missing fields defaulted.
   static RequestorOnboardingData fromMap(Map<String, dynamic>? map) {
     final data = RequestorOnboardingData();
     if (map == null) return data;

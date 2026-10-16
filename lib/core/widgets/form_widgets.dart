@@ -241,7 +241,9 @@ class UploadBox extends StatelessWidget {
   }
 }
 
-/// Paints a dashed rounded-rectangle border (Flutter has none built in).
+/// What:   Painter for a dashed rounded-rectangle border (Flutter has none built in).
+/// Input:  [color].
+/// Output: 6px dashes with 4px gaps along the rounded outline.
 class _DashedRRectPainter extends CustomPainter {
   const _DashedRRectPainter({required this.color});
 

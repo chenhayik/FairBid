@@ -21,6 +21,9 @@ class ReauthDialog extends StatefulWidget {
   final String message;
   final String actionLabel;
 
+  /// What:   Opens the confirm-it-is-you dialog.
+  /// Input:  [user] (decides whether a password is asked) and a [message].
+  /// Output: True once identity is confirmed, false if cancelled.
   static Future<bool> show(
     BuildContext context, {
     required AppUser user,
@@ -54,6 +57,9 @@ class _ReauthDialogState extends State<ReauthDialog> {
     super.dispose();
   }
 
+  /// What:   Re-authenticates with the typed password (or Google).
+  /// Input:  The password field; AuthController.reauthenticate().
+  /// Output: Pops true on success; on an MFA challenge shows the code sheet first; otherwise shows the error.
   Future<void> _confirm() async {
     final auth = context.read<AuthController>();
     setState(() {

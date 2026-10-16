@@ -109,7 +109,9 @@ class JobDetailScreen extends StatelessWidget {
   }
 }
 
-/// Opens (or creates) the job's chat thread.
+/// What:   Opens (or creates) the job's chat thread.
+/// Input:  [job]; ChatRepository.openConversation(job) (chat_repository.dart).
+/// Output: Pushes `/messages/{id}`; a snackbar if it fails.
 Future<void> _openJobChat(BuildContext context, Job job) async {
   try {
     final id = await context.read<ChatRepository>().openConversation(job);
@@ -127,7 +129,9 @@ Future<void> _openJobChat(BuildContext context, Job job) async {
   }
 }
 
-/// Withdraws the provider's own bid on [jobId], after confirmation.
+/// What:   Withdraws the provider's own bid on a job.
+/// Input:  [jobId] and the provider's [uid].
+/// Output: After a confirm dialog, BidRepository.withdrawBid() with a snackbar for success or failure.
 Future<void> _withdrawBid(
   BuildContext context,
   String jobId,
@@ -162,6 +166,9 @@ Future<void> _withdrawBid(
   }
 }
 
+/// What:   Icon for a timeline event.
+/// Input:  Event [type] from JobEvent (job_event.dart).
+/// Output: Matching icon, or a plain circle for unknown types.
 IconData _timelineIcon(String type) => switch (type) {
   'posted' => Icons.post_add,
   'assigned' => Icons.handshake_outlined,
@@ -182,6 +189,9 @@ IconData _timelineIcon(String type) => switch (type) {
   _ => Icons.circle,
 };
 
+/// What:   Colour for a timeline event.
+/// Input:  Event [type].
+/// Output: Red for cancelled/disputed, amber for refunded/withdrawn, green for completed events, else the verified blue.
 Color _timelineColor(BuildContext context, String type) => switch (type) {
   'cancelled' || 'disputed' => context.fairbid.danger,
   'refunded' => context.fairbid.warningText,
@@ -245,6 +255,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
 
   /// Opened on first need: a provider can be awarded while this is open.
   Stream<List<Milestone>>? _milestoneStream;
+  /// What:   Milestone stream, opened on first use.
+  /// Output: MilestoneRepository.watchMilestones(), or null until a provider is accepted.
   Stream<List<Milestone>>? get _milestones {
     if (widget.job.acceptedProviderId == null) return null;
     return _milestoneStream ??= context
@@ -252,6 +264,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
         .watchMilestones(widget.job.id);
   }
 
+  /// What:   Scrolls the page to a section.
+  /// Input:  GlobalKey of the target widget.
   void _scrollTo(GlobalKey key) {
     final target = key.currentContext;
     if (target == null) return;
@@ -262,6 +276,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
   }
 
+  /// What:   Runs the bottom bar's button.
+  /// Input:  The [kind] from the view model's NextAction (job_detail_view_model.dart), job, viewer and own bid.
+  /// Output: Opens the matching sheet, chat or screen, or calls into the section that owns the action.
   void _handleAction(
     BuildContext context,
     Job job,
@@ -306,7 +323,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     }
   }
 
-  /// Opens [job]'s bundle, or goes back if we came from that bundle.
+  /// What:   Opens the job's bundle.
+  /// Output: Pops back if we came from that bundle, else pushes `/bundles/{id}?fromTask={jobId}`.
   void _viewBundle(BuildContext context, Job job) {
     if (widget.fromBundle && context.canPop()) {
       context.pop();
@@ -315,7 +333,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     }
   }
 
-  /// Cancels [job]; a task in an open bundle cancels the whole bundle.
+  /// What:   Cancels an open job.
+  /// Output: After a confirm dialog, cancels the job via JobRepository.cancelOpenJob(), or the whole bundle via BundleRepository.cancelBundle()
+  ///         for a live bundle task.
   Future<void> _cancelJob(BuildContext context, Job job) async {
     final isBundleTask = job.isLiveBundleTask;
     final taskCount = job.bundleTaskCount;
@@ -362,6 +382,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     }
   }
 
+  /// What:   Asks the other party to cancel an in-progress job.
+  /// Output: Dialog with an optional reason, then JobRepository.requestCancellation().
   Future<void> _requestCancellation(BuildContext context, Job job) async {
     final reason = TextEditingController();
     final confirmed = await showDialog<bool>(
@@ -409,7 +431,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
   }
 
-  /// Dialog to propose a new agreed price; sends it on confirm.
+  /// What:   Dialog to propose a new agreed price.
+  /// Input:  [job] current price (acceptedBidAmountSen).
+  /// Output: Validated amount and required reason, sent via JobRepository.requestPriceChange().
   Future<void> _requestPriceChange(BuildContext context, Job job) async {
     final current = job.acceptedBidAmountSen ?? 0;
     final original = job.originalBidAmountSen;
@@ -498,7 +522,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
   }
 
-  /// Why the price can't be changed now, or null when it can.
+  /// What:   Why the price can't be changed now.
+  /// Output: A reason (bundle task, open dispute, pending change or cancellation, 3 changes already), or null when it can.
   String? _priceChangeBlocker(Job job) {
     if (job.isBundleTask) return 'Not available for bundle tasks.';
     if (_milestonesKey.currentState?.hasOpenDispute == true) {
@@ -514,7 +539,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     return null;
   }
 
-  /// Whether the "Problem with this job?" button applies to this viewer.
+  /// What:   Whether the "Problem with this job?" button applies.
+  /// Output: True for the owner or hired provider on an in-progress job, or on an open one that can be cancelled.
   bool _showProblemButton(Job job, JobDetailViewModel vm) {
     final isParty = vm.role == JobViewerRole.owner ||
         vm.role == JobViewerRole.acceptedProvider;
@@ -523,7 +549,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
             (job.status == JobStatus.open && vm.showCancel));
   }
 
-  /// Why "Provider didn't show up" is unavailable, or null when it applies.
+  /// What:   Why "Provider didn't show up" is unavailable.
+  /// Output: A reason (no confirmed visit, under 30 minutes after it, provider arrived, dispute open, nothing in escrow,
+  ///         work delivered), or null when it applies.
   String? _noShowBlocker(Job job, MilestoneSectionState? milestones) {
     final start = job.appointment?.startAt;
     if (start == null) return 'Only once a visit time is confirmed.';
@@ -540,7 +568,8 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     return null;
   }
 
-  /// One place for every way out of a job, each saying why if it's blocked.
+  /// What:   Sheet with every way out of a job.
+  /// Output: Options (change price, raise dispute, no-show, cancel), each disabled with its reason when blocked; runs the picked one.
   Future<void> _openProblemSheet(
     BuildContext context,
     Job job,
@@ -646,6 +675,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
   }
 
+  /// What:   Page scaffold for one build.
+  /// Input:  Job, viewer, own bid and bundle bid.
+  /// Output: Sections from [_slots] and the bottom bar; the bar waits on milestones when they decide its action.
   Widget _scaffold(
     BuildContext context,
     AppUser? me,
@@ -702,6 +734,9 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
     );
   }
 
+  /// What:   The page's sections in order.
+  /// Output: Widgets spaced 16px apart; sections that don't apply are skipped.
+  /// Notes:  Built eagerly so the bottom bar can reach them through their GlobalKeys.
   List<Widget> _slots(
     BuildContext context,
     Job job,
@@ -839,10 +874,15 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   }
 }
 
+/// What:   "View bundle" text button for the bundle banners.
+/// Output: The button, or null when [onTap] is null.
 Widget? _viewBundleButton(VoidCallback? onTap) => onTap == null
     ? null
     : TextButton(onPressed: onTap, child: const Text('View bundle'));
 
+/// What:   One-line status at the top of the page.
+/// Input:  [vm] statusHeadline.
+/// Output: Info icon beside the headline text.
 class _StatusHeadline extends StatelessWidget {
   const _StatusHeadline({required this.vm});
   final JobDetailViewModel vm;
@@ -962,6 +1002,8 @@ class _CancellationResponseCard extends StatefulWidget {
 class _CancellationResponseCardState extends State<_CancellationResponseCard> {
   bool _busy = false;
 
+  /// What:   Agree or decline handler.
+  /// Output: JobRepository.respondToCancellation() via _runCall with busy state.
   Future<void> _respond(bool accept) async {
     setState(() => _busy = true);
     await _runCall(
@@ -1028,8 +1070,9 @@ class _CancellationResponseCardState extends State<_CancellationResponseCard> {
   }
 }
 
-/// Runs a callable-backed action and shows failures in a SnackBar. Low balance
-/// for the requestor reuses the top-up dialog.
+/// What:   Runs a callable-backed action and shows failures in a snackbar.
+/// Input:  [call]; [isRequestor] false when the viewer is the provider.
+/// Output: Requestor low balance opens the top-up dialog; the provider sees a plain message instead.
 Future<void> _runCall(
   BuildContext context,
   Future<void> Function() call, {
@@ -1076,6 +1119,9 @@ class _PriceChangeCard extends StatefulWidget {
 class _PriceChangeCardState extends State<_PriceChangeCard> {
   bool _busy = false;
 
+  /// What:   Runs one JobRepository call with busy state.
+  /// Input:  [call] such as respondToPriceChange or withdrawPriceChange (job_repository.dart).
+  /// Output: Sets [_busy] while it runs; failures show via _runCall.
   Future<void> _run(Future<void> Function(JobRepository repo) call) async {
     setState(() => _busy = true);
     final repo = context.read<JobRepository>();
@@ -1228,6 +1274,9 @@ class _HeroFacts extends StatelessWidget {
   }
 }
 
+/// What:   One labelled fact (icon, label, value) in the hero section.
+/// Input:  [icon], [label], [value]; optional [color] for the icon.
+/// Output: Rounded tile on the subtle blue background.
 class _FactTile extends StatelessWidget {
   const _FactTile({
     required this.icon,
@@ -1395,11 +1444,14 @@ class _JobDescription extends StatelessWidget {
   }
 }
 
-/// Bid sort order. `bestValue` blends price and Trust Score.
+/// What:   Bid sort order.
+/// Output: bestValue blends price and Trust Score; price is cheapest first.
 enum _BidSort { bestValue, price }
 
-/// Best Value score for [bid]: cheaper and more trusted scores higher.
-/// A "New" provider counts as the neutral baseline, not their hidden score.
+/// What:   Best Value score for one bid.
+/// Input:  [bid] and the cheapest bid's amount [lowestSen].
+/// Output: PlatformConfig.priceWeight * (lowest / amount) + trustWeight * trust (trust scaled to 0-1); cheaper and more trusted scores higher.
+/// Notes:  A "New" provider counts as the neutral baseline, not their hidden score.
 double _compositeScore(Bid bid, int lowestSen) {
   final priceScore = lowestSen / bid.amountSen;
   final trust = (bid.providerScoreVisible
@@ -1441,7 +1493,10 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
   Map<String, ProviderTrust> _liveTrust = const {};
   String? _trustFetchedFor;
 
-  /// Fetches live trust for [bids] unless already resolved. Safe in build.
+  /// What:   Fetches live Trust Scores for the bidders, since bid snapshots go stale.
+  /// Input:  [bids]; PublicProfileRepository.fetchTrust() (public_profile_repository.dart).
+  /// Output: Fills [_liveTrust]; skips if already fetched for the same providers, and keeps the snapshot on failure.
+  /// Notes:  Safe to call from build.
   void _resolveTrust(List<Bid> bids) {
     final key = (bids.map((b) => b.providerId).toList()..sort()).join(',');
     if (key.isEmpty || key == _trustFetchedFor) return;
@@ -1460,9 +1515,12 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
   List<Bid> _shownBids = const [];
   String? _bestValueId;
 
+  /// What:   Whether the Compare sheet can open.
+  /// Output: True with more than one bid shown and no accept in progress.
   bool get canCompare => _shownBids.length > 1 && _acceptingProviderId == null;
 
-  /// Side-by-side view of every pending bid; picking one starts its accept.
+  /// What:   Opens the side-by-side bid comparison.
+  /// Output: Starts [_accept] for the bid the owner picks.
   Future<void> openCompare() async {
     final picked = await showModalBottomSheet<Bid>(
       context: context,
@@ -1479,8 +1537,11 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
     widget.job.id,
   );
 
+  /// What:   Accept-bid flow for the owner.
+  /// Input:  [bid]; the owner's available balance for the confirm text.
+  /// Output: After a confirm dialog, BidRepository.acceptBid(); a balance shortfall opens the top-up dialog, a race shows a retry snackbar.
   Future<void> _accept(Bid bid) async {
-    final available = context.read<AuthController>().user?.availableBalanceSen;
+    final available = context.read<AuthController>().user?.walletBalanceSen;
     final confirmed = await showConfirmDialog(
       context,
       title: 'Accept this bid?',
@@ -1549,6 +1610,10 @@ class _BidsOrBidActionState extends State<_BidsOrBidAction> {
     return _BidAction(job: widget.job, user: user, myBid: widget.myBid);
   }
 
+  /// What:   The owner's pending bids.
+  /// Input:  BidRepository.watchBids() ([_bids]) with live Trust Scores swapped in.
+  /// Output: Sort control and a BidCard per bid, or an empty/error state.
+  /// How:    Best Value sorts by [_compositeScore] and badges the top bid; Price sorts by amount.
   Widget _buildOwnerBidList(BuildContext context) {
     final theme = Theme.of(context);
     return StreamBuilder<List<Bid>>(
@@ -1959,12 +2024,15 @@ class _LeaveReviewCard extends StatefulWidget {
   State<_LeaveReviewCard> createState() => _LeaveReviewCardState();
 }
 
+/// What:   Whether a bundle task's review can be left yet.
+/// Output: ready, waiting (another task of this provider is still in progress) or alreadyReviewed.
 enum _ReviewGate { ready, waiting, alreadyReviewed }
 
 class _LeaveReviewCardState extends State<_LeaveReviewCard> {
   bool _submitted = false;
 
-  /// A bundle task's gate must resolve first.
+  /// What:   The task's bundle id, if any.
+  /// Notes:  A bundle task's gate must resolve before a review is offered.
   String? get _bundleId => widget.job.bundleId;
 
   /// Null for ordinary jobs (always ready) or while a gate is resolving.
@@ -1980,8 +2048,10 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
     }
   }
 
-  /// Bundle task: already reviewed wins; otherwise the review opens once
-  /// no other task of this provider in the bundle is still in progress.
+  /// What:   Resolves the review gate for a bundle task.
+  /// Input:  ReviewRepository.hasReviewed() and JobRepository.getBundleTasks().
+  /// Output: Sets [_gate]: alreadyReviewed wins; else waiting while another of this provider's tasks is in progress, else ready.
+  /// Notes:  Fails open to ready, since review writes are deduped server-side.
   Future<void> _resolveGate(String bundleId) async {
     final me = context.read<AuthController>().user;
     if (me == null) return;
@@ -2017,9 +2087,12 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
     }
   }
 
-  /// Whether a review is due right now (not yet left, gate open).
+  /// What:   Whether a review is due right now.
+  /// Output: True when not yet left and the gate is open.
   bool get canReview => !_submitted && _gate == _ReviewGate.ready;
 
+  /// What:   Opens the review sheet.
+  /// Output: LeaveReviewSheet; marks the card submitted on success.
   Future<void> open() async {
     final me = context.read<AuthController>().user;
     if (me == null) return;
@@ -2158,19 +2231,25 @@ class _ActivityTimeline extends StatelessWidget {
   }
 }
 
-/// The bar's resolved action or waiting line.
+/// What:   The bottom bar's resolved content.
+/// Output: An [action] or a [waitingLine].
 class _ResolvedBar {
   const _ResolvedBar({this.action, this.waitingLine});
   final NextAction? action;
   final String? waitingLine;
 }
 
-/// Whether the bar takes its action from the job's stages.
+/// What:   Whether the bar takes its action from the job's stages.
+/// Output: True for the owner or hired provider on an in-progress job.
 bool _milestoneAware(JobDetailViewModel vm, Job job) =>
     (vm.role == JobViewerRole.owner ||
         vm.role == JobViewerRole.acceptedProvider) &&
     job.status == JobStatus.inProgress;
 
+/// What:   Bottom bar content driven by the current milestone.
+/// Input:  [vm], [job] and the streamed [milestones].
+/// Output: Funded: provider Mark as delivered (or the visit-time bar). Submitted: owner Release. Otherwise a waiting line,
+///         or the view model's own action when there is no current stage.
 _ResolvedBar _resolveMilestoneBar(
   JobDetailViewModel vm,
   Job job,

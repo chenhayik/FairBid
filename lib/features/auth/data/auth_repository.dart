@@ -129,7 +129,9 @@ class FirebaseAuthRepository implements AuthRepository {
   DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
       _users.doc(uid).collection('private').doc('payout');
 
-  /// Reads [uid]'s private payout doc; a missing doc or read failure gives `null`.
+  /// What:   Reads a user's private payout doc.
+  /// Input:  [uid]; `users/{uid}/private/payout`.
+  /// Output: The data (holds the phone number); a missing doc or read failure gives null.
   Future<Map<String, dynamic>?> _payoutData(String uid) async {
     try {
       return (await _payoutDoc(uid).get()).data();
@@ -353,7 +355,9 @@ class FirebaseAuthRepository implements AuthRepository {
     });
   }
 
-  /// Runs the interactive Google sign-in and returns the account with its Firebase credential.
+  /// What:   Runs the interactive Google sign-in.
+  /// Input:  GoogleSignIn.instance (google_sign_in 7.x).
+  /// Output: The Google account with its Firebase credential; AuthException if unsupported or no token.
   Future<(GoogleSignInAccount, AuthCredential)> _googleCredential() async {
     await _googleReady;
     final signIn = GoogleSignIn.instance;
@@ -370,8 +374,10 @@ class FirebaseAuthRepository implements AuthRepository {
     return (googleUser, GoogleAuthProvider.credential(idToken: idToken));
   }
 
-  /// The best name available for a Google sign-in, trying every source before the email.
-  /// Android's Credential Manager often returns no display name.
+  /// What:   The best name available for a Google sign-in.
+  /// Input:  [googleUser] and the Firebase [userCredential].
+  /// Output: First non-empty name from Google, the profile, provider data or the user, else a name from the email.
+  /// Notes:  Android's Credential Manager often returns no display name.
   String _googleDisplayName(
     GoogleSignInAccount googleUser,
     UserCredential userCredential,
@@ -391,7 +397,9 @@ class FirebaseAuthRepository implements AuthRepository {
     return _nameFromEmail(googleUser.email);
   }
 
-  /// A name from an email's local part: `siti.rahman@gmail.com` -> `Siti Rahman`.
+  /// What:   A display name from an email's local part.
+  /// Input:  [email], e.g. `siti.rahman@gmail.com`.
+  /// Output: Capitalised words split on . _ - (here `Siti Rahman`), or "User" when empty.
   String _nameFromEmail(String? email) {
     final local = (email ?? '').split('@').first.split('+').first;
     final words = local
@@ -408,7 +416,9 @@ class FirebaseAuthRepository implements AuthRepository {
   }) =>
       _users.doc(uid).set(_baseFields(picked), SetOptions(merge: true));
 
-  /// The provider "Jobs near you" fields for [p].
+  /// What:   The provider "Jobs near you" fields.
+  /// Input:  [p], a PickedLocation.
+  /// Output: Map with baseLat, baseLng, baseAddress, baseDistrictCode and baseTown.
   static Map<String, Object?> _baseFields(PickedLocation p) => {
         'baseLat': p.lat,
         'baseLng': p.lng,
@@ -512,7 +522,9 @@ class FirebaseAuthRepository implements AuthRepository {
     });
   }
 
-  /// Re-proves the user's identity (account deletion, 2FA, withdraw).
+  /// What:   Re-proves the user's identity for account deletion, 2FA or withdrawal.
+  /// Input:  [user]; [password] for email/password accounts, otherwise a fresh Google sign-in.
+  /// Output: Completes on success; AuthException if the password is missing or Google is cancelled.
   Future<void> _reauthenticate(User user, String? password) async {
     if (_isPasswordAccount(user)) {
       final email = user.email;
@@ -536,7 +548,10 @@ class FirebaseAuthRepository implements AuthRepository {
     await user.reauthenticateWithCredential(credential);
   }
 
-  /// Creates the profile on first sign-in only, so re-logins keep role and balance.
+  /// What:   Creates the profile doc on first sign-in only.
+  /// Input:  [user], [role] and [displayName].
+  /// Output: Writes role, name, email and zeroed wallet fields; an existing profile keeps its role and balance.
+  /// Notes:  No trust fields are written: rules reject them and `recomputeTrustOnUserWrite` seeds the score.
   Future<void> _ensureProfile(
     User user,
     UserRole role,
@@ -562,7 +577,10 @@ class FirebaseAuthRepository implements AuthRepository {
     });
   }
 
-  /// Replaces a stored name that is still the bare email (or empty); never overwrites a chosen name.
+  /// What:   Repairs a stored name that is still the bare email.
+  /// Input:  The profile [doc] and [snapshot], the [user] and the better [displayName].
+  /// Output: Replaces an empty or email-only name; never overwrites a chosen name.
+  /// Notes:  Errors are swallowed: rules deny suspended accounts and a cosmetic repair must not fail the sign-in.
   Future<void> _healEmailAsDisplayName(
     DocumentReference<Map<String, dynamic>> doc,
     DocumentSnapshot<Map<String, dynamic>> snapshot,
@@ -581,7 +599,9 @@ class FirebaseAuthRepository implements AuthRepository {
         .catchError((_) {});
   }
 
-  /// One-shot profile read into an [AppUser]; `null` when signed out.
+  /// What:   Reads the signed-in user's profile once.
+  /// Input:  [user] from Firebase Auth; `users/{uid}` and its private payout doc.
+  /// Output: An AppUser, null when signed out, or a minimal one if the profile is unreadable (so the splash cannot hang).
   Future<AppUser?> _toAppUser(User? user) async {
     if (user == null) return null;
     try {
@@ -593,7 +613,10 @@ class FirebaseAuthRepository implements AuthRepository {
     }
   }
 
-  /// Builds an [AppUser] from [user], profile [data] and private [payoutData]; either may be null.
+  /// What:   Maps Firebase user and Firestore data into an [AppUser].
+  /// Input:  [user]; profile [data] and private [payoutData], either may be null.
+  /// Output: AppUser with defaults for missing fields.
+  /// How:    Phone comes from the private doc, falling back to the legacy public field; base location falls back to the onboarding service location so "Jobs near you" works at once.
   AppUser _mapUser(
     User user,
     Map<String, dynamic>? data,
@@ -623,7 +646,6 @@ class FirebaseAuthRepository implements AuthRepository {
       defaultTown: data?['town'] as String?,
       bio: data?['bio'] as String?,
       walletBalanceSen: (data?['walletBalanceSen'] as num?)?.toInt() ?? 0,
-      escrowLockedSen: (data?['escrowLockedSen'] as num?)?.toInt() ?? 0,
       ratingCount: (data?['ratingCount'] as num?)?.toInt() ?? 0,
       ratingSum: (data?['ratingSum'] as num?)?.toInt() ?? 0,
       jobsCompleted: (data?['jobsCompleted'] as num?)?.toInt() ?? 0,
@@ -645,7 +667,9 @@ class FirebaseAuthRepository implements AuthRepository {
     );
   }
 
-  /// A minimal user built from auth alone, used when the profile can't be read.
+  /// What:   A minimal user built from Firebase Auth alone.
+  /// Input:  [user].
+  /// Output: A requestor AppUser, used when the profile cannot be read.
   AppUser _fallbackUser(User user) => AppUser(
         uid: user.uid,
         email: user.email,
@@ -658,7 +682,9 @@ class FirebaseAuthRepository implements AuthRepository {
   bool _isPasswordAccount(User user) =>
       user.providerData.any((p) => p.providerId == 'password');
 
-  /// [_guardValue] for void calls, also handling Google sign-in errors.
+  /// What:   [_guardValue] for void calls, also handling Google sign-in errors.
+  /// Input:  [action], a Firebase call.
+  /// Output: Runs it; closing the Google sheet is silent, other Google failures become AuthException.
   Future<void> _guard(Future<void> Function() action) => _guardValue(() async {
         try {
           await action();
@@ -673,7 +699,10 @@ class FirebaseAuthRepository implements AuthRepository {
         }
       });
 
-  /// Runs a Firebase call and rethrows failures as user-friendly [AuthException]s.
+  /// What:   Runs a Firebase call and converts its failures into user-friendly errors.
+  /// Input:  [action], a Firebase call.
+  /// Output: The call's result, or MfaRequiredException / AuthException.
+  /// Notes:  The multi-factor catch must precede FirebaseAuthException (its superclass) or the resolver is lost.
   Future<T> _guardValue<T>(Future<T> Function() action) async {
     try {
       return await action();

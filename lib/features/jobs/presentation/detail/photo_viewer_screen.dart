@@ -13,6 +13,8 @@ class PhotoViewerScreen extends StatefulWidget {
   final List<String> photoUrls;
   final int initialIndex;
 
+  /// What:   Opens the viewer as a full-screen route.
+  /// Input:  [photoUrls] and the [initialIndex] to start on.
   static Future<void> show(
     BuildContext context, {
     required List<String> photoUrls,

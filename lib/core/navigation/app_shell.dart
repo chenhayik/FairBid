@@ -14,6 +14,8 @@ class AppShell extends StatelessWidget {
 
   final StatefulNavigationShell navigationShell;
 
+  /// What:   Switches the bottom-bar tab.
+  /// Output: Calls goBranch; re-tapping the active tab resets it to its first page.
   void _goToTab(int index) {
     // Re-tapping the active tab resets it.
     navigationShell.goBranch(
@@ -57,7 +59,9 @@ class AppShell extends StatelessWidget {
   }
 }
 
-/// Messages tab icon with an unread badge.
+/// What:   Messages tab icon with an unread badge.
+/// Input:  [uid]; unread count via ChatRepository.watchTotalUnread(uid) (chat_repository.dart).
+/// Output: Plain icon when signed out, else the icon with a count badge when unread > 0.
 class _MessagesIcon extends StatelessWidget {
   const _MessagesIcon({required this.uid, required this.icon});
   final String? uid;

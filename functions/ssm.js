@@ -149,9 +149,12 @@ function parseSsmText(text) {
 }
 
 /**
- * Detects text that is in the PDF but invisible on the page (white or tiny
- * text), which could hide a legitimate registration number from a human.
- * Structural giveaways only; no rasteriser.
+ * What:   Hidden-text detector for an SSM PDF.
+ * Input:  The PDF file [buffer].
+ * Output: True for invisible text (`Tr 3`), a font under 4pt or Unicode tag
+ *         characters.
+ * Notes:  Structural giveaways only, no rasteriser. Such text could hide a
+ *         legitimate registration number from a human reviewer.
  */
 function looksHidden(buffer) {
   const raw = buffer.toString("latin1");
@@ -214,9 +217,9 @@ function namesMatch(a, b) {
 }
 
 /**
- * The Certificate branch's identity fields, blanked. Writes merge so the
- * Profile's fields survive, so a rejected re-upload would otherwise leave the
- * old name and number beside the new "rejected" verdict.
+ * What:   The Certificate branch's identity fields, blanked.
+ * Output: Nulls spread into a rejected write; writes merge, so without this a
+ *         rejected re-upload would leave the old name and number beside it.
  */
 const BLANK_CERT = {
   registrationNumber: null,
@@ -225,10 +228,16 @@ const BLANK_CERT = {
   signaturePresent: false,
 };
 
-/** The owner check, cleared. See `ownerCheckedFor`. */
+/**
+ * What:   The owner check, cleared.
+ * Output: Nulls for `ownerNameMatches` and `ownerCheckedFor`.
+ */
 const BLANK_OWNER = {ownerNameMatches: null, ownerCheckedFor: null};
 
-/** Failures that mean the document is unusable, rather than merely unproven. */
+/**
+ * What:   Failure codes that mean the document is unusable, not just unproven.
+ * Output: Strings; any one of them makes the verdict "rejected".
+ */
 const HARD_FAILURES = [
   "not-a-pdf",
   "registration-expired",

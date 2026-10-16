@@ -23,10 +23,14 @@ class AddressHint {
   /// Locality labels, most specific first; used by [matchTown].
   final List<String> localityNames;
 
-  /// True when there is nothing worth pre-filling.
+  /// What:   Whether the hint has anything worth pre-filling.
+  /// Output: True when line1, postcode and city are all null.
   bool get isEmpty => line1 == null && postcode == null && city == null;
 
-  /// The first of [towns] matching a locality case-insensitively, or null; the caller's list stays the truth.
+  /// What:   Picks the known town that matches a geocoded locality.
+  /// Input:  [towns] from kPenangTowns (penang.dart); [localityNames].
+  /// Output: The first town equal to a locality (case-insensitive), else null.
+  /// Notes:  The caller's list stays the truth, so raw geocoder text is never returned.
   String? matchTown(Iterable<String> towns) {
     for (final name in localityNames) {
       for (final town in towns) {
@@ -36,7 +40,10 @@ class AddressHint {
     return null;
   }
 
-  /// Maps a [Placemark], turning empty strings into null.
+  /// What:   Builds a hint from a geocoder placemark.
+  /// Input:  [place] from the geocoding package's placemarkFromCoordinates.
+  /// Output: AddressHint with empty strings turned into null.
+  /// Notes:  Android's `street` may already contain the house number, so it is only prefixed when missing.
   factory AddressHint.fromPlacemark(Placemark place) {
     String? clean(String? value) {
       final text = value?.trim();

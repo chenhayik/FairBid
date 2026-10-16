@@ -34,7 +34,11 @@ const MAX_ADDRESS_LEN = 200;
 const MAX_DESCRIPTION_LEN = 5000;
 const MAX_PHOTOS = 10;
 
-// Returns value trimmed, or throws when it isn't usable text.
+/**
+ * What:   Required-text validator.
+ * Input:  [value], the field [name] for errors and the [max] length.
+ * Output: [value] trimmed; throws `invalid-argument` when empty or too long.
+ */
 function text(value, name, max) {
   if (typeof value !== "string") throw bad(`${name} is required.`);
   const trimmed = value.trim();
@@ -43,7 +47,11 @@ function text(value, name, max) {
   return trimmed;
 }
 
-// Returns an optional whole-sen amount, or null when absent.
+/**
+ * What:   Optional amount validator.
+ * Input:  [value] and the field [name] for errors.
+ * Output: A whole-sen amount (0 to MAX_AMOUNT_SEN), or null when absent.
+ */
 function optionalSen(value, name) {
   if (value == null) return null;
   if (!Number.isInteger(value) || value < 0 || value > MAX_AMOUNT_SEN) {
@@ -52,7 +60,11 @@ function optionalSen(value, name) {
   return value;
 }
 
-// Validates the shared map location and returns the stored shape.
+/**
+ * What:   Validator for the bundle's shared map location.
+ * Input:  The raw `location` map (lat, lng, address, district fields).
+ * Output: The stored shape; throws when lat/lng are out of range.
+ */
 function checkLocation(raw) {
   const m = raw || {};
   const lat = m.lat;
@@ -71,7 +83,11 @@ function checkLocation(raw) {
   };
 }
 
-// Optional bidding deadline in epoch millis (JSON has no date type).
+/**
+ * What:   Validator for the optional bidding deadline.
+ * Input:  Epoch millis (JSON has no date type), or null.
+ * Output: A Timestamp, or null; throws unless it is in the future.
+ */
 function checkDeadline(value) {
   if (value == null) return null;
   if (!Number.isInteger(value) || value <= Date.now()) {
@@ -80,7 +96,11 @@ function checkDeadline(value) {
   return Timestamp.fromMillis(value);
 }
 
-// Shared photo URLs, capped so one posting cannot balloon.
+/**
+ * What:   Validator for the shared photo URLs.
+ * Input:  The raw `photoUrls` list, or null.
+ * Output: The list (max MAX_PHOTOS non-empty strings), or [].
+ */
 function checkPhotos(raw) {
   if (raw == null) return [];
   if (!Array.isArray(raw) || raw.length > MAX_PHOTOS ||
@@ -90,7 +110,12 @@ function checkPhotos(raw) {
   return raw;
 }
 
-// Which pool photos a task is tagged with: unique indexes into the pool.
+/**
+ * What:   Validator for a task's photo tags.
+ * Input:  [raw] indexes into the shared photos, the [photoCount] and the
+ *         task [position] label for errors.
+ * Output: The unique, in-range indexes, or [].
+ */
 function checkPhotoIndexes(raw, photoCount, position) {
   if (raw == null) return [];
   if (!Array.isArray(raw) || new Set(raw).size !== raw.length ||
@@ -100,7 +125,12 @@ function checkPhotoIndexes(raw, photoCount, position) {
   return raw;
 }
 
-// Validates the task list and returns the stored shape of each task.
+/**
+ * What:   Validator for the task list.
+ * Input:  The raw `tasks` list and the shared [photoCount].
+ * Output: The stored shape of each task; throws unless there are 2 to 6 valid
+ *         tasks (category, text, budget range, photo tags).
+ */
 function checkTasks(list, photoCount) {
   if (!Array.isArray(list) || list.length < MIN_BUNDLE_TASKS ||
       list.length > MAX_BUNDLE_TASKS) {
@@ -131,14 +161,25 @@ function checkTasks(list, photoCount) {
   });
 }
 
-// Each task's photos: the ones tagged to it, plus any photo tagged to none.
+/**
+ * What:   Photo URLs per task.
+ * Input:  The shared [photoUrls] and the checked [tasks].
+ * Output: One URL list per task: its tagged photos plus any photo tagged to
+ *         no task.
+ */
 function taskPhotoUrls(photoUrls, tasks) {
   const tagged = new Set(tasks.flatMap((t) => t.photoIndexes));
   return tasks.map((t) => photoUrls.filter((_, i) =>
     !tagged.has(i) || t.photoIndexes.includes(i)));
 }
 
-// Validates a createBundle payload. Pure, so tests need no emulator.
+/**
+ * What:   Validator for a createBundle payload.
+ * Input:  The callable's raw [data].
+ * Output: {title, description, location, photoUrls, deadline, tasks}; throws
+ *         `invalid-argument` on the first bad field.
+ * Notes:  Pure, so tests need no emulator.
+ */
 function validateBundle(data) {
   const payload = data || {};
   const photoUrls = checkPhotos(payload.photoUrls);
@@ -222,16 +263,31 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
   return {bundleId: bundleRef.id, taskIds: jobRefs.map((ref) => ref.id)};
 });
 
+/**
+ * What:   Length limits for a bundle bid's message and duration text.
+ * Output: MAX_MESSAGE_LEN and MAX_DURATION_LEN, in characters.
+ */
 const MAX_MESSAGE_LEN = 2000;
 const MAX_DURATION_LEN = 40;
 
-/** Whether a bundle still takes bids: open and not past its deadline. */
+/**
+ * What:   Bid-window check.
+ * Input:  Bundle doc data.
+ * Output: True while the bundle is open and not past its deadline.
+ */
 function bundleBiddingOpen(bundle) {
   return bundle.status === "open" &&
       (bundle.deadline == null || bundle.deadline.toMillis() > Date.now());
 }
 
-/** Checks the price per picked task (job id to sen); rules cannot check maps. */
+/**
+ * What:   Validator for the price per picked task.
+ * Input:  [raw] map of job id to sen.
+ * Output: The map; throws unless it has 1 to 6 whole-sen prices above 0 and
+ *         up to MAX_BID_SEN each.
+ * Notes:  Keys are checked against the bundle's taskIds in submitBundleBid,
+ *         since Firestore rules cannot check maps.
+ */
 function checkTaskPrices(raw) {
   const prices = raw == null ? {} : raw;
   if (typeof prices !== "object" || Array.isArray(prices)) {
@@ -254,12 +310,22 @@ function checkTaskPrices(raw) {
   return Object.fromEntries(entries);
 }
 
-/** Adds the per-task prices up. */
+/**
+ * What:   Sum of the per-task prices.
+ * Input:  [taskPrices] map of job id to sen.
+ * Output: Total sen.
+ */
 function taskTotal(taskPrices) {
   return Object.values(taskPrices).reduce((sum, sen) => sum + sen, 0);
 }
 
-/** Splits a bundle price across tasks; the last one absorbs the rounding. */
+/**
+ * What:   Bundle price shared across the picked tasks.
+ * Input:  [taskPrices] map of job id to sen and the [bundlePriceSen] total.
+ * Output: Map of job id to sen that adds up to [bundlePriceSen].
+ * How:    Each share is the floor of its proportion of the task total; the last
+ *         task absorbs the rounding.
+ */
 function splitBundlePrice(taskPrices, bundlePriceSen) {
   const taskIds = Object.keys(taskPrices);
   const priceTotal = taskIds.reduce((sum, id) => sum + taskPrices[id], 0);
@@ -277,7 +343,16 @@ function splitBundlePrice(taskPrices, bundlePriceSen) {
   return amounts;
 }
 
-/** Validates a `submitBundleBid` payload; pure, so tests need no emulator. */
+/**
+ * What:   Validator for a submitBundleBid payload.
+ * Input:  The callable's raw [data].
+ * Output: {taskPrices, taskTotalSen, bundlePriceSen, estimatedDuration,
+ *         message}; throws `invalid-argument` on the first bad field.
+ * How:    A bundle price must be above 0, below the task total, leave every
+ *         task share at 1 sen or more, and the bid total stays within
+ *         MAX_BID_SEN.
+ * Notes:  Pure, so tests need no emulator.
+ */
 function validateBundleBid(data) {
   const payload = data || {};
   const taskPrices = checkTaskPrices(payload.taskPrices);
@@ -312,7 +387,12 @@ function validateBundleBid(data) {
   };
 }
 
-/** The caller's profile, rejected unless they may bid right now. */
+/**
+ * What:   Bidder eligibility guard.
+ * Input:  Firestore [db] and the caller [uid].
+ * Output: The caller's user data; throws `permission-denied` unless they are an
+ *         approved provider who is not suspended.
+ */
 async function biddingProvider(db, uid) {
   const user = (await db.doc(`users/${uid}`).get()).data();
   if (user?.role !== "provider" || user.verificationStatus !== "approved") {

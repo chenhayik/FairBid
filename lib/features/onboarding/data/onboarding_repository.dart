@@ -97,7 +97,9 @@ class FirestoreOnboardingRepository implements OnboardingRepository {
         'submittedAt': FieldValue.serverTimestamp(),
       });
 
-  /// Writes the onboarding map (plus [extra] top-level fields) and the private doc in one batch.
+  /// What:   Writes the provider's onboarding data.
+  /// Input:  [uid]; [data] (public map and private map); optional [extra] top-level fields.
+  /// Output: One batch: the `onboarding` map, removal of legacy public bank fields, and the private verification doc.
   Future<void> _commit(
     String uid,
     OnboardingData data, [

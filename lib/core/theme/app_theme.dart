@@ -77,6 +77,8 @@ class FairBidColors extends ThemeExtension<FairBidColors> {
   );
 }
 
+/// What:   Shortcut to the FairBid colour extension.
+/// Output: `context.fairbid` returns the FairBidColors of the current theme.
 extension FairBidColorsX on BuildContext {
   FairBidColors get fairbid => Theme.of(this).extension<FairBidColors>()!;
 }
@@ -92,6 +94,8 @@ class AppTheme {
   /// Built once: a fresh ThemeData never compares equal (closure-based styles) and would re-theme the app.
   static final ThemeData light = _buildLight();
 
+  /// What:   Assembles the light ThemeData.
+  /// Output: ColorScheme, text, input, button and card themes plus the FairBidColors extension.
   static ThemeData _buildLight() {
     const colorScheme = ColorScheme(
       brightness: Brightness.light,
@@ -190,7 +194,10 @@ class AppTheme {
     );
   }
 
-  // DESIGN.md §2 typography. Use copyWith on the base styles: a fresh TextStyle loses the resolved colour and typed input turns invisible.
+  /// What:   DESIGN.md §2 typography.
+  /// Input:  [base] text theme.
+  /// Output: [base] with sizes, weights and spacing overridden.
+  /// Notes:  Uses copyWith on the base styles; a fresh TextStyle loses the resolved colour and typed input turns invisible.
   static TextTheme _textTheme(TextTheme base) {
     return base.copyWith(
       headlineMedium: base.headlineMedium?.copyWith(
@@ -219,6 +226,8 @@ class AppTheme {
     );
   }
 
+  /// What:   Text-field look: white fill, rounded outline, blue focus border, error border from [scheme].
+  /// Output: InputDecorationTheme.
   static InputDecorationTheme _inputTheme(ColorScheme scheme) {
     OutlineInputBorder border(Color color, [double width = 1]) {
       return OutlineInputBorder(

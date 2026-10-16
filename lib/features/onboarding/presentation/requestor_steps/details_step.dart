@@ -47,7 +47,9 @@ class _DetailsStepState extends State<DetailsStep> {
     super.dispose();
   }
 
-  /// Opens the Penang picker; stores the label and the structured pick.
+  /// What:   Opens the Penang map picker for the requestor's location.
+  /// Input:  The saved location as the starting position.
+  /// Output: Stores the label, district, town and coordinates in the draft.
   Future<void> _pickLocation() async {
     final onboarding = context.read<RequestorOnboardingController>();
     final data = onboarding.data;
@@ -69,6 +71,9 @@ class _DetailsStepState extends State<DetailsStep> {
     });
   }
 
+  /// What:   Validates the details form and moves to the next stage.
+  /// Input:  The form fields, the picked location and the optional SSM number.
+  /// Output: A snackbar if no location is picked; otherwise writes the fields and calls saveAndContinue().
   void _saveAndContinue() {
     if (!_formKey.currentState!.validate()) return;
     final onboarding = context.read<RequestorOnboardingController>();

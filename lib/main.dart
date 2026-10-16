@@ -26,6 +26,8 @@ import 'features/profile/data/user_report_repository.dart';
 import 'features/wallet/data/wallet_repository.dart';
 import 'firebase_options.dart';
 
+/// What:   App entry point.
+/// Output: Initialises Firebase, then runs FairBidApp with the Firestore/Firebase-backed repositories.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(

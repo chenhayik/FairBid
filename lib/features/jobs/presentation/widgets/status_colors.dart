@@ -5,7 +5,9 @@ import '../../domain/bundle.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 
-/// Pill colour for a job status.
+/// What:   Pill colour for a job status.
+/// Input:  [status].
+/// Output: Blue open, amber in progress, green completed, grey cancelled.
 Color jobStatusColor(BuildContext context, JobStatus status) =>
     switch (status) {
       JobStatus.open => context.fairbid.verified,
@@ -14,7 +16,9 @@ Color jobStatusColor(BuildContext context, JobStatus status) =>
       JobStatus.cancelled => Theme.of(context).colorScheme.onSurfaceVariant,
     };
 
-/// Pill colour for a bundle status.
+/// What:   Pill colour for a bundle status.
+/// Input:  [status].
+/// Output: Blue open, green awarded, grey cancelled or expired.
 Color bundleStatusColor(BuildContext context, BundleStatus status) =>
     switch (status) {
       BundleStatus.open => context.fairbid.verified,
@@ -23,7 +27,9 @@ Color bundleStatusColor(BuildContext context, BundleStatus status) =>
       BundleStatus.expired => Theme.of(context).colorScheme.onSurfaceVariant,
     };
 
-/// Pill colour for a bundle bid status.
+/// What:   Pill colour for a package bid status.
+/// Input:  [status].
+/// Output: Green accepted, amber pending or partly accepted, red rejected, grey withdrawn or closed.
 Color bundleBidStatusColor(BuildContext context, BundleBidStatus status) =>
     switch (status) {
       BundleBidStatus.accepted => context.fairbid.successText,

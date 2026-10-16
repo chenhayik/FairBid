@@ -38,7 +38,8 @@ class PostJobController extends ChangeNotifier {
   /// Bundle photos tagged only to other tasks, so task 1's AI skips them.
   Set<String> skipForAssist = {};
 
-  /// The photo the AI assists read: the first one that shows task 1.
+  /// What:   The photo the AI assists read.
+  /// Output: The first photo that shows task 1 (not in [skipForAssist]), or null.
   String? get _assistPhoto =>
       photoUrls.where((u) => !skipForAssist.contains(u)).firstOrNull;
 
@@ -57,13 +58,16 @@ class PostJobController extends ChangeNotifier {
   /// The last suggested fair-price range, shown beside the budget fields.
   ({int minSen, int maxSen})? priceHint;
 
-  /// True while the job is being created; drives the blocking overlay.
+  /// What:   Whether the job is being created.
+  /// Output: True while submitting; drives the blocking overlay.
   bool get isSubmitting => _isSubmitting;
 
-  /// True while a photo uploads; drives the photo box spinner.
+  /// What:   Whether a photo is uploading.
+  /// Output: True during an upload; drives the photo box spinner.
   bool get uploadingPhoto => _uploadingPhoto;
 
-  /// A submit, upload or draft is in flight; gates actions that must not overlap.
+  /// What:   Whether a submit, upload or draft is in flight.
+  /// Output: True while any runs; gates actions that must not overlap.
   bool get isBusy => _isSubmitting || _uploadingPhoto || assistingDraft;
 
   String? get errorMessage => _errorMessage;
@@ -72,7 +76,9 @@ class PostJobController extends ChangeNotifier {
   String? _addressWarning;
   String? get addressWarning => _addressWarning;
 
-  /// Drafts a post from [roughText], or null when none is available.
+  /// What:   Drafts a post from a rough note.
+  /// Input:  [roughText]; AssistRepository.suggestDraft() (assist_repository.dart) with the assist photo.
+  /// Output: JobDraft, or null when none is available; toggles [assistingDraft].
   Future<JobDraft?> suggestDraft(String roughText) async {
     assistingDraft = true;
     _notify();
@@ -86,7 +92,9 @@ class PostJobController extends ChangeNotifier {
     }
   }
 
-  /// Fetches a fair-price range for [description] into [priceHint].
+  /// What:   Fetches a fair-price range for the description.
+  /// Input:  [description] and the selected [category]; does nothing without a category.
+  /// Output: Sets [priceHint] via AssistRepository.suggestPriceRange(); toggles [assistingPrice].
   Future<void> suggestPrice(String description) async {
     final selectedCategory = category;
     if (selectedCategory == null) return;
@@ -113,8 +121,8 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Sets the location from initState without notifying; notifying during the
-  /// provider's build trips a framework assertion.
+  /// What:   Sets the initial location without notifying.
+  /// Notes:  Called from initState; notifying during the provider's build trips a framework assertion.
   void seedLocation(PickedLocation value) {
     location = value;
   }
@@ -124,6 +132,9 @@ class PostJobController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// What:   Picks a gallery photo and uploads it.
+  /// Input:  [uid] of the poster.
+  /// Output: Adds the URL to [photoUrls] via DocumentStorageRepository.uploadJobPhoto(); sets [errorMessage] on failure.
   Future<void> addPhoto(String uid) async {
     final XFile? file;
     try {
@@ -149,14 +160,18 @@ class PostJobController extends ChangeNotifier {
     }
   }
 
+  /// What:   Removes a photo from the post.
+  /// Output: Drops the URL and deletes the stored file in the background.
   void removePhoto(String url) {
     photoUrls.remove(url);
     notifyListeners();
     _storage.deleteByUrl(url).catchError((_) {});
   }
 
-  /// Creates the job and returns its id, or null on failure. A failed
-  /// [pendingAddress] write never loses the job; it sets [addressWarning].
+  /// What:   Creates a single job.
+  /// Input:  [job] built by the form; [pendingAddress].
+  /// Output: The new job id, or null on failure with [errorMessage].
+  /// Notes:  A failed address write never loses the job; it sets [addressWarning].
   Future<String?> submit(Job job) async {
     _isSubmitting = true;
     _errorMessage = null;
@@ -186,7 +201,9 @@ class PostJobController extends ChangeNotifier {
     }
   }
 
-  /// Posts [tasks] as one bundle via `createBundle`; returns its id, or null on failure.
+  /// What:   Posts several tasks as one bundle.
+  /// Input:  Title, description, shared [location], [tasks] and optional [deadline]; the current [photoUrls].
+  /// Output: The new bundle id via BundleRepository.create(), or null on failure with [errorMessage].
   Future<String?> submitBundle({
     required String title,
     required String description,
@@ -225,7 +242,8 @@ class PostJobController extends ChangeNotifier {
     _notify();
   }
 
-  /// notifyListeners(), skipped after dispose so late async results are safe.
+  /// What:   notifyListeners() that is safe after dispose.
+  /// Notes:  Skipped once disposed, so late async results don't throw.
   void _notify() {
     if (!_disposed) notifyListeners();
   }

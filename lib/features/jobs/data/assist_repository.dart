@@ -23,13 +23,17 @@ class JobDraft {
 /// Input:  Callable `suggestJobDetails` (via FirebaseAssistRepository), so the API key stays server-side.
 /// Output: A draft or price range, or null when unavailable (offline, quota, bad reply).
 abstract interface class AssistRepository {
-  /// Turns one rough note into a draft post (category inferred), or null.
+  /// What:   Turns one rough note into a draft post.
+  /// Input:  [roughText] typed by the user; optional [photoUrl].
+  /// Output: JobDraft with the category inferred, or null.
   Future<JobDraft?> suggestDraft({
     required String roughText,
     String? photoUrl,
   });
 
-  /// An indicative fair-price range in sen, or null; [photoUrl] lets the model see the job.
+  /// What:   Indicative fair-price range for a job.
+  /// Input:  [category], [description]; [photoUrl] lets the model see the job.
+  /// Output: Range in sen, or null.
   Future<({int minSen, int maxSen})?> suggestPriceRange({
     required String category,
     required String description,
@@ -46,6 +50,9 @@ class FirebaseAssistRepository implements AssistRepository {
 
   final FirebaseFunctions _functions;
 
+  /// What:   Calls the `suggestJobDetails` callable.
+  /// Input:  [kind] ('draft' or 'price'), [category], [roughText], optional [photoUrl].
+  /// Output: The reply map, or null on any failure.
   Future<Map<String, dynamic>?> _call({
     required String kind,
     String category = '',

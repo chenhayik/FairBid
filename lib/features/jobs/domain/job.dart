@@ -2,6 +2,9 @@ import '../../../core/util/money.dart';
 import 'appointment.dart';
 import 'price_change_request.dart';
 
+/// What:   Lifecycle of a job.
+/// Input:  Stored `status` string via [fromStorage]; unknown values read as open.
+/// Output: open, inProgress, completed or cancelled, with a display [label].
 enum JobStatus {
   open,
   inProgress,
@@ -79,7 +82,8 @@ class JobBudget {
   final int? maxSen;
   final bool hourly;
 
-  /// e.g. `RM 100 – RM 250` or `RM 50/hr`.
+  /// What:   Display text for the budget.
+  /// Output: e.g. `RM 100 – RM 250` or `RM 50/hr`; null when no bound is set.
   String? get label =>
       formatBudget(minSen: minSen, maxSen: maxSen, hourly: hourly);
 
@@ -169,7 +173,7 @@ class Job {
   /// Pending mutual price-change proposal, or null.
   final PriceChangeRequest? priceChangeRequest;
 
-  /// Whether a price change is awaiting the counterparty's decision.
+  /// What:   Whether a price change is awaiting the counterparty's decision.
   bool get hasPendingPriceChange => priceChangeRequest != null;
 
   /// Pending cancellation request: `'requestor'` or `'provider'`, else null.
@@ -180,7 +184,7 @@ class Job {
   /// Set when the job is cancelled: a uid, `'admin'`, or `'dispute'`.
   final String? cancelledBy;
 
-  /// Whether a mid-flight cancellation is awaiting the counterparty's decision.
+  /// What:   Whether a mid-flight cancellation is awaiting the counterparty's decision.
   bool get hasPendingCancellation => cancellationRequestedBy != null;
 
   final String? bundleId;
@@ -213,15 +217,19 @@ class Job {
   /// Output: True until the visit time is confirmed.
   bool get needsAppointment => schedulingRequired && appointment == null;
 
+  /// What:   Whether the job is a task of a bundle.
   bool get isBundleTask => bundleId != null;
 
-  /// Not yet released from its bundle; award and cancel happen for the whole bundle.
+  /// What:   Whether the task is still part of its bundle.
+  /// Notes:  Not yet released; award and cancel happen for the whole bundle.
   bool get isLiveBundleTask => bundleId != null && releasedAt == null;
 
-  /// [isLiveBundleTask] and still open; false once the bundle is awarded.
+  /// What:   Whether the task is open for package bids.
+  /// Output: True for a live bundle task that is still open; false once the bundle is awarded.
   bool get isBiddingAsBundle => isLiveBundleTask && status == JobStatus.open;
 
-  /// Client-owned fields; the repository adds `createdAt`, `bidCount` and `status`.
+  /// What:   Fields the client writes.
+  /// Output: Map without `createdAt`, `bidCount` and `status`; the repository adds those.
   Map<String, dynamic> toMap() => {
         'requestorId': requestorId,
         'requestorName': requestorName,

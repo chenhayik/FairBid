@@ -162,20 +162,20 @@ service cloud.firestore {
       }
     }
 
-    function isApprovedProvider() {
-      return me().role == 'provider' && me().verificationStatus == 'approved';
-    }
-
     function ownsJob(jobId) {
       return get(/databases/$(database)/documents/jobs/$(jobId))
           .data.requestorId == request.auth.uid;
     }
 
-    function isAcceptedProvider(jobId) {
-      return get(/databases/$(database)/documents/jobs/$(jobId))
-          .data.acceptedProviderId == request.auth.uid;
-    }
+        function isAcceptedProvider(jobId) {
+          return get(/databases/$(database)/documents/jobs/$(jobId))
+              .data.acceptedProviderId == request.auth.uid;
+        }
 
+
+    function isApprovedProvider() {
+      return me().role == 'provider' && me().verificationStatus == 'approved';
+    }
     // Bidding is open while status is 'open' and the deadline has not passed.
     // This also blocks late bids before the expiry sweep runs.
     function jobBiddingOpen(jobId) {

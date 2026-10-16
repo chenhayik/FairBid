@@ -18,7 +18,9 @@ enum ToyyibpayReturnStatus {
   /// `status_id=3` or unrecognised.
   failed;
 
-  /// Maps the `status_id` query param; anything else is [failed] since an attempt did happen.
+  /// What:   Maps toyyibPay's `status_id` to a status.
+  /// Input:  [statusId] query parameter.
+  /// Output: success for 1, pending for 2, otherwise failed (an attempt did happen).
   static ToyyibpayReturnStatus fromStatusId(String? statusId) =>
       switch (statusId) {
         '1' => success,
@@ -68,6 +70,9 @@ class _ToyyibpayWebViewScreenState extends State<ToyyibpayWebViewScreen> {
       ..loadRequest(Uri.parse(widget.paymentUrl));
   }
 
+  /// What:   Closes the payment page without a return redirect.
+  /// Input:  None.
+  /// Output: Pops ToyyibpayReturnStatus.cancelled.
   void _cancel() => Navigator.of(context).pop(ToyyibpayReturnStatus.cancelled);
 
   @override

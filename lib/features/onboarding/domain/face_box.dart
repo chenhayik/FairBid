@@ -20,7 +20,9 @@ class FaceBox {
         'aspect': aspect,
       };
 
-  /// Null when absent or incomplete, so callers show the full image.
+  /// What:   Reads a saved face rectangle.
+  /// Input:  [map] with left, top, width, height and aspect.
+  /// Output: Null when absent or incomplete, so callers show the full image.
   static FaceBox? fromMap(Map<String, dynamic>? map) {
     if (map == null) return null;
     double? read(String k) => (map[k] as num?)?.toDouble();

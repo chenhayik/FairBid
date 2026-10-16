@@ -5,6 +5,10 @@ const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const {FieldValue} = require("firebase-admin/firestore");
 
+/**
+ * What:   Firebase Storage URL prefix our uploaded images start with.
+ * Output: A string; fetchInlineImage() only accepts URLs that start with it.
+ */
 const IMG_PREFIX =
   "https://firebasestorage.googleapis.com/v0/b/fairbid-c9340.firebasestorage.app/o/";
 
@@ -76,12 +80,11 @@ function throwIfSuspended(user) {
  * Input:  A user doc's data, [requiredSen] and the error [message].
  * Output: Nothing; throws `failed-precondition` with `reason`, `shortfallSen`,
  *         `availableSen` and `requiredSen` (the app reads them) when short.
- * Notes:  `escrowLockedSen` is a legacy field nothing writes now; it is still
- *         subtracted so old docs that hold a value stay safe.
+ * Notes:  Ignores the legacy `escrowLockedSen`: nothing writes or releases it,
+ *         so a value left on an old doc would cap the wallet forever.
  */
 function assertCanPay(wallet, requiredSen, message) {
-  const available =
-      (wallet.walletBalanceSen || 0) - (wallet.escrowLockedSen || 0);
+  const available = wallet.walletBalanceSen || 0;
   if (available < requiredSen) {
     throw new functions.https.HttpsError("failed-precondition", message, {
       reason: "insufficient_balance",
@@ -142,7 +145,10 @@ function logJobEvent(jobId, eventId, type, title, tx = null) {
   return tx ? tx.set(ref, entry) : ref.set(entry);
 }
 
-/** `fromUid`/`toUid` sentinel for the escrow leg of a fund/release entry. */
+/**
+ * What:   `fromUid`/`toUid` sentinel for the escrow leg of a ledger entry.
+ * Output: The string "escrow", used on fund and release entries.
+ */
 const ESCROW = "escrow";
 
 /**

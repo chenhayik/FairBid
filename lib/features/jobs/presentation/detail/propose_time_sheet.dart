@@ -124,18 +124,24 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     super.dispose();
   }
 
-  /// A finish date counts as the end of that day.
+  /// What:   Finish time of a multi-day visit.
+  /// Output: End of the chosen finish date (23:59), or null if none.
   DateTime? get _endAt {
     final d = _finishesOn;
     return d == null ? null : DateTime(d.year, d.month, d.day, 23, 59);
   }
 
+  /// What:   Whether this reschedules a visit starting within 24 hours.
+  /// Output: True when an agreed visit is less than 24 hours away (late changes are recorded on the job).
   bool get _isLateChange {
     final start = widget.job.appointment?.startAt;
     return start != null &&
         start.difference(DateTime.now()) < const Duration(hours: 24);
   }
 
+  /// What:   Date then time picker for one option.
+  /// Input:  [current] pre-selected value, if any.
+  /// Output: The picked DateTime, or null if either picker is dismissed.
   Future<DateTime?> _pickDateTime(DateTime? current) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -161,6 +167,8 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     if (picked != null) setState(() => _options[index] = picked);
   }
 
+  /// What:   Date picker for the optional finish day.
+  /// Output: Sets [_finishesOn]; the earliest choice is the day of the latest proposed time.
   Future<void> _pickFinish() async {
     final latest = _options.whereType<DateTime>().fold<DateTime?>(
           null,
@@ -177,6 +185,9 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     if (date != null) setState(() => _finishesOn = date);
   }
 
+  /// What:   Send button handler.
+  /// Input:  Picked options, finish date, note and sibling tasks to share the times with.
+  /// Output: Validates with validateVisitTimes(), then JobRepository.proposeAppointment() (times sorted); pops with a snackbar or shows the error.
   Future<void> _send() async {
     final problem = validateVisitTimes(
       options: _options,
@@ -217,6 +228,8 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     }
   }
 
+  /// What:   Shows a send failure.
+  /// Output: Clears busy and sets [_error] to [message] or a generic text.
   void _fail(String? message) {
     if (!mounted) return;
     setState(() {

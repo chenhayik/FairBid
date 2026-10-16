@@ -33,6 +33,11 @@ const GENERIC_LENGTH = {min: 8, max: 17};
 // New or changed payout details wait this long before a withdrawal.
 const HOLD_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * What:   Digit extractor.
+ * Input:  Any [value].
+ * Output: Its digits only, as a string.
+ */
 const digits = (value) => String(value || "").replace(/\D/g, "");
 
 /**
@@ -46,7 +51,11 @@ function normaliseMobile(value) {
   return /^01\d{8,9}$/.test(d) ? d : null;
 }
 
-/** "012-•••• 678": enough to recognise, not enough to reuse. */
+/**
+ * What:   Mobile number mask.
+ * Input:  A normalised mobile number.
+ * Output: e.g. `012-•••• 678`: enough to recognise, not enough to reuse.
+ */
 function maskMobile(mobile) {
   return `${mobile.slice(0, 3)}-•••• ${mobile.slice(-3)}`;
 }

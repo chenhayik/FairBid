@@ -49,7 +49,9 @@ class _IdentityStepState extends State<IdentityStep> {
     super.dispose();
   }
 
-  /// Friendly text for the first issue, shown once 12+ digits are typed.
+  /// What:   Friendly text for the first MyKad issue.
+  /// Input:  [value] from the IC field; MyKadNumber.issues() (mykad_number.dart).
+  /// Output: The message, or null until 12 or more digits are typed.
   static String? _icError(String? value) {
     final text = value ?? '';
     final issues = MyKadNumber.issues(text);
@@ -65,7 +67,9 @@ class _IdentityStepState extends State<IdentityStep> {
     };
   }
 
-  /// Mirrors the fields into the controller on every keystroke so Continue matches the screen.
+  /// What:   Mirrors the fields into the controller on every keystroke.
+  /// Input:  The business name, SSM and IC controllers.
+  /// Output: Updates OnboardingController data so Continue matches the screen.
   void _writeThrough() {
     final onboarding = context.read<OnboardingController>();
     onboarding.data.businessName = _businessName.text.trim();
@@ -74,7 +78,9 @@ class _IdentityStepState extends State<IdentityStep> {
     setState(() {});
   }
 
-  /// Asks for camera or gallery, then runs [upload].
+  /// What:   Asks for camera or gallery, then runs [upload].
+  /// Input:  [title] for the sheet; [upload] callback taking the chosen source.
+  /// Output: Nothing if the sheet is dismissed.
   Future<void> _chooseAndUpload(
     BuildContext context,
     String title,
@@ -84,7 +90,9 @@ class _IdentityStepState extends State<IdentityStep> {
     if (source != null) await upload(source);
   }
 
-  /// Copies the server's proposals into the fields ("Use these details").
+  /// What:   Applies the server's SSM proposals to the fields ("Use these details").
+  /// Input:  OnboardingController.applySsmExtract().
+  /// Output: Updates the business name and SSM text fields.
   void _useExtract() {
     final onboarding = context.read<OnboardingController>()..applySsmExtract();
     _businessName.text = onboarding.data.businessName;
@@ -359,7 +367,9 @@ class _IdentityStepState extends State<IdentityStep> {
   }
 }
 
-/// Check icon or info icon with a title, for the verdict cards.
+/// What:   Check or info icon with a title for the verdict cards.
+/// Input:  [passed]; [passedText] / [reviewText] titles.
+/// Output: Row with a green check or amber info icon.
 Widget _verdictHeader(
     BuildContext context, bool passed, String passedText, String reviewText) {
   return Row(
@@ -378,7 +388,9 @@ Widget _verdictHeader(
   );
 }
 
-/// Progress card shown until the server reports; never blocks Continue.
+/// What:   Progress card shown until the server reports.
+/// Input:  [timedOut]; [message].
+/// Output: Spinner and message, or a "finish in the background" note once timed out; never blocks Continue.
 class _CheckingCard extends StatelessWidget {
   const _CheckingCard({
     required this.timedOut,
@@ -424,7 +436,10 @@ class _CheckingCard extends StatelessWidget {
   }
 }
 
-/// What the server read from the SSM document and why it is or isn't satisfied; applied only via [onUse].
+/// What:   What the server read from the SSM document and why it is or is not satisfied.
+/// Input:  [extract]; [typedNumber]; [onUse] callback.
+/// Output: Verdict, read name and number, a mismatch warning, reasons and "Use these details".
+/// Notes:  The typed number is compared here too, to cover applicants who type after uploading.
 class _ExtractCard extends StatelessWidget {
   const _ExtractCard({
     required this.extract,
@@ -490,7 +505,9 @@ class _ExtractCard extends StatelessWidget {
   }
 }
 
-/// Advisory result of the automated MyKad check; an admin decides.
+/// What:   Advisory result of the automated MyKad check; an admin decides.
+/// Input:  [extract] from OnboardingController.idExtract.
+/// Output: Verdict header, failure reasons, a retake hint for unreadable or mismatched numbers and an admin-review note.
 class _IdResultCard extends StatelessWidget {
   const _IdResultCard({required this.extract});
 

@@ -26,6 +26,11 @@ const VERIFICATION_PENDING_SCORE = 40;
 // completed jobs.
 const MIN_JOBS_FOR_VISIBLE_SCORE = 3;
 
+/**
+ * What:   Range limiter.
+ * Input:  [value] and the bounds [lo] and [hi].
+ * Output: [value] held between [lo] and [hi].
+ */
 const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 
 /**

@@ -56,13 +56,17 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     );
   }
 
+  /// What:   Lets the provider set the base location for distance sorting.
+  /// Output: Opens RegionPickerScreen, then AuthController.setBaseLocation() (auth_controller.dart).
   Future<void> _setBaseLocation() async {
     final picked = await RegionPickerScreen.show(context);
     if (picked == null || !mounted) return;
     await context.read<AuthController>().setBaseLocation(picked);
   }
 
-  /// Applies search, budget and radius, sorting nearest first when a base location is known.
+  /// What:   Client-side filtering of the loaded jobs.
+  /// Input:  [jobs] from watchOpenJobs() (category is already filtered on the server); [base] location or null.
+  /// Output: (job, distance label) pairs matching the search text, max budget and radius, nearest first when [base] is known.
   List<(Job, String?)> _applyFilters(List<Job> jobs, LatLng? base) {
     final query = _search.text.trim().toLowerCase();
     final results = <(Job, double?)>[];
@@ -233,6 +237,9 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   }
 }
 
+/// What:   Row of Category, Radius and Likely price filter chips.
+/// Input:  Current values and their change callbacks from _JobFeedScreenState.
+/// Output: Horizontally scrolling chips; a null value means no filter.
 class _FilterBar extends StatelessWidget {
   const _FilterBar({
     required this.category,
@@ -300,12 +307,16 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
-// Wraps a menu value so a null pick ("All categories") isn't mistaken for a dismissed menu.
+/// What:   Wrapper for a menu value.
+/// Notes:  A null pick ("All categories") isn't mistaken for a dismissed menu.
 class _MenuOption<T> {
   const _MenuOption(this.value);
   final T value;
 }
 
+/// What:   One filter chip with a popup menu.
+/// Input:  [label], current [value], [items] (menu text to value) and [onSelected].
+/// Output: Chip tinted when a value is set; selecting calls [onSelected].
 class _FilterChip<T> extends StatelessWidget {
   const _FilterChip({
     required this.label,

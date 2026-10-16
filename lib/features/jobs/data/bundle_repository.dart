@@ -19,6 +19,9 @@ class BundleRejectedException implements Exception {
 /// Output: Bundles and priced award options; failures as [BundleRejectedException].
 /// Notes:  firestore.rules blocks client writes to bundles.
 abstract interface class BundleRepository {
+  /// What:   Creates a bundle with its child task jobs via the `createBundle` callable.
+  /// Input:  Title, description, shared [location], [tasks] drafts, optional photos and deadline.
+  /// Output: The new bundle id.
   Future<String> create({
     required String title,
     required String description,
@@ -28,26 +31,33 @@ abstract interface class BundleRepository {
     DateTime? deadline,
   });
 
+  /// What:   Live view of one bundle; null when it doesn't exist.
   Stream<Bundle?> watchBundle(String id);
 
+  /// What:   Live list of the requestor's bundles.
   Stream<List<Bundle>> watchMyBundles(String requestorId);
 
+  /// What:   One-shot read of a bundle; null when missing.
   Future<Bundle?> getById(String id);
 
-  /// Cancels an open bundle and its open tasks (a task can't be cancelled alone).
+  /// What:   Cancels an open bundle and its open tasks.
+  /// Notes:  A task can't be cancelled alone.
   Future<void> cancelBundle(String id);
 
-  /// The award options for [bundleId]; empty when no bid covers anything yet.
+  /// What:   Priced award options for [bundleId].
+  /// Output: Options; empty when no bid covers anything yet.
   Future<List<BundleAwardOption>> previewAward(String bundleId);
 
-  /// Prices the requestor's own picks (task id -> provider id): the priced option or the problems, never both.
+  /// What:   Prices the requestor's own picks.
+  /// Input:  [bundleId]; providerByTaskId (task id -> provider id).
+  /// Output: The priced option or the problems, never both.
   Future<({BundleAwardOption? option, List<String> problems})> priceManualAward(
     String bundleId,
     Map<String, String> providerByTaskId,
   );
 
-  /// Awards the tasks in [providerByTaskId]; the rest go back to bidding.
-  /// Refused if the total differs from [expectedTotalSen] or balance is short.
+  /// What:   Awards the tasks in [providerByTaskId]; the rest go back to bidding.
+  /// Output: Funds and assigns the tasks; refused if the total differs from [expectedTotalSen] or balance is short.
   Future<void> award({
     required String bundleId,
     required Map<String, String> providerByTaskId,
@@ -201,6 +211,8 @@ class FirestoreBundleRepository implements BundleRepository {
     }
   }
 
+  /// What:   Maps a Firestore doc to a Bundle.
+  /// Output: Bundle with createdAt and deadline converted to DateTime.
   Bundle _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});
     data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();

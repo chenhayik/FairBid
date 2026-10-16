@@ -41,6 +41,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
     super.dispose();
   }
 
+  /// What:   Resets the setup state and re-reads the enrolled factors.
+  /// Input:  AuthController.enrolledFactors().
+  /// Output: Clears the enrolment, error and code; refreshes the factors future.
   void _reload() {
     setState(() {
       _enrollment = null;
@@ -50,6 +53,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
     });
   }
 
+  /// What:   Begins two-factor setup after re-confirming the password.
+  /// Input:  ReauthDialog; AuthController.startTotpEnrollment().
+  /// Output: Stores the TOTP enrolment so the QR / key card shows; or an inline error.
   Future<void> _startSetup() async {
     final auth = context.read<AuthController>();
     final user = auth.user;
@@ -82,6 +88,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
     }
   }
 
+  /// What:   Completes setup with the 6-digit code from the authenticator app.
+  /// Input:  The code field and the stored enrolment; AuthController.completeTotpEnrollment().
+  /// Output: Reloads and shows "Two-factor authentication is on."; on failure shows the error and clears the code.
   Future<void> _finishSetup() async {
     final enrollment = _enrollment;
     if (enrollment == null) return;
@@ -112,6 +121,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
     });
   }
 
+  /// What:   Removes [factor] after a confirm dialog.
+  /// Input:  [factor] from AuthController.enrolledFactors().
+  /// Output: AuthController.unenrollFactor(), then reloads; or an inline error.
   Future<void> _turnOff(MfaFactor factor) async {
     final confirmed = await showConfirmDialog(
       context,
@@ -186,7 +198,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
   }
 }
 
-/// The On/Off status with its turn-on or turn-off action.
+/// What:   The On/Off status with its turn-on or turn-off action.
+/// Input:  [factor] (null when off); [busy]; [onTurnOn] / [onTurnOff] callbacks.
+/// Output: AppCard with the status text and one button.
 class _StatusCard extends StatelessWidget {
   const _StatusCard({
     required this.factor,
@@ -262,7 +276,9 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-/// The QR, key and code panel shown during setup.
+/// What:   The QR, key and code panel shown during setup.
+/// Input:  [enrollment] (QR URL and secret key); the [code] controller; [busy]; [onSubmit] / [onCancel] callbacks.
+/// Output: AppCard with the QR, a copyable key, the code field and Verify / Cancel buttons.
 class _SetupCard extends StatelessWidget {
   const _SetupCard({
     required this.enrollment,

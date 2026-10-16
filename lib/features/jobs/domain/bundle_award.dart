@@ -34,7 +34,8 @@ class BundleAwardOption {
 
   final List<BundleAwardItem> awards;
 
-  /// The picks to send to `awardBundle`.
+  /// What:   The picks to send to `awardBundle`.
+  /// Output: Map of task id to provider id, built from [awards].
   Map<String, String> get providerByTaskId => {
     for (final award in awards)
       for (final taskId in award.taskAmountsSen.keys) taskId: award.providerId,
@@ -78,6 +79,8 @@ class BundleAwardItem {
   /// so the funded stage must equal it exactly.
   final Map<String, int> taskAmountsSen;
 
+  /// What:   What this provider is paid across their tasks.
+  /// Output: Sum of [taskAmountsSen] in sen.
   int get totalSen =>
       taskAmountsSen.values.fold(0, (sum, amount) => sum + amount);
 

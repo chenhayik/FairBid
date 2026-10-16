@@ -34,6 +34,9 @@ class SubmitBundleBidSheet extends StatefulWidget {
   final AppUser bidder;
   final BundleBid? existing;
 
+  /// What:   Opens the sheet as a modal bottom sheet.
+  /// Input:  [bundle], [tasks], [bidder], optional [existing] bid; BundleBidRepository via context.read.
+  /// Output: Future that completes when the sheet closes.
   static Future<void> show(
     BuildContext context, {
     required Bundle bundle,
@@ -125,6 +128,8 @@ class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
     super.dispose();
   }
 
+  /// What:   Ticks or unticks a task.
+  /// Output: Updates [_ticked]; clears and hides the bundle price when fewer than two tasks remain.
   void _toggleTask(Job task, bool? value) {
     final tick = value ?? false;
     setState(() {
@@ -141,6 +146,8 @@ class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
   List<Job> get _tickedTasks =>
       widget.tasks.where((t) => _ticked[t.id] == true).toList();
 
+  /// What:   Sum of the prices typed for the ticked tasks.
+  /// Output: Sen; unparsable prices count as 0.
   int get _tickedTaskTotalSen => _tickedTasks.fold(
     0,
     (sum, t) => sum + (parseRmToSen(_prices[t.id]!.text) ?? 0),
@@ -148,7 +155,8 @@ class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
 
   bool get _bundleFieldsEnabled => _tickedTasks.length >= 2;
 
-  /// "RM X off your task total" while the bundle price is valid.
+  /// What:   Helper text under the bundle price field.
+  /// Output: "RM X off your task total" while the bundle price is valid, else the charged-only-if-you-win-all note.
   String _bundleSavingText() {
     final sen = parseRmToSen(_bundlePrice.text);
     final total = _tickedTaskTotalSen;
@@ -158,6 +166,9 @@ class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
     return '${formatRm(total - sen)} off your task total';
   }
 
+  /// What:   Submit button handler.
+  /// Output: Validates the form, a ticked task and the escrow checkbox together, rejects totals over PlatformConfig.maxBidSen,
+  ///         then submits via the controller and pops with a snackbar.
   Future<void> _submit() async {
     final tickedTasks = _tickedTasks;
     // Check every gate so all errors show together.
@@ -203,6 +214,8 @@ class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
     }
   }
 
+  /// What:   Withdraw button handler.
+  /// Output: After a confirm dialog, withdraws via the controller and pops with a snackbar.
   Future<void> _withdraw() async {
     final confirmed = await showConfirmDialog(
       context,
@@ -364,6 +377,8 @@ class _SubmitBundleBidSheetState extends State<SubmitBundleBidSheet> {
     );
   }
 
+  /// What:   One task line in the picker.
+  /// Output: Checkbox with category and budget, a price field when ticked and an expandable description.
   Widget _taskRow(ThemeData theme, Job task) {
     final ticked = _ticked[task.id] ?? false;
     final budgetLabel = task.budget?.label;

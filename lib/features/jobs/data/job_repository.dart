@@ -11,7 +11,9 @@ import 'bid_repository.dart' show InsufficientBalanceException;
 
 const int kWhereInLimit = 30;
 
-/// Splits [ids] into ordered chunks of at most [kWhereInLimit], Firestore's `whereIn` cap.
+/// What:   Splits ids to fit Firestore's `whereIn` cap.
+/// Input:  [ids] to query.
+/// Output: Ordered chunks of at most [kWhereInLimit].
 List<List<String>> chunkForWhereIn(List<String> ids) => [
       for (var i = 0; i < ids.length; i += kWhereInLimit)
         ids.sublist(i, min(i + kWhereInLimit, ids.length)),
@@ -24,46 +26,56 @@ const int kOpenJobsPageSize = 30;
 /// Input:  Firestore `jobs` plus callables, via FirestoreJobRepository.
 /// Output: Job streams/reads, cancellations, price changes, visit scheduling, private address.
 abstract interface class JobRepository {
-  /// Creates an open job; returns its id.
+  /// What:   Creates an open job.
+  /// Output: The new job id.
   Future<String> create(Job job);
 
-  /// Open jobs, newest first, up to [limit]. [category] filters on the server,
-  /// so the limit can't hide jobs from other categories.
+  /// What:   Live feed of open jobs.
+  /// Input:  Optional [category] filter, applied on the server so [limit] can't hide other categories.
+  /// Output: Jobs newest first, up to [limit].
   Stream<List<Job>> watchOpenJobs({String? category, int limit});
 
-  /// Streams the jobs posted by [requestorId] (newest first).
+  /// What:   Live list of jobs posted by [requestorId].
+  /// Output: Jobs, newest first.
   Stream<List<Job>> watchMyJobs(String requestorId);
 
-  /// Streams jobs a provider has won (newest first).
+  /// What:   Live list of jobs a provider has won.
+  /// Output: Jobs, newest first.
   Stream<List<Job>> watchAssignedJobs(String providerId);
 
+  /// What:   Live list of a bundle's child task jobs.
   Stream<List<Job>> watchBundleTasks(String bundleId);
 
-  /// One-shot read of [bundleId]'s tasks, ordered like [watchBundleTasks].
+  /// What:   One-shot read of [bundleId]'s tasks.
+  /// Output: Jobs ordered like [watchBundleTasks].
   Future<List<Job>> getBundleTasks(String bundleId);
 
-  /// Streams one job; null when it doesn't exist.
+  /// What:   Live view of one job.
+  /// Output: The job, or null when it doesn't exist.
   Stream<Job?> watchJob(String id);
 
-  /// Cancels a still-open job. Rules only allow open to cancelled directly;
-  /// later cancellations use the callables below.
+  /// What:   Cancels a still-open job.
+  /// Notes:  Rules only allow open to cancelled directly; later cancellations use the callables below.
   Future<void> cancelOpenJob(String id);
 
-  /// Either party asks to cancel an in-progress job. Refused while a stage is delivered or disputed.
+  /// What:   Either party asks to cancel an in-progress job.
+  /// Output: Refused while a stage is delivered or disputed.
   Future<void> requestCancellation(String jobId, {String? reason});
 
-  /// The other party answers a cancellation request: [accept] finishes it,
-  /// otherwise the request is cleared.
+  /// What:   The other party answers a cancellation request.
+  /// Output: [accept] finishes the cancellation, otherwise the request is cleared.
   Future<void> respondToCancellation(String jobId, {required bool accept});
 
-  /// Either party proposes a new price for an in-progress job.
+  /// What:   Either party proposes a new price for an in-progress job.
+  /// Input:  [newAmountSen] and [reason].
   Future<void> requestPriceChange(String jobId,
       {required int newAmountSen, required String reason});
 
-  /// The other party answers a price change; accepting an increase can fail with `insufficient_balance`.
+  /// What:   The other party answers a price change.
+  /// Output: Accepting an increase can fail with `insufficient_balance`.
   Future<void> respondToPriceChange(String jobId, {required bool accept});
 
-  /// The proposer withdraws their pending price change.
+  /// What:   The proposer withdraws their pending price change.
   Future<void> withdrawPriceChange(String jobId);
 
   /// What:   Proposes 1-3 visit times; the other party confirms one.
@@ -96,16 +108,21 @@ abstract interface class JobRepository {
   /// Output: Sets arrivedAt.
   Future<void> markArrived(String jobId);
 
-  /// Streams a job's activity timeline (oldest first), written by the server.
+  /// What:   Live activity timeline of a job.
+  /// Output: Server-written events, oldest first.
   Stream<List<JobEvent>> watchJobEvents(String jobId);
 
-  /// Streams the saved jobs for [jobIds], newest first; handles lists over the `whereIn` cap.
+  /// What:   Live list of the user's saved jobs.
+  /// Input:  [jobIds] from the saved-ids list.
+  /// Output: Jobs newest first; handles lists over the `whereIn` cap.
   Stream<List<Job>> watchSavedJobs(List<String> jobIds);
 
-  /// Saves [jobId]'s private service address. Only the owner may write it.
+  /// What:   Saves a job's private service address.
+  /// Notes:  Only the owner may write it.
   Future<void> setJobAddress(String jobId, ServiceAddress address);
 
-  /// Streams [jobId]'s private address (null if unset); readable by the owner, accepted provider and admins.
+  /// What:   Live view of a job's private address.
+  /// Output: The address, or null if unset; readable by the owner, accepted provider and admins.
   Stream<ServiceAddress?> watchJobAddress(String jobId);
 }
 
@@ -326,7 +343,8 @@ class FirestoreJobRepository implements JobRepository {
 
   static const _jobEventsLimit = 50;
 
-  /// Newest first. Chunks finish in any order, so sort to keep the list steady.
+  /// What:   Sorts jobs newest first.
+  /// Notes:  Chunks finish in any order, so sorting keeps the list steady.
   List<Job> _byNewest(List<Job> jobs) {
     final sorted = [...jobs];
     sorted.sort((a, b) {
@@ -338,7 +356,8 @@ class FirestoreJobRepository implements JobRepository {
     return sorted;
   }
 
-  /// combineLatest: emits once every stream in [streams] has emitted (no rxdart dependency).
+  /// What:   combineLatest for job lists (no rxdart dependency).
+  /// Output: Emits the joined list once every stream in [streams] has emitted.
   Stream<List<Job>> _combineLatest(List<Stream<List<Job>>> streams) {
     final latest = List<List<Job>?>.filled(streams.length, null);
     final subscriptions = <StreamSubscription<List<Job>>>[];
@@ -392,6 +411,8 @@ class FirestoreJobRepository implements JobRepository {
   List<Job> _toJobs(QuerySnapshot<Map<String, dynamic>> snapshot) =>
       snapshot.docs.map(_fromDoc).toList();
 
+  /// What:   Maps a Firestore doc to a Job.
+  /// Output: Job with every Timestamp converted to DateTime.
   Job _fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) => Job.fromMap(
         doc.id,
         _toDates(doc.data() ?? {}) as Map<String, dynamic>,

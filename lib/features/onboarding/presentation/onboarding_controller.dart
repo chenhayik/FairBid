@@ -78,7 +78,10 @@ class OnboardingController extends ChangeNotifier {
   IdExtract? get idExtract => _idExtract;
   bool get idCheckTimedOut => _idCheckTimedOut;
 
-  /// Loads saved progress for [uid] once.
+  /// What:   Loads saved progress once and starts watching the server's document checks.
+  /// Input:  [uid]; OnboardingRepository.load(), watchSsmExtract(), watchIdExtract() (onboarding_repository.dart).
+  /// Output: Fills [data] (a fresh draft if the load fails) and updates the SSM / ID verdicts as they arrive.
+  /// Notes:  Subscribed on load, not after an upload, because the extract outlives the session.
   Future<void> loadFor(String uid) async {
     if (_loadedUid == uid) return;
     _loadedUid = uid;
@@ -107,7 +110,9 @@ class OnboardingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Saves, then advances a stage; a failed save rolls the step back.
+  /// What:   Saves the draft, then moves to the next stage.
+  /// Input:  [data]; OnboardingRepository.save().
+  /// Output: Advances [data].step; a failed save rolls the step back and sets [errorMessage].
   Future<void> saveAndContinue() => _run(() async {
         final previous = data.step;
         if (data.step < OnboardingData.lastStep) data.step++;
@@ -119,14 +124,20 @@ class OnboardingController extends ChangeNotifier {
         }
       });
 
-  /// Saves without advancing.
+  /// What:   Saves the draft without moving stage.
+  /// Input:  [data]; OnboardingRepository.save().
+  /// Output: True on success; false with [errorMessage] set.
   Future<bool> saveDraft() => _run(() => _repository.save(_loadedUid!, data));
 
-  /// Final submission from the payout stage; sets status to pending review.
+  /// What:   Submits the application from the payout stage.
+  /// Input:  [data]; OnboardingRepository.submitForReview().
+  /// Output: Saves everything and sets the status to pending review; false with [errorMessage] on failure.
   Future<bool> submitForReview() =>
       _run(() => _repository.submitForReview(_loadedUid!, data));
 
-  /// Steps back one stage; false at the first stage.
+  /// What:   Steps back one stage.
+  /// Input:  [data].step.
+  /// Output: False at the first stage; otherwise true after decrementing.
   bool goBack() {
     if (data.step <= OnboardingData.firstStep) return false;
     data.step--;
@@ -139,7 +150,10 @@ class OnboardingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Uploads the ID photo from [source] (camera or gallery).
+  /// What:   Uploads the ID photo from [source] (camera or gallery).
+  /// Input:  Image picker; needs PDPA consent and passes the on-device face check.
+  /// Output: Sets the ID URL and face box, clears the old verdict and starts the verdict wait.
+  /// Notes:  The draft is saved first because the server reads the saved type and number as the photo lands.
   Future<void> pickIdDocument(ImageSource source) => _pickAndUpload(
         purpose: 'id_document',
         source: source,
@@ -158,7 +172,9 @@ class OnboardingController extends ChangeNotifier {
         },
       );
 
-  /// Bounds the wait for the ID verdict, as with SSM.
+  /// What:   Bounds the wait for the ID verdict, as with SSM.
+  /// Input:  [_extractWait].
+  /// Output: Sets [idCheckTimedOut] if no verdict arrives in time.
   void _startIdWait() {
     _idTimeout?.cancel();
     _idTimeout = Timer(_extractWait, () {
@@ -168,7 +184,9 @@ class OnboardingController extends ChangeNotifier {
     });
   }
 
-  /// Switching type clears the uploaded ID, which was never checked under the new type.
+  /// What:   Switches between MyKad and passport.
+  /// Input:  [type] chosen in IdentityStep.
+  /// Output: A changed type clears the uploaded ID, which was never checked under the new type.
   void setIdDocumentType(IdDocumentType type) {
     if (type != data.idDocumentType) {
       data
@@ -179,7 +197,9 @@ class OnboardingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A changed IC number clears the uploaded ID.
+  /// What:   Stores the typed IC number.
+  /// Input:  [value] from the IC field.
+  /// Output: A change in the digits clears the uploaded ID.
   void setIcNumber(String value) {
     final changed = _digits(value) != _digits(data.icNumber);
     data.icNumber = value.trim();
@@ -207,7 +227,9 @@ class OnboardingController extends ChangeNotifier {
         apply: (url) => data.selfieUrl = url,
       );
 
-  /// Picks a PDF; null when cancelled or unusable (the error is set).
+  /// What:   Picks an SSM PDF.
+  /// Input:  The injected document picker (pickSsmPdf by default).
+  /// Output: The file, or null when cancelled or unusable (the error message is set).
   Future<XFile?> _pickPdf() async {
     try {
       return await _pdfPicker();
@@ -218,7 +240,10 @@ class OnboardingController extends ChangeNotifier {
     }
   }
 
-  /// Uploads the SSM document untouched, then waits for the server's reading.
+  /// What:   Uploads the SSM document untouched, then waits for the server's reading.
+  /// Input:  PDF picker; DocumentStorageRepository.uploadVerificationImage().
+  /// Output: Sets the document URL and a timeout for the verdict; sets an error on failure.
+  /// Notes:  The typed number is saved first because the server trigger reads it the instant the bytes land.
   Future<void> pickSsmDocument() async {
     final file = await _pickPdf();
     if (file == null) return;
@@ -255,8 +280,9 @@ class OnboardingController extends ChangeNotifier {
     }
   }
 
-  /// Uploads the optional SSM Business Profile; the server reads it, then deletes it.
-  /// Only the owner-name comparison result reaches the client, via the extract watch.
+  /// What:   Uploads the optional SSM Business Profile.
+  /// Input:  PDF picker; DocumentStorageRepository.uploadVerificationImage().
+  /// Output: Server reads it, then deletes it; only the owner-name result reaches the client via the extract watch.
   Future<void> pickSsmProfile() async {
     final file = await _pickPdf();
     if (file == null) return;
@@ -278,7 +304,9 @@ class OnboardingController extends ChangeNotifier {
     }
   }
 
-  /// Copies the server's proposals into the form; runs only on "Use these details".
+  /// What:   Copies the server's SSM proposals into the form.
+  /// Input:  [ssmExtract] business name and registration number.
+  /// Output: Updates [data]; runs only on "Use these details".
   void applySsmExtract() {
     final extract = _ssmExtract;
     if (extract == null) return;
@@ -289,7 +317,9 @@ class OnboardingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Sets the typed number and its canonical form together.
+  /// What:   Stores the typed SSM number with its canonical form.
+  /// Input:  [value] from the SSM field; SsmNumber.parse() (ssm_number.dart).
+  /// Output: Sets ssmNumber and ssmNumberNormalized together.
   void setSsmNumber(String value) {
     data
       ..ssmNumber = value.trim()
@@ -327,8 +357,10 @@ class OnboardingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Picks an image, uploads it, and passes the URL to [apply]. With a [faceKind] it
-  /// must pass the on-device face check and consent must exist; the face goes to [applyBox].
+  /// What:   Picks an image, uploads it and hands the URL to [apply].
+  /// Input:  [purpose] storage name; [source]; optional [faceKind], [beforeUpload] and [applyBox].
+  /// Output: Sets busy and error state; one upload at a time.
+  /// How:    With a [faceKind] consent must exist and the on-device face check must pass; the face goes to [applyBox].
   Future<void> _pickAndUpload({
     required String purpose,
     required void Function(String url) apply,
@@ -400,6 +432,9 @@ class OnboardingController extends ChangeNotifier {
     super.dispose();
   }
 
+  /// What:   Wrapper that runs one save action with busy and error state.
+  /// Input:  [action], a repository call.
+  /// Output: True on success; false with [errorMessage] set.
   Future<bool> _run(Future<void> Function() action) async {
     _busy = true;
     _errorMessage = null;

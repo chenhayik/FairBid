@@ -58,7 +58,12 @@ class PlatformConfig {
   /// The score stays "New" until admin-approved and this many jobs are completed.
   static const int minJobsForVisibleScore = 3;
 
-  /// Full v2 breakdown; mirrors `computeTrust` in functions (change both and the shared vectors).
+  /// What:   Full v2 trust breakdown for one user.
+  /// Input:  Rating sum/count, verification status, job and dispute counts and profile-completeness flags from the user doc.
+  /// Output: TrustBreakdown (sub-scores 0-100, composite 0-1000, visibility).
+  /// How:    Reviews use a Bayesian average; track record is per-job points (capped) minus lost-dispute penalty;
+  ///         composite is the weighted sum of the four sub-scores.
+  /// Notes:  Mirrors `computeTrust` in functions; change both and the shared vectors.
   static TrustBreakdown trustBreakdownFor({
     required int ratingSum,
     required int ratingCount,

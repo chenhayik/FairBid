@@ -36,6 +36,8 @@ import 'package:flutter/foundation.dart';
 /// Notes:  Refreshing the router on every profile edit swallows a pop made in the same frame.
 Listenable _redirectInputs(AuthController auth) {
   final inputs = ValueNotifier<Object?>(null);
+  /// What:   Copies the current redirect inputs into the notifier.
+  /// Output: Updates `inputs` with a record; equal records do not notify.
   void sync() {
     final user = auth.user;
     // Records compare by value, so unchanged inputs don't notify.

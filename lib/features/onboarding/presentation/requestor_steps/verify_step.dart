@@ -14,6 +14,9 @@ import '../requestor_onboarding_controller.dart';
 class VerifyStep extends StatelessWidget {
   const VerifyStep({super.key});
 
+  /// What:   Completes requestor onboarding.
+  /// Input:  [withVerification] false clears the optional document first; RequestorOnboardingController.finish().
+  /// Output: Refreshes the user, then goes to `/home`.
   Future<void> _finish(
     BuildContext context, {
     required bool withVerification,

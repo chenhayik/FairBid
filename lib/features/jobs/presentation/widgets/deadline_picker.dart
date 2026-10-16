@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+/// What:   End of a calendar day.
+/// Output: [d] at 23:59:59.
 DateTime endOfDay(DateTime d) => DateTime(d.year, d.month, d.day, 23, 59, 59);
 
 /// What:   Date picker for a bidding deadline (tomorrow to 90 days out).

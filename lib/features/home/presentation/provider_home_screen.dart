@@ -124,7 +124,9 @@ class ProviderHomeScreen extends StatelessWidget {
   }
 }
 
-/// Count of the provider's in-progress jobs.
+/// What:   Count of the provider's in-progress jobs.
+/// Input:  [uid]; JobRepository.watchAssignedJobs() (job_repository.dart).
+/// Output: StatCard showing the count, "-" while loading or on error, 0 when signed out.
 class _ActiveJobsStat extends StatelessWidget {
   const _ActiveJobsStat({required this.uid});
   final String? uid;
@@ -224,7 +226,9 @@ class _UpcomingVisits extends StatelessWidget {
   }
 }
 
-/// Count of the provider's pending per-job and bundle bids.
+/// What:   Count of the provider's pending per-job and bundle bids.
+/// Input:  [uid]; BidRepository.watchMyBids() and BundleBidRepository.watchMyBundleBids().
+/// Output: StatCard with both pending counts added, "-" while loading or on error, 0 when signed out.
 class _PendingBidsStat extends StatelessWidget {
   const _PendingBidsStat({required this.uid});
   final String? uid;
@@ -266,7 +270,9 @@ class _PendingBidsStat extends StatelessWidget {
   }
 }
 
-/// Total of the provider's released milestone payments across every job.
+/// What:   Total of the provider's released milestone payments across every job.
+/// Input:  [uid]; MilestoneRepository.watchProviderMilestones() (milestone_repository.dart).
+/// Output: StatCard with the sum of released and resolved milestone amounts in RM, "-" while loading or on error.
 class _TotalEarningsStat extends StatelessWidget {
   const _TotalEarningsStat({required this.uid});
   final String? uid;
@@ -296,7 +302,10 @@ class _TotalEarningsStat extends StatelessWidget {
   }
 }
 
-/// The three nearest open jobs, or the newest three plus a prompt when no location is saved.
+/// What:   The three nearest open jobs, or the newest three plus a prompt when no location is saved.
+/// Input:  JobRepository.watchOpenJobs(limit: 100); the provider's base location from AuthController.user.
+/// Output: Up to three JobCards with distance labels, or a "Set your location" button when there is no base location.
+/// How:    Distance is ranked in Dart over a wide window so a close-but-older job is not cut off.
 class _NearbyJobs extends StatelessWidget {
   const _NearbyJobs();
 
@@ -381,6 +390,9 @@ class _NearbyJobs extends StatelessWidget {
   }
 }
 
+/// What:   Pill showing the provider's verification status.
+/// Input:  [status] from AppUser.verificationStatus ('approved', 'pending', 'rejected' or other).
+/// Output: Identity verified, Verification pending, Verification rejected or Unverified.
 class _VerificationBadge extends StatelessWidget {
   const _VerificationBadge({required this.status});
   final String status;

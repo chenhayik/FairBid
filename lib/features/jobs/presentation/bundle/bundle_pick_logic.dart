@@ -1,17 +1,23 @@
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 
-/// Title of task [id] in [tasks], or `'a task'`.
+/// What:   Title of one task.
+/// Input:  [tasks] and task [id].
+/// Output: The title, or `'a task'`.
 String taskTitle(List<Job> tasks, String id) =>
     tasks.where((t) => t.id == id).firstOrNull?.title ?? 'a task';
 
-/// Pending bids covering [taskId], cheapest first.
+/// What:   Bids that can win a task.
+/// Input:  [bids] and [taskId].
+/// Output: Pending bids covering it, cheapest first.
 List<BundleBid> bidsCoveringTask(List<BundleBid> bids, String taskId) => [
   for (final bid in bids)
     if (bid.status == BundleBidStatus.pending && bid.coversTask(taskId)) bid,
 ]..sort((a, b) => a.priceFor(taskId)!.compareTo(b.priceFor(taskId)!));
 
-/// Warnings about [picks] (task id -> provider id): picking part of a bid drops its bundle price.
+/// What:   Warnings about the client's picks.
+/// Input:  [picks] (task id to provider id) and [bids].
+/// Output: One hint per provider with a bundle price whose tasks are only partly picked, since that drops the bundle price.
 List<String> pickHints(Map<String, String?> picks, List<BundleBid> bids) {
   final hints = <String>[];
   for (final bid in bids) {

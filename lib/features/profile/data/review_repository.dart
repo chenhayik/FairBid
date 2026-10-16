@@ -61,7 +61,9 @@ class FirebaseReviewRepository implements ReviewRepository {
   CollectionReference<Map<String, dynamic>> _reviews(String userId) =>
       _firestore.collection('users').doc(userId).collection('reviews');
 
-  /// One review per reviewer per job, or per bundle when [bundleId] is given.
+  /// What:   The doc id that enforces one review per reviewer per job.
+  /// Input:  [jobId], [reviewerId] and an optional [bundleId].
+  /// Output: `{bundleId or jobId}_{reviewerId}`.
   String _reviewId({
     required String jobId,
     required String reviewerId,
@@ -155,7 +157,9 @@ class FirebaseReviewRepository implements ReviewRepository {
   }
 }
 
-/// Builds a [Review] from a doc, converting its Timestamp to DateTime.
+/// What:   Builds a [Review] from a Firestore doc.
+/// Input:  [doc] from a `reviews` subcollection.
+/// Output: Review with the createdAt Timestamp converted to DateTime.
 Review reviewFromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
   final data = Map<String, dynamic>.of(doc.data() ?? {});
   data['createdAt'] = (data['createdAt'] as Timestamp?)?.toDate();

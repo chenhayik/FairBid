@@ -43,6 +43,9 @@ Future<void> showBundleBids(
   );
 }
 
+/// What:   One provider's package bid as a card.
+/// Input:  [bid] and [titleFor] (task id to title, via taskTitle in bundle_pick_logic.dart).
+/// Output: Provider chip, status pill once decided, duration, per-task prices, bundle price and an expandable message.
 class _BundleBidCard extends StatefulWidget {
   const _BundleBidCard({required this.bid, required this.titleFor});
 

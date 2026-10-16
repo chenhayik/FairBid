@@ -28,6 +28,9 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
   /// The review with a ruling in flight; its buttons are disabled.
   String? _busyId;
 
+  /// What:   Rules on a flagged review.
+  /// Input:  [item] from the flagged stream; [hide] true to remove it, false to keep it.
+  /// Output: Calls ModerationRepository.moderateReview(); snackbar with the result or the function's error message.
   Future<void> _moderate(FlaggedReview item, {required bool hide}) async {
     final repo = context.read<ModerationRepository>();
     setState(() => _busyId = item.review.id);
@@ -118,7 +121,9 @@ class _ModerationQueueScreenState extends State<ModerationQueueScreen> {
   }
 }
 
-/// A flagged review with the reporter's reason and the Hide / Keep buttons.
+/// What:   A flagged review with the reporter's reason and the Hide / Keep buttons.
+/// Input:  [item]; [busy] disables the buttons; [onHide] / [onKeep] callbacks.
+/// Output: AppCard with review text, a "Reported" banner and two buttons.
 class _FlaggedReviewCard extends StatelessWidget {
   const _FlaggedReviewCard({
     required this.item,

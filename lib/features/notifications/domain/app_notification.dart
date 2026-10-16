@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// What a notification is about; picks its list icon.
+/// What:   What a notification is about.
+/// Input:  The `type` string of the notification doc via NotificationType.fromStorage().
+/// Output: Picks the list icon; unknown values fall back to `message`.
 enum NotificationType {
   bidReceived,
   bidAccepted,

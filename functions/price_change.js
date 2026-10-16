@@ -3,7 +3,10 @@
 
 const {checkFundedPriceChange, isTerminal} = require("./payouts");
 
-/** Max accepted price changes per job. */
+/**
+ * What:   Limit on accepted price changes per job.
+ * Output: 3; validatePriceChange() compares it with `priceChangeCount`.
+ */
 const MAX_PRICE_CHANGES = 3;
 
 /**

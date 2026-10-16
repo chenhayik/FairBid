@@ -74,8 +74,10 @@ class AuthController extends ChangeNotifier {
   Future<bool> sendEmailVerification() =>
       _run(() => _repository.sendEmailVerification());
 
-  /// Checks whether the email is verified and refreshes [user]. Skips [_run] and
-  /// swallows errors: it fires on every app resume and a failure just keeps the banner.
+  /// What:   Checks whether the email is now verified and refreshes [user].
+  /// Input:  AuthRepository.reloadUser() / currentUser() (auth_repository.dart).
+  /// Output: True when verified; false (or the last known state) if the check fails.
+  /// Notes:  Skips [_run] and swallows errors: it fires on every app resume and a failure just keeps the banner.
   Future<bool> refreshEmailVerified() async {
     try {
       final verified = await _repository.reloadUser();
@@ -93,7 +95,9 @@ class AuthController extends ChangeNotifier {
   /// Set when a sign-in or re-auth needs a second factor; see [takePendingChallenge].
   MfaChallenge? _pendingChallenge;
 
-  /// Reads and clears the pending challenge so it is handled once.
+  /// What:   Hands the UI the second-factor challenge that paused a sign-in or re-auth.
+  /// Input:  [_pendingChallenge], set by [_run] on MfaRequiredException.
+  /// Output: The challenge, then null on later calls so it is handled once.
   MfaChallenge? takePendingChallenge() {
     final challenge = _pendingChallenge;
     _pendingChallenge = null;
@@ -122,6 +126,9 @@ class AuthController extends ChangeNotifier {
   Future<bool> submitMfaCode(MfaChallenge challenge, String code) =>
       _run(() => _repository.resolveMfa(challenge, code));
 
+  /// What:   Signs the user out.
+  /// Input:  [onBeforeSignOut] hook (detaches the push token) and AuthRepository.signOut().
+  /// Output: Runs the hook while still authenticated, ignoring its errors, then signs out.
   Future<void> signOut() => _run(() async {
         final uid = _user?.uid;
         final hook = onBeforeSignOut;
@@ -137,13 +144,17 @@ class AuthController extends ChangeNotifier {
   Future<bool> deleteAccount({String? password}) =>
       _run(() => _repository.deleteAccount(password: password));
 
-  /// Re-reads the profile so router redirects react to changes made elsewhere.
+  /// What:   Re-reads the signed-in profile.
+  /// Input:  AuthRepository.currentUser() (auth_repository.dart).
+  /// Output: Updates [user] and notifies listeners so router redirects react.
   Future<void> refreshUser() async {
     _user = await _repository.currentUser();
     notifyListeners();
   }
 
-  /// Saves the provider's "Jobs near you" point, then refreshes.
+  /// What:   Saves the provider's "Jobs near you" point.
+  /// Input:  [picked] location; AuthRepository.updateBaseLocation() (auth_repository.dart).
+  /// Output: Writes it, then refreshes [user]; no-op when signed out.
   Future<void> setBaseLocation(PickedLocation picked) async {
     final uid = _user?.uid;
     if (uid == null) return;
@@ -151,7 +162,9 @@ class AuthController extends ChangeNotifier {
     await refreshUser();
   }
 
-  /// Saves the Edit Profile fields, then refreshes.
+  /// What:   Saves the Edit Profile fields.
+  /// Input:  Form values; AuthRepository.updateProfile() (auth_repository.dart).
+  /// Output: Writes them (category and skills only matter for providers), then refreshes [user]; no-op when signed out.
   Future<void> updateProfile({
     required String displayName,
     String? phone,
@@ -177,7 +190,9 @@ class AuthController extends ChangeNotifier {
     await refreshUser();
   }
 
-  /// Saves the avatar URL, then refreshes. No-op when signed out.
+  /// What:   Saves the avatar URL.
+  /// Input:  [photoUrl] from DocumentStorageRepository.uploadAvatar() (document_storage_repository.dart).
+  /// Output: Writes it, then refreshes [user]; no-op when signed out.
   Future<void> updateProfilePhoto(String photoUrl) async {
     final uid = _user?.uid;
     if (uid == null) return;
@@ -185,7 +200,9 @@ class AuthController extends ChangeNotifier {
     await refreshUser();
   }
 
-  /// Toggles [jobId] on the watchlist, then refreshes. No-op when signed out.
+  /// What:   Adds or removes a job on the Saved Jobs watchlist.
+  /// Input:  [jobId]; the current [user].watchlist decides the direction.
+  /// Output: AuthRepository.setJobSaved(), then refreshes [user]; no-op when signed out.
   Future<void> toggleSaved(String jobId) async {
     final user = _user;
     if (user == null) return;
@@ -203,7 +220,9 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Runs [action] with the busy flag and error message; true on success.
+  /// What:   Wrapper that runs one auth action with busy and error state.
+  /// Input:  [action], a repository call.
+  /// Output: True on success; false with [errorMessage] set, or with a pending challenge when a second factor is needed.
   Future<bool> _run(Future<void> Function() action) async {
     _busy = true;
     _errorMessage = null;

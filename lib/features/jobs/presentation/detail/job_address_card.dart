@@ -32,13 +32,18 @@ class _JobAddressCardState extends State<JobAddressCard> {
   /// The pin's reverse geocode, cached; the stored JobLocation has no street detail.
   Future<AddressHint?>? _hint;
 
-  /// Starts the lookup early so "Add address" opens pre-filled. Skips pins at 0,0.
+  /// What:   Reverse geocode of the job pin, cached.
+  /// Output: AddressHint via reverseGeocode() (address_hint.dart), or null for a pin at 0,0.
+  /// Notes:  Starts early so "Add address" opens pre-filled.
   Future<AddressHint?> _addressHint() {
     final location = widget.job.location;
     if (location.lat == 0 && location.lng == 0) return Future.value();
     return _hint ??= reverseGeocode(LatLng(location.lat, location.lng));
   }
 
+  /// What:   Opens the address sheet and saves the result.
+  /// Input:  [initial] saved address, if any; the pin hint is used only when none exists.
+  /// Output: JobRepository.setJobAddress(); a snackbar if the save fails.
   Future<void> _editAddress(BuildContext context, ServiceAddress? initial) async {
     final defaultTown = context.read<AuthController>().user?.defaultTown;
     // A saved address always beats the geocoder's guess.
@@ -98,7 +103,9 @@ class _JobAddressCardState extends State<JobAddressCard> {
   }
 }
 
-// Owner view: the address with Edit, or an Add button.
+/// What:   Owner view of the address.
+/// Input:  [address] from JobRepository.watchJobAddress(); [onEdit] opens the sheet.
+/// Output: The address with Edit, or an Add button.
 class _OwnerContent extends StatelessWidget {
   const _OwnerContent({
     required this.job,
@@ -180,6 +187,8 @@ class _ProviderContent extends StatelessWidget {
   final Job job;
   final ServiceAddress? address;
 
+  /// What:   Opens a map link in the external app.
+  /// Output: Launches [uri]; a snackbar if it can't open.
   Future<void> _open(BuildContext context, Uri uri) async {
     final messenger = ScaffoldMessenger.of(context);
     var opened = false;

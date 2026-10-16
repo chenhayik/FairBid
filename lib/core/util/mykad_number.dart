@@ -23,14 +23,18 @@ class MyKadNumber {
   final bool isMale;
   final bool pbNeedsReview;
 
-  /// `900101-07-1234`.
+  /// What:   Display form of the number.
+  /// Output: `900101-07-1234`.
   String get formatted =>
       '${normalized.substring(0, 6)}-$pbCode-${normalized.substring(8)}';
 
-  /// `******-07-**34` - safe to show or log.
+  /// What:   Hidden form, safe to show or log.
+  /// Output: `******-07-**34`.
   String get masked => '******-$pbCode-**${normalized.substring(10)}';
 
-  /// Null when [input] has any [issues]. [today] is injectable for tests.
+  /// What:   Parses typed text into a MyKadNumber.
+  /// Input:  [input] from the form; [today] is injectable for tests.
+  /// Output: MyKadNumber, or null when [issues] is not empty.
   static MyKadNumber? parse(String input, {DateTime? today}) {
     if (issues(input, today: today).isNotEmpty) return null;
     final n = _strip(input);
@@ -44,8 +48,9 @@ class MyKadNumber {
     );
   }
 
-  /// Issue codes - `wrong-length`, `invalid-date`, `invalid-pb-code`,
-  /// `underage` - or empty when valid.
+  /// What:   Validation problems for typed text.
+  /// Input:  [input] from the form; [today] is injectable for tests.
+  /// Output: Codes `wrong-length`, `invalid-date`, `invalid-pb-code`, `underage`; empty when valid.
   static List<String> issues(String input, {DateTime? today}) {
     final n = _strip(input);
     if (n.length != 12) return ['wrong-length'];
@@ -62,10 +67,13 @@ class MyKadNumber {
     ];
   }
 
+  /// What:   Keeps digits only.
   static String _strip(String s) => s.replaceAll(RegExp(r'\D'), '');
 
   static const _pbReview = {80, 81, 94, 95, 96, 97};
 
+  /// What:   Whether a place-of-birth code is a plausible one.
+  /// Output: True for the published ranges and the unpublished ones in [_pbReview].
   static bool _pbValid(int pb) =>
       (pb >= 1 && pb <= 16) ||
       (pb >= 21 && pb <= 68) ||
@@ -79,8 +87,10 @@ class MyKadNumber {
 
   static int _key(int y, int m, int d) => y * 10000 + m * 100 + d;
 
-  /// The birth date, or null when YYMMDD is not a real calendar date. 20YY
-  /// unless that would be in the future.
+  /// What:   Birth date from the YYMMDD digits.
+  /// Input:  Normalised digits [n] and [today].
+  /// Output: A UTC date, or null when it is not a real calendar date.
+  /// How:    Century is 20YY unless that would be in the future, then 19YY.
   static DateTime? _dob(String n, DateTime today) {
     final yy = int.parse(n.substring(0, 2));
     final m = int.parse(n.substring(2, 4));

@@ -17,6 +17,9 @@ class SubmitBidController extends ChangeNotifier {
   bool get isBusy => _busy;
   String? get errorMessage => _errorMessage;
 
+  /// What:   Submits the bid and tracks busy/error state.
+  /// Input:  [bid] built by SubmitBidSheet.
+  /// Output: True on success; false with [errorMessage] set (stale profile or generic failure).
   Future<bool> submit(Bid bid) async {
     _busy = true;
     _errorMessage = null;

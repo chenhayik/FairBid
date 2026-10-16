@@ -44,6 +44,9 @@ class MessagesScreen extends StatelessWidget {
   }
 }
 
+/// What:   The signed-in user's conversations.
+/// Input:  [uid]; ChatRepository.watchConversations(uid) (chat_repository.dart).
+/// Output: Tiles separated by gaps, or loading, error and empty states.
 class _ConversationList extends StatelessWidget {
   const _ConversationList({required this.uid});
   final String uid;
@@ -78,6 +81,9 @@ class _ConversationList extends StatelessWidget {
   }
 }
 
+/// What:   Empty state for a user with no conversations.
+/// Input:  None.
+/// Output: "No messages yet" with the hint that chat opens once a bid is accepted.
 class _NoConversations extends StatelessWidget {
   const _NoConversations();
 
@@ -92,7 +98,9 @@ class _NoConversations extends StatelessWidget {
   }
 }
 
-/// One conversation row: counterparty, job title, preview, time and unread pill.
+/// What:   One conversation row: counterparty, job title, preview, time and unread pill.
+/// Input:  [conversation]; [myUid] picks the other party and the unread count.
+/// Output: AppCard opening `/messages/{id}`; the preview is bold when there are unread messages.
 class _ConversationTile extends StatelessWidget {
   const _ConversationTile({required this.conversation, required this.myUid});
   final Conversation conversation;

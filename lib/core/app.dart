@@ -122,6 +122,9 @@ class FairBidApp extends StatelessWidget {
   }
 }
 
+/// What:   App body under the providers: splash while auth loads, then the router-driven MaterialApp.
+/// Input:  AuthController via context.watch (auth_controller.dart); NotificationRepository and PushService via context.read.
+/// Output: Loading MaterialApp, else MaterialApp.router; also wires push init and token registration.
 class _FairBidAppView extends StatefulWidget {
   const _FairBidAppView();
 
@@ -137,7 +140,10 @@ class _FairBidAppViewState extends State<_FairBidAppView> {
   bool _pushInited = false;
   String? _pushTokenUid;
 
-  /// Keeps push wiring in step with auth state; acts only on transitions.
+  /// What:   Push wiring that follows auth state.
+  /// Input:  [auth] user; NotificationRepository (notification_repository.dart) and PushService (push_service.dart).
+  /// Output: Side effects only: init push once, ask permission, register this device's token once per signed-in uid.
+  /// Notes:  Waits until onboarding is done; also sets auth.onBeforeSignOut to detach the token.
   void _syncPush(AuthController auth) {
     final user = auth.user;
     if (user == null) {

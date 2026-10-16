@@ -24,7 +24,9 @@ class InsufficientBalanceException implements Exception {
   final int availableSen;
   final int requiredSen;
 
-  /// The shortfall in [e]'s `details`, or null if [e] isn't `insufficient_balance`.
+  /// What:   Reads the shortfall out of a callable error.
+  /// Input:  [e] from a FirebaseFunctions call.
+  /// Output: The exception, or null if [e] isn't `insufficient_balance`.
   static InsufficientBalanceException? from(FirebaseFunctionsException e) {
     final details = e.details;
     if (details is! Map || details['reason'] != 'insufficient_balance') {
@@ -56,22 +58,28 @@ class BidRejectedException implements Exception {
 /// Input:  Firestore `jobs/{jobId}/bids/{uid}` and the `acceptBid` callable, via FirestoreBidRepository.
 /// Output: Bid streams and writes; failures as the exceptions above.
 abstract interface class BidRepository {
-  /// Creates the provider's bid (or replaces it) and counts it in `bidCount`.
+  /// What:   Creates the provider's bid or replaces it.
+  /// Output: Writes the bid and counts it in `bidCount` (new bids only).
   Future<void> submitBid(Bid bid);
 
-  /// Deletes the provider's pending bid and decrements `bidCount`.
+  /// What:   Withdraws the provider's pending bid.
+  /// Output: Deletes the bid and decrements `bidCount`.
   Future<void> withdrawBid(String jobId, String providerId);
 
-  /// Streams all bids on a job; sorted client-side.
+  /// What:   Live bids on one job.
+  /// Output: All bids, unsorted (callers sort).
   Stream<List<Bid>> watchBids(String jobId);
 
-  /// Streams the provider's own bids across all jobs, newest first.
+  /// What:   Live list of a provider's own bids across jobs.
+  /// Output: Bids, newest first.
   Stream<List<Bid>> watchMyBids(String providerId);
 
-  /// Streams the provider's bid on one job, or null.
+  /// What:   Live view of the provider's bid on one job.
+  /// Output: The bid, or null.
   Stream<Bid?> watchMyBid(String jobId, String providerId);
 
-  /// Accepts [bid]: rejects the other pending bids and moves the job to in_progress.
+  /// What:   Requestor accepts a bid.
+  /// Output: Rejects the other pending bids and moves the job to in_progress; may throw the exceptions above.
   Future<void> acceptBid(Bid bid);
 }
 
