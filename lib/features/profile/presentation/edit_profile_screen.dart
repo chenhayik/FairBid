@@ -16,7 +16,9 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../auth/presentation/validators.dart';
 import '../../onboarding/data/document_storage_repository.dart';
 
-/// Comma-separated skills -> trimmed, de-duplicated list (empties dropped).
+/// What:   Splits the skills field into a list.
+/// Input:  [text], comma-separated.
+/// Output: Trimmed, de-duplicated skills with empties dropped.
 List<String> _parseSkills(String text) => {
       for (final s in text.split(','))
         if (s.trim().isNotEmpty) s.trim(),
@@ -67,7 +69,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.dispose();
   }
 
-  /// Opens the Penang map picker; the pick is saved with the Save button.
+  /// What:   Opens the Penang map picker.
+  /// Input:  The user's base location (provider) or default location (requestor) as the starting point.
+  /// Output: Stores the pick and its label; saved with the Save button.
   Future<void> _pickLocation() async {
     final user = context.read<AuthController>().user;
     final isProvider = user?.role == UserRole.provider;
@@ -89,6 +93,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     });
   }
 
+  /// What:   Saves the profile form.
+  /// Input:  The form fields; AuthController.updateProfile().
+  /// Output: Pops on success; snackbar on failure. Category and skills are sent for providers only.
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
@@ -195,7 +202,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 }
 
-/// Avatar with a "Change photo" / "Add photo" action; picking uploads and saves the URL at once, not on Save.
+/// What:   Avatar with a "Change photo" / "Add photo" action.
+/// Input:  [photoUrl] of the current avatar.
+/// Output: Picking uploads and saves the URL at once, not on Save.
 class _AvatarPicker extends StatefulWidget {
   const _AvatarPicker({required this.photoUrl});
 
@@ -209,6 +218,9 @@ class _AvatarPickerState extends State<_AvatarPicker> {
   final _picker = ImagePicker();
   bool _uploading = false;
 
+  /// What:   Picks and uploads a new avatar.
+  /// Input:  Gallery picker (800px, quality 85); DocumentStorageRepository.uploadAvatar().
+  /// Output: AuthController.updateProfilePhoto(url); snackbar on failure.
   Future<void> _pick() async {
     // Captured before the first await to avoid using context across the gap.
     final auth = context.read<AuthController>();
@@ -276,7 +288,9 @@ class _AvatarPickerState extends State<_AvatarPicker> {
   }
 }
 
-/// A non-editable field styled like [AppTextField] (e.g. the email).
+/// What:   A non-editable field styled like [AppTextField] (e.g. the email).
+/// Input:  [label] and [value].
+/// Output: Label above a bordered box with the value.
 class _ReadOnlyField extends StatelessWidget {
   const _ReadOnlyField({required this.label, required this.value});
 

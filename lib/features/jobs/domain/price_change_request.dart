@@ -13,7 +13,8 @@ class PriceChangeRequest {
   final int newAmountSen;
   final String reason;
 
-  /// Null when [m] is null or malformed.
+  /// What:   Parses the job's `priceChangeRequest` map.
+  /// Output: PriceChangeRequest, or null when [m] is null or malformed.
   static PriceChangeRequest? fromMap(Map<String, dynamic>? m) {
     if (m == null) return null;
     final by = m['by'] as String?;

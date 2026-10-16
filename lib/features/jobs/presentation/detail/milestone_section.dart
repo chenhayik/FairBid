@@ -50,12 +50,16 @@ class MilestoneSectionState extends State<MilestoneSection> {
 
   List<Milestone> _latest = const [];
 
+  /// What:   Expands or collapses a step the viewer tapped.
+  /// Output: Sets [_expandedOverride]; the current step is always expanded.
   void _toggleExpand(String stepId) {
     setState(() {
       _expandedOverride = _expandedOverride == stepId ? null : stepId;
     });
   }
 
+  /// What:   Mark-as-delivered flow (provider).
+  /// Output: Warns if the visit time hasn't come yet, asks for an optional note, then MilestoneRepository.submitMilestone() via [_run].
   Future<void> _deliver(Milestone milestone) async {
     final repo = context.read<MilestoneRepository>();
     final visit = widget.job.appointment?.startAt;
@@ -116,6 +120,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
+  /// What:   Release-payment flow (requestor).
+  /// Output: After a confirm dialog, MilestoneRepository.releaseMilestone() via [_run].
   Future<void> _release(Milestone milestone) async {
     final repo = context.read<MilestoneRepository>();
     final confirmed = await showConfirmDialog(
@@ -135,22 +141,27 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
-  /// The paid milestone a dispute can be raised on, if any.
+  /// What:   The milestone a dispute can be raised on.
+  /// Output: The first funded or submitted milestone, or null.
   Milestone? get disputableMilestone => _latest
       .where((m) =>
           m.status == MilestoneStatus.funded ||
           m.status == MilestoneStatus.submitted)
       .firstOrNull;
 
+  /// What:   Whether any milestone is currently disputed.
   bool get hasOpenDispute =>
       _latest.any((m) => m.status == MilestoneStatus.disputed);
 
-  /// Opens the dispute sheet for [disputableMilestone], optionally pre-filled.
+  /// What:   Opens the dispute sheet for [disputableMilestone].
+  /// Input:  Optional [initialStatement] to pre-fill.
   Future<void> raiseDispute({String? initialStatement}) async {
     final m = disputableMilestone;
     if (m != null) await _dispute(m, initialStatement);
   }
 
+  /// What:   Shows RaiseDisputeSheet for a milestone.
+  /// Output: A snackbar once the dispute is submitted.
   Future<void> _dispute(Milestone milestone, [String? initialStatement]) async {
     final raised = await RaiseDisputeSheet.show(context,
         milestone: milestone, initialStatement: initialStatement);
@@ -166,6 +177,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     }
   }
 
+  /// What:   Withdraw-dispute flow.
+  /// Output: After a confirm dialog, DisputeRepository.withdrawDispute() via [_run]; no money moves.
   Future<void> _withdraw(Milestone milestone) async {
     final repo = context.read<DisputeRepository>();
     final confirmed = await showConfirmDialog(
@@ -187,7 +200,9 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
-  /// Runs [action] with a spinner; shows the server's message on failure. [step] is the log key.
+  /// What:   Runs one escrow action with busy state and payment logging.
+  /// Input:  [milestone], the [action] to run and [step], the log key (e.g. `milestone.release`).
+  /// Output: Spinner while busy, haptic feedback, and the server's message in a snackbar on failure.
   Future<void> _run(
     Milestone milestone,
     Future<void> Function() action, {
@@ -242,7 +257,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     }
   }
 
-  /// Runs the current step's deliver or release for the viewer, if any.
+  /// What:   Runs the bottom bar's deliver or release.
+  /// Output: Provider on a funded step: deliver (once a visit time is agreed). Requestor on a submitted step: release. Else nothing.
   Future<void> runCurrentAction() async {
     if (_busyId != null) return;
     final job = widget.job;
@@ -301,11 +317,15 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
-  /// A milestone id, or `'complete'`.
+  /// What:   Id of the current step (the one always expanded).
+  /// Output: currentStage() id (disputed first, else first unfinished), or `'complete'` when all are done.
   String _currentStepId(List<Milestone> milestones) {
     return currentStage(milestones)?.id ?? 'complete';
   }
 
+  /// What:   The whole tracker.
+  /// Input:  Sorted [milestones], [job] and the viewer's role flags.
+  /// Output: Plan summary, one connected step row per milestone, then "Job complete".
   Widget _buildTracker(
     BuildContext context,
     Job job,
@@ -380,6 +400,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
+  /// What:   Content of one milestone step.
+  /// Output: Collapsed one-line summary, or the expanded card with status, actions and progress.
   Widget _milestoneStepContent(
     BuildContext context,
     Job job,
@@ -587,6 +609,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
+  /// What:   The final "Job complete" step.
+  /// Output: Label, emphasised once [done].
   Widget _completeStepContent(BuildContext context, {required bool done}) {
     final theme = Theme.of(context);
     return Semantics(
@@ -606,6 +630,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     );
   }
 
+  /// What:   Whether the viewer must act on a milestone.
+  /// Output: True for the requestor on submitted (release) and the provider on funded (deliver).
   bool _myTurn(MilestoneStatus status, {required bool isRequestor}) =>
       switch (status) {
         MilestoneStatus.submitted => isRequestor,
@@ -613,10 +639,14 @@ class MilestoneSectionState extends State<MilestoneSection> {
         _ => false,
       };
 
+  /// What:   Name of the other party.
+  /// Output: The provider's name for the requestor, else the requestor's.
   String _counterpartyName(Job job, {required bool isRequestor}) => isRequestor
       ? (job.acceptedProviderName ?? 'the provider')
       : job.requestorName;
 
+  /// What:   Status sentence for an expanded step.
+  /// Output: Text such as "RM 100 secured in escrow, Ali is working." chosen by milestone status.
   String _statusLine(Job job, Milestone m) {
     final amount = formatRm(m.amountSen);
     final provider = job.acceptedProviderName ?? 'the provider';
@@ -634,6 +664,8 @@ class MilestoneSectionState extends State<MilestoneSection> {
     };
   }
 
+  /// What:   One-line summary for a collapsed step.
+  /// Output: Description, amount and status.
   String _collapsedLine(Milestone m) {
     final amount = formatRm(m.amountSen);
     return switch (m.status) {
@@ -650,9 +682,12 @@ class MilestoneSectionState extends State<MilestoneSection> {
   }
 }
 
-/// Circle shape per state, so shape (not just colour) carries the state.
+/// What:   Circle shape per step state, so shape (not just colour) carries the state.
+/// Input:  Mapped from MilestoneStatus by [_circleStateFor].
+/// Output: done, inEscrow, upcoming or disputed.
 enum _CircleState { done, inEscrow, upcoming, disputed }
 
+/// What:   Maps a milestone status to its circle state.
 _CircleState _circleStateFor(MilestoneStatus s) => switch (s) {
   MilestoneStatus.released ||
   MilestoneStatus.resolved ||
@@ -662,6 +697,7 @@ _CircleState _circleStateFor(MilestoneStatus s) => switch (s) {
   MilestoneStatus.proposed || MilestoneStatus.pending => _CircleState.upcoming,
 };
 
+/// What:   Accent colour for a milestone status.
 Color _statusAccent(BuildContext context, MilestoneStatus s) => switch (s) {
   MilestoneStatus.proposed ||
   MilestoneStatus.pending ||
@@ -673,6 +709,7 @@ Color _statusAccent(BuildContext context, MilestoneStatus s) => switch (s) {
   MilestoneStatus.refunded => Theme.of(context).colorScheme.onSurfaceVariant,
 };
 
+/// What:   Icon for a milestone status.
 IconData _statusIcon(MilestoneStatus s) => switch (s) {
   MilestoneStatus.proposed || MilestoneStatus.pending => Icons.hourglass_empty,
   MilestoneStatus.funded => Icons.lock_outline,
@@ -683,7 +720,8 @@ IconData _statusIcon(MilestoneStatus s) => switch (s) {
   MilestoneStatus.refunded => Icons.undo,
 };
 
-// IntrinsicHeight lets the gutter's connector lines stretch to the content.
+/// What:   One tracker row: gutter beside content.
+/// Notes:  IntrinsicHeight lets the gutter's connector lines stretch to the content.
 Widget _stepRow({required Widget gutter, required Widget content}) {
   return IntrinsicHeight(
     child: Row(
@@ -697,7 +735,8 @@ Widget _stepRow({required Widget gutter, required Widget content}) {
   );
 }
 
-// Connector line above and below a state circle; hidden at the first/last step.
+/// What:   The connector line above and below a state circle.
+/// Output: Hidden at the first and last step; green once the adjacent step is done.
 Widget _gutter({
   required BuildContext context,
   required _CircleState state,
@@ -728,6 +767,9 @@ Widget _gutter({
   );
 }
 
+/// What:   The state circle in the gutter.
+/// Input:  [state].
+/// Output: Filled tick (done), filled exclamation (disputed), lock ring (in escrow) or empty ring (upcoming).
 class _StepCircle extends StatelessWidget {
   const _StepCircle({required this.state});
   final _CircleState state;
@@ -784,7 +826,9 @@ class _StepCircle extends StatelessWidget {
   }
 }
 
-// "Your turn" (filled) or "Waiting on ..." (outlined).
+/// What:   Whose-turn pill.
+/// Input:  [mine] and [label].
+/// Output: Filled "Your turn" when mine, else outlined "Waiting on ...".
 class _TurnPill extends StatelessWidget {
   const _TurnPill({required this.mine, required this.label});
 
@@ -813,7 +857,9 @@ class _TurnPill extends StatelessWidget {
   }
 }
 
-// Fund -> Deliver -> Release beats for the expanded step.
+/// What:   Fund, Deliver, Release progress dots for the expanded step.
+/// Input:  [status].
+/// Output: Dots up to the active beat; none active for disputed or refunded.
 class _MicroProgress extends StatelessWidget {
   const _MicroProgress({required this.status});
   final MilestoneStatus status;

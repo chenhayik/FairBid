@@ -21,13 +21,16 @@ class Region {
   /// Unset when neither the user nor the geocoder produced a known town.
   final String? town;
 
-  /// e.g. "George Town, Timur Laut, Penang", or "Timur Laut, Penang" without a town.
+  /// What:   Readable location text.
+  /// Output: e.g. "George Town, Timur Laut, Penang", or "Timur Laut, Penang" without a town.
   String get label => [
     town,
     districtName,
     state,
   ].where((part) => part != null && part.isNotEmpty).join(', ');
 
+  /// What:   Firestore-ready map of this region.
+  /// Output: Map that [fromMap] reads back.
   Map<String, dynamic> toMap() => {
     'country': country,
     'state': state,
@@ -36,7 +39,9 @@ class Region {
     'town': town,
   };
 
-  /// Rebuilds from a stored map; null when [map] is null or lacks a district code (legacy data).
+  /// What:   Rebuilds a Region from stored data.
+  /// Input:  The `region` map on a job or user doc.
+  /// Output: Region, or null when [map] is null or lacks a district code (legacy data).
   static Region? fromMap(Map<String, dynamic>? map) {
     final code = map?['districtCode'] as String?;
     if (code == null || code.isEmpty) return null;
@@ -49,7 +54,9 @@ class Region {
     );
   }
 
-  /// The display name for [code], or the code itself if unknown.
+  /// What:   Display name for a district code.
+  /// Input:  [code] looked up in kPenangDistricts (penang.dart).
+  /// Output: The district name, or the code itself if unknown.
   static String districtNameFor(String code) {
     for (final district in kPenangDistricts) {
       if (district.code == code) return district.nameMs;

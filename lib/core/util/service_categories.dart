@@ -37,16 +37,11 @@ const _categoryKeywords = <String, List<String>>{
   ],
 };
 
-/// Maps a registered nature of business - as SSM prints it, in Malay or
-/// English - onto one of [kServiceCategories].
-///
-/// Returns null when nothing matches, and that is the common case rather than a
-/// failure: SSM's wording covers every trade in the country while this app
-/// serves ten of them. A confident null beats a wrong guess, because the
-/// suggestion is written into the applicant's form.
-///
-/// Never returns 'Other' - suggesting the catch-all would be noise, and the
-/// applicant can pick it themselves.
+/// What:   Maps a registered nature of business onto one of [kServiceCategories].
+/// Input:  SSM nature-of-business text (Malay or English) from the OCR extract; may be null.
+/// Output: A category name, or null when nothing matches; never 'Other'.
+/// Notes:  Null is the common case: SSM wording covers every trade while the app serves ten. The result is written into
+///         the applicant's form, so a confident null beats a wrong guess.
 String? suggestedCategoryFor(String? natureOfBusiness) {
   final text = (natureOfBusiness ?? '').toUpperCase();
   if (text.isEmpty) return null;
@@ -56,8 +51,9 @@ String? suggestedCategoryFor(String? natureOfBusiness) {
   return null;
 }
 
-/// Licensing note for a category that legally requires a registered/licensed
-/// tradesperson in Malaysia, or null when [category] has none.
+/// What:   Licensing note for categories that legally need a registered tradesperson in Malaysia.
+/// Input:  [category] from kServiceCategories.
+/// Output: Notice text, or null when the category has none.
 String? licenceNoticeFor(String category) => switch (category) {
       'Electrical' => 'Electrical work in Malaysia must be done by an '
           'Energy Commission-registered contractor.',

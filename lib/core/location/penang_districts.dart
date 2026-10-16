@@ -17,9 +17,13 @@ class PenangDistricts {
   List<_DistrictGeometry>? _districts;
   Future<void>? _loading;
 
-  /// Loads the GeoJSON once; await it before [districtCodeAt] / [isInPenang] mean anything.
+  /// What:   One-time load of the district GeoJSON.
+  /// Output: Future that completes when [districtCodeAt] / [isInPenang] are usable; repeat calls share the same load.
   Future<void> ensureLoaded() => _loading ??= _load();
 
+  /// What:   Reads the asset and builds the district geometries.
+  /// Input:  `assets/geo/penang_districts.geojson` via rootBundle.
+  /// Output: Fills [_districts].
   Future<void> _load() async {
     final raw = await rootBundle.loadString(_assetPath);
     final json = jsonDecode(raw) as Map<String, dynamic>;
@@ -27,7 +31,9 @@ class PenangDistricts {
     _districts = [for (final f in features) _DistrictGeometry.fromFeature(f)];
   }
 
-  /// The district code containing [point]; null outside all 5 or before [ensureLoaded] completes.
+  /// What:   District lookup for a point.
+  /// Input:  A LatLng from the map or a stored pin.
+  /// Output: The district code containing it; null outside all 5 or before [ensureLoaded] completes.
   String? districtCodeAt(LatLng point) {
     final districts = _districts;
     if (districts == null) return null;
@@ -37,10 +43,14 @@ class PenangDistricts {
     return null;
   }
 
+  /// What:   Whether a point falls inside any Penang district.
+  /// Output: True when [districtCodeAt] finds a district.
   bool isInPenang(LatLng point) => districtCodeAt(point) != null;
 }
 
-/// One district's polygons; in each, ring 0 is the exterior and further rings are holes.
+/// What:   One district's polygons, with the point-in-polygon test.
+/// Input:  A GeoJSON feature via [_DistrictGeometry.fromFeature]; in each polygon ring 0 is the exterior and further rings are holes.
+/// Output: [code] and [contains].
 class _DistrictGeometry {
   const _DistrictGeometry(this.code, this._polygons);
 
@@ -68,7 +78,8 @@ class _DistrictGeometry {
   final String code;
   final List<List<List<LatLng>>> _polygons;
 
-  /// Even-odd ray casting; hole crossings cancel the exterior's, and a MultiPolygon matches if any polygon does.
+  /// What:   Whether [point] lies inside this district.
+  /// How:    Even-odd ray casting; hole crossings cancel the exterior's, and a MultiPolygon matches if any polygon does.
   bool contains(LatLng point) {
     for (final rings in _polygons) {
       var crossings = 0;
@@ -80,6 +91,8 @@ class _DistrictGeometry {
     return false;
   }
 
+  /// What:   Counts ring edges a ray from [point] crosses.
+  /// Output: Crossing count; odd means the point is inside the ring.
   static int _ringCrossings(LatLng point, List<LatLng> ring) {
     var crossings = 0;
     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {

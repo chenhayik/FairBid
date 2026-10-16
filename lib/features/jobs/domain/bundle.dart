@@ -1,5 +1,8 @@
 import 'job.dart';
 
+/// What:   Lifecycle of a bundle.
+/// Input:  Stored `status` string via [fromStorage]; unknown values read as open.
+/// Output: open, awarded, cancelled or expired, with a display [label].
 enum BundleStatus {
   open,
   awarded,
@@ -54,6 +57,8 @@ class Bundle {
 
   int get taskCount => taskIds.length;
 
+  /// What:   Whether providers can still bid on the bundle.
+  /// Output: True while status is open and the deadline (if any) hasn't passed.
   bool get biddingOpen =>
       status == BundleStatus.open &&
       (deadline == null || DateTime.now().isBefore(deadline!));

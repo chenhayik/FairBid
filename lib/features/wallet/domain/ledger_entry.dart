@@ -1,4 +1,6 @@
-/// The kind of money movement a ledger entry records.
+/// What:   The kind of money movement a ledger entry records.
+/// Input:  The `type` string of the entry via LedgerType.fromStorage().
+/// Output: A display [label]; unknown values fall back to top-up.
 enum LedgerType {
   fund,
   release,

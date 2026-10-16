@@ -1,6 +1,6 @@
 /// What:   A Malaysian bank a provider can be paid into.
 /// Input:  [kMalaysianBanks] (must match BANKS in functions/payout_method.js).
-/// Output: [swift] id and [checkAccount] length validation.
+/// Output: [swift] id, [checkAccount] length validation and [lengthHint].
 class MalaysianBank {
   const MalaysianBank(this.name, this.swift, [this.lengths]);
 
@@ -12,13 +12,23 @@ class MalaysianBank {
   /// Account number lengths, or null when any 8 to 17 digits is accepted.
   final List<int>? lengths;
 
-  /// An error for [accountNumber], or null when it fits this bank.
+  /// What:   Strips spaces and dashes from an account number.
+  /// Input:  [input] as typed or pasted from a banking app.
+  /// Output: The remaining characters.
+  static String clean(String input) => input.replaceAll(RegExp(r'[\s-]'), '');
+
+  /// What:   Account-length hint for the field.
+  /// Output: e.g. "12 digits"; "8 to 17 digits" when the bank has no fixed lengths.
+  String get lengthHint => '${lengths?.join(' or ') ?? '8 to 17'} digits';
+
+  /// What:   Validates an account number for this bank.
+  /// Input:  [accountNumber] as typed (cleaned first).
+  /// Output: An error message, or null when it fits.
+  /// How:    Digits only; length must be in [lengths], else 8 to 17 when the bank has none.
   String? checkAccount(String accountNumber) {
-    final number = accountNumber.trim();
+    final number = clean(accountNumber);
     if (number.isEmpty) return 'Enter your account number.';
-    if (!RegExp(r'^\d+$').hasMatch(number)) {
-      return 'Use digits only, no spaces or dashes.';
-    }
+    if (!RegExp(r'^\d+$').hasMatch(number)) return 'Use digits only.';
     final known = lengths;
     if (known != null) {
       return known.contains(number.length)

@@ -74,7 +74,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
     }
   }
 
-  /// Asks for a payout method before the first withdrawal.
+  /// What:   Asks the provider to add a payout method before the first withdrawal.
+  /// Input:  None.
+  /// Output: Confirm dialog; Add opens PayoutMethodScreen.
   Future<void> _askForPayoutMethod() async {
     final add = await showConfirmDialog(
       context,
@@ -86,10 +88,16 @@ class _EarningsScreenState extends State<EarningsScreen> {
     if (add && mounted) await PayoutMethodScreen.open(context);
   }
 
-  /// Re-reads the profile so Available reflects a new balance at once.
+  /// What:   Re-reads the profile so Available reflects a new balance at once.
+  /// Input:  AuthController.refreshUser().
+  /// Output: Refreshed AppUser.walletBalanceSen for the card.
   Future<void> _refreshBalance() =>
       context.read<AuthController>().refreshUser();
 
+  /// What:   Withdraws from the available balance.
+  /// Input:  [balanceSen], the available balance, as the maximum; the payout method from WalletRepository.watchPayoutMethod().
+  /// Output: Asks for a payout method if none, blocks while it is on hold, then re-auth, amount sheet and WalletRepository.withdraw().
+  /// Notes:  Re-auth is a step-up so an unlocked stolen phone cannot drain the wallet.
   Future<void> _withdraw(int balanceSen) async {
     final user = context.read<AuthController>().user;
     if (user == null) return;
@@ -133,9 +141,10 @@ class _EarningsScreenState extends State<EarningsScreen> {
     }
   }
 
-  /// Top-up: asks for an amount, opens a toyyibPay (sandbox) bill in a WebView, then reconciles with
-  /// the server (backstop for a missed webhook). The WebView status only picks the copy;
-  /// [WalletRepository.reconcileTopUp] decides whether money moved.
+  /// What:   Tops up the requestor's wallet through toyyibPay (sandbox).
+  /// Input:  Amount from WalletAmountSheet; WalletRepository.createTopUpBill() and reconcileTopUp().
+  /// Output: Opens the bill in a WebView, then reconciles with the server and shows a result snackbar.
+  /// Notes:  The WebView status only picks the copy; reconcileTopUp decides whether money moved (a backstop for a missed webhook).
   Future<void> _topUp() async {
     final wallet = context.read<WalletRepository>();
     String? billCode;
@@ -202,7 +211,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Demo top-up for testing without the real gateway.
+  /// What:   Demo top-up for testing without the real gateway.
+  /// Input:  Amount from WalletAmountSheet; WalletRepository.topUp().
+  /// Output: Refreshes the balance and shows an "added to your wallet" snackbar.
   Future<void> _topUpDemo() async {
     final wallet = context.read<WalletRepository>();
     int? amountSen;
@@ -249,7 +260,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
               balanceSen: user.walletBalanceSen,
               actionLabel: isProvider ? 'Withdraw' : 'Top up',
               onAction: isProvider
-                  ? () => _withdraw(user.availableBalanceSen)
+                  ? () => _withdraw(user.walletBalanceSen)
                   : _topUp,
             ),
             if (!isProvider && PlatformConfig.demoTopUpEnabled) ...[
@@ -270,7 +281,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
               // Refunds land here, so clients can take money back out too.
               SecondaryButton(
                 label: 'Withdraw',
-                onPressed: () => _withdraw(user.availableBalanceSen),
+                onPressed: () => _withdraw(user.walletBalanceSen),
               ),
               const SizedBox(height: 16),
               _HeldForJobsCard(stream: _myJobs),
@@ -290,6 +301,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
   }
 }
 
+/// What:   Available balance with its action button.
+/// Input:  [balanceSen]; [actionLabel] (Withdraw or Top up); [onAction] callback.
+/// Output: AppCard with the amount and a primary button.
 class _AvailableCard extends StatelessWidget {
   const _AvailableCard({
     required this.balanceSen,
@@ -336,7 +350,9 @@ class _AvailableCard extends StatelessWidget {
   }
 }
 
-/// In Escrow (funded + submitted) and Total Earnings (released), summed from the provider's milestones.
+/// What:   In Escrow (funded and submitted) and Total Earnings (released), summed from the provider's milestones.
+/// Input:  [stream] from MilestoneRepository.watchProviderMilestones() (milestone_repository.dart).
+/// Output: Two StatCards; dashes while loading so RM 0.00 is not shown as fact.
 class _EscrowStats extends StatelessWidget {
   const _EscrowStats({required this.stream});
   final Stream<List<Milestone>>? stream;
@@ -387,7 +403,9 @@ class _EscrowStats extends StatelessWidget {
   }
 }
 
-/// Money a client has in escrow for in-progress jobs.
+/// What:   Money a client has in escrow for in-progress jobs.
+/// Input:  [stream] from JobRepository.watchMyJobs() (job_repository.dart).
+/// Output: StatCard with the sum of accepted bid amounts for in-progress jobs, since a job is paid in full at award.
 class _HeldForJobsCard extends StatelessWidget {
   const _HeldForJobsCard({required this.stream});
   final Stream<List<Job>>? stream;
@@ -411,6 +429,9 @@ class _HeldForJobsCard extends StatelessWidget {
   }
 }
 
+/// What:   The provider's payout method with an Add or Change button.
+/// Input:  [method] from WalletRepository.watchPayoutMethod(); [onEdit] callback.
+/// Output: Masked account and holder name, or a "Not set up yet" note.
 class _PayoutMethodCard extends StatelessWidget {
   const _PayoutMethodCard({required this.method, required this.onEdit});
 
@@ -479,6 +500,9 @@ class _PayoutMethodCard extends StatelessWidget {
   }
 }
 
+/// What:   The user's ledger as a list.
+/// Input:  [stream] from WalletRepository.watchMyTransactions() (wallet_repository.dart); [myUid].
+/// Output: _TransactionRow per entry, or loading, error and empty states.
 class _TransactionHistoryCard extends StatelessWidget {
   const _TransactionHistoryCard({required this.stream, required this.myUid});
   final Stream<List<LedgerEntry>>? stream;
@@ -532,6 +556,9 @@ class _TransactionHistoryCard extends StatelessWidget {
   }
 }
 
+/// What:   One ledger row: type icon, label, job and time, and a signed amount.
+/// Input:  [entry]; [myUid] decides if it is a credit.
+/// Output: Green "+" amount when money came into [myUid]'s wallet, otherwise "−".
 class _TransactionRow extends StatelessWidget {
   const _TransactionRow({required this.entry, required this.myUid});
   final LedgerEntry entry;

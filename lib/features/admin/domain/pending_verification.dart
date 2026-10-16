@@ -73,8 +73,9 @@ class PendingVerification {
     return type == null ? base : '$type $base';
   }
 
-  /// Builds from the `users/{uid}` [data] (null gives null). [payoutData] and [verificationData]
-  /// are the private docs; when missing, the legacy public fields are used.
+  /// What:   Builds a queue entry from the `users/{uid}` data.
+  /// Input:  [data] (null gives null); [payoutData] and [verificationData] from the private docs.
+  /// Output: PendingVerification with its public documents; the legacy public fields are used when the private docs are missing.
   static PendingVerification? fromMap(
     String uid,
     Map<String, dynamic>? data, {

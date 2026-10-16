@@ -25,6 +25,8 @@ class _JobVideoPreviewState extends State<JobVideoPreview> {
     super.dispose();
   }
 
+  /// What:   Opens the video full screen.
+  /// Output: Waits for the controller to initialise, then pushes _FullScreenVideoPlayer.
   Future<void> _openFullScreen() async {
     await _initFuture;
     if (!mounted) return;
@@ -77,7 +79,9 @@ class _JobVideoPreviewState extends State<JobVideoPreview> {
   }
 }
 
-// Owns only the ChewieController; JobVideoPreview owns the VideoPlayerController.
+/// What:   Full-screen player.
+/// Input:  [controller] from JobVideoPreview, which owns it.
+/// Output: Chewie player that autoplays; this widget owns only the ChewieController.
 class _FullScreenVideoPlayer extends StatefulWidget {
   const _FullScreenVideoPlayer({required this.controller});
   final VideoPlayerController controller;

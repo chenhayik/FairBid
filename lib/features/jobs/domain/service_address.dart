@@ -39,7 +39,8 @@ class ServiceAddress {
         'accessNote': accessNote,
       };
 
-  /// Null when [map] is null or has no [line1] (no address set).
+  /// What:   Parses the private address doc.
+  /// Output: ServiceAddress, or null when [map] is null or has no [line1] (no address set).
   static ServiceAddress? fromMap(Map<String, dynamic>? map) {
     final line1 = map?['line1'] as String?;
     if (line1 == null || line1.isEmpty) return null;
@@ -53,8 +54,8 @@ class ServiceAddress {
     );
   }
 
-  /// A multi-line block suitable for display: line1 / line2 (if present) /
-  /// "postcode city" / state.
+  /// What:   Multi-line address block for display.
+  /// Output: line1 / line2 (if present) / "postcode city" / state.
   String get formatted => [
         line1,
         if (line2 != null && line2!.isNotEmpty) line2,
@@ -62,6 +63,7 @@ class ServiceAddress {
         state,
       ].join('\n');
 
-  /// A one-line summary, e.g. "12, Jalan Mawar 3, 11900 Bayan Lepas".
+  /// What:   One-line address summary.
+  /// Output: e.g. "12, Jalan Mawar 3, 11900 Bayan Lepas".
   String get summary => '$line1, $postcode $city';
 }

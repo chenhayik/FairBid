@@ -1,6 +1,8 @@
 import 'face_box.dart';
 
-/// How the provider operates on FairBid (stage 2).
+/// What:   How the provider operates on FairBid (stage 2).
+/// Input:  Chosen in ProviderTypeStep; stored by name.
+/// Output: individual or business, with a display [label].
 enum ProviderType {
   individual,
   business;
@@ -13,7 +15,9 @@ enum ProviderType {
   static ProviderType? fromStorage(String? value) => values.asNameMap()[value];
 }
 
-/// Which government ID the provider is verifying with.
+/// What:   Which government ID the provider is verifying with.
+/// Input:  Chosen in IdentityStep via IdDocumentType.fromStorage().
+/// Output: mykad or passport; unknown values fall back to mykad.
 enum IdDocumentType {
   mykad,
   passport;
@@ -73,7 +77,9 @@ class OnboardingData {
   double? lng;
   List<String> portfolioImageUrls = [];
 
-  /// Sensitive fields, stored in owner+admin-only `private/verification`.
+  /// What:   Sensitive fields for the owner+admin-only `private/verification` doc.
+  /// Input:  The draft: photo URLs, IC number, face boxes, consent time and SSM number.
+  /// Output: Map written by FirestoreOnboardingRepository.save().
   Map<String, dynamic> privateMap() => {
         'idDocumentUrl': idDocumentUrl,
         'selfieUrl': selfieUrl,
@@ -86,6 +92,9 @@ class OnboardingData {
         'ssmNumberNormalized': ssmNumberNormalized,
       };
 
+  /// What:   Public fields for the `onboarding` map on `users/{uid}`.
+  /// Input:  The draft: step, type, profile and service fields.
+  /// Output: Map written by FirestoreOnboardingRepository.save().
   Map<String, dynamic> toMap() => {
         'step': step,
         'providerType': providerType?.name,
@@ -105,6 +114,9 @@ class OnboardingData {
         'portfolioImageUrls': portfolioImageUrls,
       };
 
+  /// What:   Rebuilds a draft from the saved `onboarding` map.
+  /// Input:  [map] from `users/{uid}`, possibly null.
+  /// Output: A draft with the step clamped to the valid range and missing fields defaulted.
   static OnboardingData fromMap(Map<String, dynamic>? map) {
     final data = OnboardingData();
     if (map == null) return data;

@@ -102,7 +102,8 @@ class BundleTaskStatusList extends StatelessWidget {
 
   final List<BundleBid> bids;
 
-  /// The winner's price for [task] alone, when it differs from the package split.
+  /// What:   The winner's price for [task] on its own.
+  /// Output: Sen, or null when it equals the package split, or the task was released or had a price change.
   int? _alonePriceSen(Job task) {
     // Released tasks and price changes replace the package price.
     if (task.releasedAt != null || task.originalBidAmountSen != null) {

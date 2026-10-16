@@ -14,6 +14,9 @@ class MfaCodeSheet extends StatefulWidget {
 
   final MfaChallenge challenge;
 
+  /// What:   Opens the code sheet for a second-factor challenge.
+  /// Input:  [challenge] from AuthController.takePendingChallenge().
+  /// Output: True once the code is accepted, false if closed or the challenge expired.
   static Future<bool> show(
     BuildContext context, {
     required MfaChallenge challenge,
@@ -46,6 +49,9 @@ class _MfaCodeSheetState extends State<MfaCodeSheet> {
     super.dispose();
   }
 
+  /// What:   Submits the 6-digit code.
+  /// Input:  The code field; AuthController.submitMfaCode().
+  /// Output: Pops true on success; shows the error on a wrong code; pops false when the challenge expired.
   Future<void> _submit() async {
     if (_code.text.length != 6) {
       setState(() => _error = 'Enter the 6-digit code.');

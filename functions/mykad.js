@@ -36,24 +36,43 @@ function todayInKl(now = new Date()) {
 // Place-of-birth codes. Anything not listed is invalid.
 const PB_REVIEW = new Set([80, 81, 94, 95, 96, 97]);
 
+/**
+ * What:   Place-of-birth code check.
+ * Input:  The two-digit [pb] code as a number.
+ * Output: True when it is a known code (including the PB_REVIEW ones).
+ */
 function pbIsValid(pb) {
   return (pb >= 1 && pb <= 16) || (pb >= 21 && pb <= 68) ||
     pb === 71 || pb === 72 || (pb >= 74 && pb <= 79) ||
     (pb >= 82 && pb <= 93) || pb === 98 || pb === 99 || PB_REVIEW.has(pb);
 }
 
-/** YYYY-MM-DD (or a Date) to a comparable YYYYMMDD number. */
+/**
+ * What:   Date to a comparable number.
+ * Input:  A `YYYY-MM-DD` string or a Date.
+ * Output: A `YYYYMMDD` number.
+ */
 function dateKey(d) {
   const iso = d instanceof Date ? d.toISOString().slice(0, 10) : String(d);
   return Number(iso.replace(/-/g, ""));
 }
 
+/**
+ * What:   Calendar check.
+ * Input:  Year [y], month [m] (1-12) and day [d].
+ * Output: True when the date exists (rejects e.g. 31 Feb).
+ */
 function isRealDate(y, m, d) {
   const dt = new Date(Date.UTC(y, m - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 &&
     dt.getUTCDate() === d;
 }
 
+/**
+ * What:   Zero-padder.
+ * Input:  Number [n] and width [w].
+ * Output: [n] as a string left-padded with zeros.
+ */
 const pad = (n, w) => String(n).padStart(w, "0");
 
 /**

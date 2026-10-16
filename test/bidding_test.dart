@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:fairbid/core/config/platform_config.dart';
-import 'package:fairbid/features/auth/domain/app_user.dart';
 import 'package:fairbid/features/auth/domain/user_role.dart';
 import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/presentation/bid/submit_bid_sheet.dart';
@@ -291,18 +290,6 @@ void main() {
   });
 
   group('Wallet balance gate on bid acceptance', () {
-    test('AppUser.availableBalanceSen subtracts locked escrow', () {
-      const user = AppUser(
-        uid: 'uid-1',
-        email: 'a@b.com',
-        displayName: 'Test User',
-        role: UserRole.requestor,
-        walletBalanceSen: 50000,
-        escrowLockedSen: 20000,
-      );
-      expect(user.availableBalanceSen, 30000);
-    });
-
     testWidgets(
       'accepting a bid over the available balance shows a top-up dialog',
       (tester) async {

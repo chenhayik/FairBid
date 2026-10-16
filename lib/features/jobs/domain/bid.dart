@@ -1,3 +1,6 @@
+/// What:   Lifecycle of a bid.
+/// Input:  Stored `status` string via [fromStorage]; unknown values read as pending.
+/// Output: pending, accepted, rejected or withdrawn, with a display [label].
 enum BidStatus {
   pending,
   accepted,
@@ -35,7 +38,9 @@ class Bid {
     this.createdAt,
   });
 
-  /// A copy carrying the provider's current score; the bid-time snapshot is stale for ranking.
+  /// What:   Copy of the bid with the provider's current score.
+  /// Input:  [trustScore] and [scoreVisible] from the provider's profile.
+  /// Output: New Bid; the bid-time snapshot is stale for ranking.
   Bid withTrust({required int trustScore, required bool scoreVisible}) => Bid(
         jobId: jobId,
         providerId: providerId,
@@ -72,7 +77,8 @@ class Bid {
   final BidStatus status;
   final DateTime? createdAt;
 
-  /// Client-owned fields; the repository sets `status` and `createdAt`.
+  /// What:   Fields the client writes.
+  /// Output: Map without `status` and `createdAt`; the repository sets those.
   Map<String, dynamic> toMap() => {
         'providerId': providerId,
         'providerName': providerName,

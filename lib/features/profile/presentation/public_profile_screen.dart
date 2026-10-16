@@ -80,7 +80,9 @@ class _ProfileBody extends StatelessWidget {
 
   final PublicProfile profile;
 
-  /// Rating, jobs, Trust Score (once earned) and Verified (once approved): what a requestor compares bids by.
+  /// What:   Provider stats a requestor compares bids by.
+  /// Input:  [profile] rating, jobs completed, Trust Score and verification.
+  /// Output: Stats strip with Rating, Jobs Completed, Trust Score (once earned) and Verification (once approved).
   Widget _credibilityStrip() {
     final avg = profile.averageRating;
     return _StatsStrip(
@@ -102,7 +104,9 @@ class _ProfileBody extends StatelessWidget {
     );
   }
 
-  /// Posting history and hire rate instead of trade credentials.
+  /// What:   Client stats: posting history and hire rate instead of trade credentials.
+  /// Input:  [profile] member since, jobs posted, hire rate, jobs completed and rating.
+  /// Output: Stats strip; Hire Rate is left out until a job exists, never a forged 0%.
   Widget _clientHistoryStrip() {
     final avg = profile.averageRating;
     return _StatsStrip(
@@ -191,7 +195,9 @@ class _ProfileBody extends StatelessWidget {
   }
 }
 
-/// Avatar, name, role subtitle, category and location, in the same layout for both roles.
+/// What:   Avatar, name, role subtitle, category and location, in the same layout for both roles.
+/// Input:  [profile], a PublicProfile.
+/// Output: Centred header column.
 class _IdentityHeader extends StatelessWidget {
   const _IdentityHeader({required this.profile});
   final PublicProfile profile;
@@ -265,14 +271,18 @@ class _IdentityHeader extends StatelessWidget {
 
 }
 
-/// One stat tile's label and value.
+/// What:   One stat tile's label and value.
+/// Input:  [label] and [value] strings.
+/// Output: Data holder for _StatsGrid.
 class _Stat {
   const _Stat(this.label, this.value);
   final String label;
   final String value;
 }
 
-/// [stats] as [StatCard]s, two per row.
+/// What:   Stat tiles laid out two per row.
+/// Input:  [stats].
+/// Output: Rows of equal-width StatCards.
 class _StatsGrid extends StatelessWidget {
   const _StatsGrid({required this.stats});
   final List<_Stat> stats;
@@ -336,6 +346,9 @@ class _StatsStrip extends StatelessWidget {
   }
 }
 
+/// What:   "New to FairBid" pill shown while the Trust Score is not yet earned.
+/// Input:  None.
+/// Output: PillBadge row.
 class _NewToFairBidBadge extends StatelessWidget {
   const _NewToFairBidBadge();
 
@@ -353,6 +366,9 @@ class _NewToFairBidBadge extends StatelessWidget {
   }
 }
 
+/// What:   The user's bio.
+/// Input:  [bio].
+/// Output: AppCard with an About title and the text.
 class _AboutCard extends StatelessWidget {
   const _AboutCard({required this.bio});
   final String bio;
@@ -373,7 +389,9 @@ class _AboutCard extends StatelessWidget {
   }
 }
 
-/// Provider skills as chips and the coverage area.
+/// What:   Provider skills as chips and the coverage area.
+/// Input:  [profile] skills and coverage area.
+/// Output: AppCard with skill pills and an icon line for the area.
 class _ServicesCard extends StatelessWidget {
   const _ServicesCard({required this.profile});
   final PublicProfile profile;
@@ -410,6 +428,9 @@ class _ServicesCard extends StatelessWidget {
   }
 }
 
+/// What:   One line of text with a small leading icon.
+/// Input:  [icon] and [text].
+/// Output: Row.
 class _IconLine extends StatelessWidget {
   const _IconLine({required this.icon, required this.text});
   final IconData icon;
@@ -430,7 +451,9 @@ class _IconLine extends StatelessWidget {
   }
 }
 
-/// Provider portfolio: photo strip, copyable links and a certificate count (never the files).
+/// What:   Provider portfolio: photo strip, copyable links and a certificate count (never the files).
+/// Input:  [profile] portfolio images, links and certificate count.
+/// Output: AppCard with the image strip, link rows and a count line.
 class _PortfolioCard extends StatelessWidget {
   const _PortfolioCard({required this.profile});
   final PublicProfile profile;
@@ -466,7 +489,9 @@ class _PortfolioCard extends StatelessWidget {
   }
 }
 
-/// A portfolio link; tapping copies it (opening externally isn't wired yet).
+/// What:   A portfolio link; tapping copies it (opening externally is not wired yet).
+/// Input:  [link].
+/// Output: Row that copies [link] to the clipboard and shows a snackbar.
 class _PortfolioLinkRow extends StatelessWidget {
   const _PortfolioLinkRow({required this.link});
   final String link;
@@ -499,6 +524,9 @@ class _PortfolioLinkRow extends StatelessWidget {
     );
   }
 
+  /// What:   Copies the link to the clipboard.
+  /// Input:  [link].
+  /// Output: Snackbar "Link copied to clipboard."
   Future<void> _copy(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     await Clipboard.setData(ClipboardData(text: link));
@@ -508,7 +536,9 @@ class _PortfolioLinkRow extends StatelessWidget {
   }
 }
 
-/// Provider Trust Score sub-bars without own-profile coaching hints; collapsed by default.
+/// What:   Provider Trust Score sub-bars without own-profile coaching hints; collapsed by default.
+/// Input:  [profile].trustBreakdown.
+/// Output: Expansion card with the Reviews, Track Record, Verification and Profile bars.
 class _TrustDetailCard extends StatelessWidget {
   const _TrustDetailCard({required this.profile});
   final PublicProfile profile;
@@ -544,7 +574,9 @@ class _TrustDetailCard extends StatelessWidget {
   }
 }
 
-/// Low-emphasis "Report this user" footer; no Message button, since chat opens from a job.
+/// What:   Low-emphasis "Report this user" footer.
+/// Input:  [uid] and [name] of the viewed user.
+/// Output: Text button that opens the report flow; no Message button, since chat opens from a job.
 class _ReportFooter extends StatelessWidget {
   const _ReportFooter({required this.uid, required this.name});
   final String uid;
@@ -569,8 +601,10 @@ class _ReportFooter extends StatelessWidget {
     );
   }
 
-  /// Files the report via [UserReportRepository]. The copy promises only that it was recorded,
-  /// since no admin screen reads `reports` yet.
+  /// What:   Files a report against the viewed user.
+  /// Input:  The reason from a ReasonDialog (null = cancelled); the signed-in uid; UserReportRepository.reportUser() (user_report_repository.dart).
+  /// Output: Snackbar with the result.
+  /// Notes:  The copy promises only that it was recorded, since no admin screen reads `reports` yet.
   Future<void> _report(BuildContext context) async {
     final reports = context.read<UserReportRepository>();
     final reporterId = context.read<AuthController>().user?.uid;

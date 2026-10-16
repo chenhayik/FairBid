@@ -18,7 +18,10 @@ const ID_PATH = /^verification\/([^/]+)\/id_document_/;
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
-/** Failures that mean the card is unusable, rather than merely unproven. */
+/**
+ * What:   Failure codes that mean the card is unusable, not merely unproven.
+ * Output: Strings; verdictFor() rejects when any appears.
+ */
 const HARD_FAILURES = [
   "not-an-image", "no-ic-found", "invalid-ic", "underage", "ic-mismatch",
   "duplicate-ic",
@@ -46,7 +49,11 @@ function icKey(ic, pepper) {
 }
 
 let visionClient;
-/** Lazily created so requiring this module stays cheap and offline. */
+/**
+ * What:   Cloud Vision client.
+ * Output: One shared ImageAnnotatorClient, created on first use so requiring
+ *         this module stays cheap and offline.
+ */
 function vision() {
   if (!visionClient) {
     const {ImageAnnotatorClient} = require("@google-cloud/vision");
@@ -56,9 +63,11 @@ function vision() {
 }
 
 /**
- * Looks the IC up in `idRegistry`; with `reserve`, claims it for [uid] and
- * drops any older claim. Returns true when another account holds the typed or
- * OCR IC.
+ * What:   Duplicate-IC check against `idRegistry`.
+ * Input:  [uid], the [typed] and [ocrIc] numbers, [reserve] flag, [pepper].
+ * Output: True when another account holds the typed or OCR IC.
+ * How:    One transaction reads the HMAC keys; with [reserve] it also claims
+ *         the typed IC for [uid] and deletes that user's older claim.
  */
 function checkRegistry(uid, typed, ocrIc, reserve, pepper) {
   const db = admin.firestore();

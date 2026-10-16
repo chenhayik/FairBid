@@ -32,6 +32,9 @@ Future<String?> showBundlePickSheet(
   );
 }
 
+/// What:   Sheet body listing the bids for one task.
+/// Input:  [bids] already filtered and sorted by bidsCoveringTask(); [currentProviderId] is highlighted.
+/// Output: Rows with a "Lowest price" badge and bundle-price note; pops with the provider id, or [bundleNoProviderPick].
 class _PickSheet extends StatelessWidget {
   const _PickSheet({
     required this.title,

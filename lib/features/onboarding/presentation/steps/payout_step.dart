@@ -11,6 +11,9 @@ import '../onboarding_controller.dart';
 class PayoutStep extends StatelessWidget {
   const PayoutStep({super.key});
 
+  /// What:   Saves the draft without submitting.
+  /// Input:  OnboardingController.saveDraft().
+  /// Output: "Progress saved." snackbar on success.
   Future<void> _saveForLater(BuildContext context) async {
     final saved = await context.read<OnboardingController>().saveDraft();
     if (saved && context.mounted) {
@@ -19,6 +22,9 @@ class PayoutStep extends StatelessWidget {
     }
   }
 
+  /// What:   Submits the application for admin review.
+  /// Input:  OnboardingController.submitForReview().
+  /// Output: Refreshes the user so status 'pending' switches to the pending screen.
   Future<void> _submit(BuildContext context) async {
     final onboarding = context.read<OnboardingController>();
     final auth = context.read<AuthController>();
@@ -48,9 +54,9 @@ class PayoutStep extends StatelessWidget {
           icon: Icons.account_balance_wallet_outlined,
           leftAccent: true,
           title: 'No bank details needed yet',
-          body: 'Before your first withdrawal you add a DuitNow ID (mobile '
-              "or MyKad, works with Touch 'n Go eWallet) or a bank account, "
-              'under Earnings.',
+          body: 'Before your first withdrawal, add a DuitNow ID (your '
+              "mobile number, which works with Touch 'n Go eWallet) or pick "
+              'your bank from a list, under Earnings.',
         ),
         const SizedBox(height: 24),
         if (onboarding.errorMessage != null)

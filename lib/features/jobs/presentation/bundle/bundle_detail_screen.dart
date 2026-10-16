@@ -92,7 +92,9 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
   /// Counts pricing calls so a slow, older answer can't overwrite a newer one.
   int _pricingRun = 0;
 
-  /// Order-independent fingerprint of [bids]; any edit (new updatedAt or prices) changes it.
+  /// What:   Fingerprint of the current bids.
+  /// Input:  [bids] from BundleBidRepository.watchBundleBids().
+  /// Output: Order-independent string; any edit (new updatedAt or prices) changes it, so stale options and picks are detectable.
   String _bidsSignature(List<BundleBid> bids) {
     String pricesOf(BundleBid bid) {
       final entries = bid.taskPrices.entries.toList()
@@ -110,6 +112,9 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     return parts.join('|');
   }
 
+  /// What:   Loads the server's award options.
+  /// Input:  BundleRepository.previewAward(bundleId) (bundle_repository.dart); [bids] only for the freshness signature.
+  /// Output: Sets [_options] and [_optionsSignature], or [_error].
   Future<void> _loadOptions(List<BundleBid> bids) async {
     setState(() {
       _loadingOptions = true;
@@ -136,11 +141,15 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
+  /// What:   Records the client's pick for one task.
+  /// Output: Updates [_picks] and re-prices them.
   void _onPick(String taskId, String? providerId, List<BundleBid> bids) {
     setState(() => _picks[taskId] = providerId);
     _priceManual(bids);
   }
 
+  /// What:   Copies an award option into the manual picks.
+  /// Output: Replaces [_picks] with the option's providers and re-prices them.
   void _useOption(BundleAwardOption option, List<BundleBid> bids) {
     setState(() {
       _picks
@@ -150,6 +159,10 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     _priceManual(bids);
   }
 
+  /// What:   Prices the manual picks on the server.
+  /// Input:  [_picks] via BundleRepository.priceManualAward() (bundle_repository.dart).
+  /// Output: Sets [_manualOption] or [_manualProblems].
+  /// Notes:  [_pricingRun] drops a slow, older answer that would overwrite a newer one.
   Future<void> _priceManual(List<BundleBid> bids) async {
     final picks = {
       for (final entry in _picks.entries)
@@ -188,7 +201,8 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Confirms, then cancels the whole bundle and its open tasks.
+  /// What:   Cancel-bundle button handler.
+  /// Output: After a confirm dialog, cancels the whole bundle and its open tasks via BundleRepository.cancelBundle().
   Future<void> _cancelBundle() async {
     final confirmed = await showConfirmDialog(
       context,
@@ -220,8 +234,10 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
-  /// Confirms, then awards. For uncovered tasks it also asks: release to
-  /// ordinary bidding (deadline defaults to 7 days) or drop.
+  /// What:   Award button handler for one option.
+  /// Input:  [option] (server-priced) and [tasks] for titles.
+  /// Output: After a confirm dialog, awards via BundleRepository.award(); success pops with a snackbar, a balance shortfall opens the top-up dialog.
+  /// Notes:  For uncovered tasks the dialog asks to release them to ordinary bidding (deadline defaults to 7 days) or drop them.
   Future<void> _award(BundleAwardOption option, List<Job> tasks) async {
     String titleFor(String taskId) => taskTitle(tasks, taskId);
 
@@ -361,6 +377,8 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     }
   }
 
+  /// What:   Opens a task's job detail.
+  /// Output: Pops back if it is [fromTaskId], else pushes `/jobs/{id}?from=bundle`.
   void _openTask(Job task) {
     if (task.id == widget.fromTaskId && context.canPop()) {
       context.pop();
@@ -396,6 +414,9 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
     );
   }
 
+  /// What:   Owner view body.
+  /// Input:  Task and bid streams ([_tasks], [_bids]).
+  /// Output: Summary, tasks, bids, award options and manual picks, with the pick bar when picking.
   Widget _body(BuildContext context, Bundle bundle) {
     final theme = Theme.of(context);
 

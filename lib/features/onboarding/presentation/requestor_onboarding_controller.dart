@@ -32,7 +32,9 @@ class RequestorOnboardingController extends ChangeNotifier {
   /// True while the upload named [purpose] ('avatar' or 'client_document') runs.
   bool isUploading(String purpose) => _uploadingPurpose == purpose;
 
-  /// Loads saved progress for [uid] once; seeds the name from [fallbackName] if none is saved.
+  /// What:   Loads saved progress once.
+  /// Input:  [uid]; RequestorOnboardingRepository.load(); [fallbackName] used when no name is saved.
+  /// Output: Fills [data] (a fresh draft if the load fails).
   Future<void> loadFor(String uid, {String? fallbackName}) async {
     if (_loadedUid == uid) return;
     _loadedUid = uid;
@@ -52,7 +54,9 @@ class RequestorOnboardingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Saves, then advances a stage; a failed save rolls the step back.
+  /// What:   Saves the draft, then moves to the next stage.
+  /// Input:  [data]; RequestorOnboardingRepository.save().
+  /// Output: Advances [data].step; a failed save rolls the step back and sets [errorMessage].
   Future<void> saveAndContinue() => _run(() async {
         final previous = data.step;
         if (data.step < RequestorOnboardingData.lastStep) data.step++;
@@ -67,7 +71,9 @@ class RequestorOnboardingController extends ChangeNotifier {
   /// Final submission; marks onboarding complete.
   Future<bool> finish() => _run(() => _repository.complete(_loadedUid!, data));
 
-  /// Steps back one stage; false at the first stage.
+  /// What:   Steps back one stage.
+  /// Input:  [data].step.
+  /// Output: False at the first stage; otherwise true after decrementing.
   bool goBack() {
     if (data.step <= RequestorOnboardingData.firstStep) return false;
     data.step--;
@@ -75,13 +81,19 @@ class RequestorOnboardingController extends ChangeNotifier {
     return true;
   }
 
-  // Goes to `avatars/` (signed-in readable) so counterparties can see it.
+  /// What:   Uploads the profile photo.
+  /// Input:  Gallery picker; DocumentStorageRepository.uploadAvatar() (document_storage_repository.dart).
+  /// Output: Sets the profile photo URL.
+  /// Notes:  Goes to `avatars/` (signed-in readable) so counterparties can see it.
   Future<void> pickProfilePhoto() => _pickAndUpload(
         purpose: 'avatar',
         upload: (file) => _storage.uploadAvatar(uid: _loadedUid!, file: file),
         apply: (url) => data.profilePhotoUrl = url,
       );
 
+  /// What:   Uploads the optional verification document.
+  /// Input:  Gallery picker; DocumentStorageRepository.uploadVerificationImage().
+  /// Output: Sets the client document URL.
   Future<void> pickVerificationDocument() => _pickAndUpload(
         purpose: 'client_document',
         upload: (file) => _storage.uploadVerificationImage(
@@ -92,6 +104,9 @@ class RequestorOnboardingController extends ChangeNotifier {
         apply: (url) => data.clientDocumentUrl = url,
       );
 
+  /// What:   Picks an image, uploads it and hands the URL to [apply].
+  /// Input:  [purpose] upload name; [upload] storage call; gallery picker (1600px, quality 85).
+  /// Output: Sets busy and error state; one upload at a time.
   Future<void> _pickAndUpload({
     required String purpose,
     required Future<String> Function(XFile file) upload,
@@ -127,6 +142,9 @@ class RequestorOnboardingController extends ChangeNotifier {
     }
   }
 
+  /// What:   Wrapper that runs one save action with busy and error state.
+  /// Input:  [action], a repository call.
+  /// Output: True on success; false with [errorMessage] set.
   Future<bool> _run(Future<void> Function() action) async {
     _busy = true;
     _errorMessage = null;

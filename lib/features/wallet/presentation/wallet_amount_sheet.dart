@@ -31,6 +31,9 @@ class WalletAmountSheet extends StatefulWidget {
   /// Upper bound, e.g. the available balance for withdrawals.
   final int? maxSen;
 
+  /// What:   Opens the amount sheet.
+  /// Input:  [title], [subtitle], [actionLabel], [onSubmit] and an optional [maxSen].
+  /// Output: True once the action succeeded, otherwise null.
   static Future<bool?> show(
     BuildContext context, {
     required String title,
@@ -69,6 +72,9 @@ class _WalletAmountSheetState extends State<WalletAmountSheet> {
     super.dispose();
   }
 
+  /// What:   Validates the typed amount.
+  /// Input:  [value], RM text parsed by parseRmToSen() (money.dart).
+  /// Output: An error message, or null when above zero and within [maxSen].
   String? _validate(String? value) {
     final sen = parseRmToSen(value);
     if (sen == null) return 'Enter an amount.';
@@ -79,6 +85,9 @@ class _WalletAmountSheetState extends State<WalletAmountSheet> {
     return null;
   }
 
+  /// What:   Runs the wallet action for the typed amount.
+  /// Input:  The amount in sen; [onSubmit] callback.
+  /// Output: Pops true on success; otherwise shows the function's message and logs a payment event.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {

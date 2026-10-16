@@ -92,8 +92,6 @@ class FakeAuthRepository implements AuthRepository {
 
   int walletBalanceSen = 0;
 
-  /// Sen the server holds back from the wallet (the old escrow lock).
-  int escrowLockedSen = 0;
   int ratingCount = 0;
   int ratingSum = 0;
   int jobsCompleted = 0;
@@ -175,7 +173,6 @@ class FakeAuthRepository implements AuthRepository {
       category: category,
       skills: List.of(skills),
       walletBalanceSen: walletBalanceSen,
-      escrowLockedSen: escrowLockedSen,
       ratingCount: ratingCount,
       ratingSum: ratingSum,
       jobsCompleted: jobsCompleted,
@@ -900,9 +897,8 @@ class FakeBidRepository implements BidRepository {
 
   @override
   Future<void> acceptBid(Bid bid) async {
-    // Mirrors the `acceptBid` Cloud Function's balance gate: available =
-    // wallet balance minus anything held back.
-    final available = auth.walletBalanceSen - auth.escrowLockedSen;
+    // Mirrors the `acceptBid` Cloud Function's balance gate.
+    final available = auth.walletBalanceSen;
     if (bid.amountSen > available) {
       throw InsufficientBalanceException(
         shortfallSen: bid.amountSen - available,

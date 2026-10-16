@@ -57,6 +57,8 @@ class AppointmentCardState extends State<AppointmentCard> {
     }
   }
 
+  /// What:   Preselects a lone proposed time.
+  /// Output: Index 0 when the proposal has exactly one option, else null.
   int? _onlyOption(AppointmentProposal? proposal) =>
       proposal?.options.length == 1 ? 0 : null;
 
@@ -74,6 +76,9 @@ class AppointmentCardState extends State<AppointmentCard> {
     );
   }
 
+  /// What:   Runs one JobRepository call with busy state.
+  /// Input:  [call] such as respondToAppointment or markArrived (job_repository.dart).
+  /// Output: Sets [_busy] while it runs; a failure shows the callable's message (or a generic one) in a snackbar.
   Future<void> _run(Future<void> Function(JobRepository repo) call) async {
     setState(() => _busy = true);
     final repo = context.read<JobRepository>();
@@ -106,7 +111,8 @@ class AppointmentCardState extends State<AppointmentCard> {
     ));
   }
 
-  /// Asks for an ETA (15/30/45/60 min) and sends On my way.
+  /// What:   On my way button handler.
+  /// Output: Asks for an ETA (15/30/45/60 min) in a bottom sheet, then calls JobRepository.markOnTheWay().
   Future<void> _onMyWay() async {
     final eta = await showModalBottomSheet<int>(
       context: context,
@@ -159,6 +165,8 @@ class AppointmentCardState extends State<AppointmentCard> {
     );
   }
 
+  /// What:   Empty state when no time is agreed or proposed.
+  /// Output: Explanation and a Propose a time button.
   List<Widget> _none(BuildContext context) {
     final theme = Theme.of(context);
     return [
@@ -176,6 +184,8 @@ class AppointmentCardState extends State<AppointmentCard> {
     ];
   }
 
+  /// What:   The agreed visit.
+  /// Output: Start time, optional finish date, visit-day status, Add to calendar and Reschedule.
   List<Widget> _confirmed(BuildContext context, Appointment appointment) {
     final theme = Theme.of(context);
     final endAt = appointment.endAt;
@@ -219,7 +229,9 @@ class AppointmentCardState extends State<AppointmentCard> {
     ];
   }
 
-  /// Status line, plus the provider's buttons from 3 hours before the visit until arrival.
+  /// What:   Visit-day status and the provider's arrival buttons.
+  /// Input:  [appointment]; the job's onTheWayAt, arrivedAt and etaMinutes.
+  /// Output: Status line, plus On my way / I've arrived for the provider from 3 hours before the visit until arrival.
   List<Widget> _visitDay(BuildContext context, Appointment appointment) {
     final sent = _job.onTheWayAt;
     final arrived = _job.arrivedAt;
@@ -249,6 +261,8 @@ class AppointmentCardState extends State<AppointmentCard> {
     ];
   }
 
+  /// What:   The pending proposal.
+  /// Output: Own proposal: times with Withdraw. Other party's: time chips with Confirm and Suggest other times.
   List<Widget> _pending(BuildContext context, AppointmentProposal proposal) {
     final theme = Theme.of(context);
     final subdued = theme.textTheme.bodyMedium?.copyWith(

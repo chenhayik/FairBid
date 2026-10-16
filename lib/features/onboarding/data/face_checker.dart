@@ -9,6 +9,9 @@ import '../domain/face_box.dart';
 
 export '../domain/face_box.dart';
 
+/// What:   Which photo is being checked.
+/// Input:  Passed to FaceChecker.check() by OnboardingController.
+/// Output: `idCard` (a face on a card) or `selfie` (eyes open, facing the camera).
 enum FaceCheckKind { idCard, selfie }
 
 /// What:   Result of a face check.
@@ -77,7 +80,10 @@ class MlKitFaceChecker implements FaceChecker {
 
   static double _area(Face f) => f.boundingBox.width * f.boundingBox.height;
 
-  /// ML Kit reports EXIF-upright pixels, as does Flutter's decoder, so dividing gives fractions.
+  /// What:   The face rectangle as fractions of the photo.
+  /// Input:  Image file at [path] and the detected [face].
+  /// Output: A FaceBox clamped inside the image, plus the image's aspect ratio.
+  /// Notes:  ML Kit reports EXIF-upright pixels, as does Flutter's decoder, so dividing gives fractions.
   static Future<FaceBox> _box(String path, Face face) async {
     final codec = await ui.instantiateImageCodec(await File(path).readAsBytes());
     final image = (await codec.getNextFrame()).image;

@@ -16,7 +16,10 @@ class FaceCropLayout {
 
   final double imageW, imageH, cropH, left, top;
 
-  /// Pads [box] by 20% per side (within the image) so the whole head shows.
+  /// What:   Computes the crop layout for a face.
+  /// Input:  [box] (normalised face rectangle) and window width [size].
+  /// Output: FaceCropLayout.
+  /// How:    Pads the box by 20% per side (clamped to the image) so the whole head shows.
   static FaceCropLayout of(FaceBox box, double size) {
     final l = (box.left - box.width * 0.2).clamp(0.0, 1.0);
     final t = (box.top - box.height * 0.2).clamp(0.0, 1.0);

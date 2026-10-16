@@ -36,7 +36,9 @@ class Review {
   final String? flagReason;
   final bool hidden;
 
-  /// Client-written fields; `createdAt` is a server timestamp and moderation fields are written later.
+  /// What:   The client-written review fields.
+  /// Input:  This review.
+  /// Output: Map for ReviewRepository.leaveReview(); `createdAt` is a server timestamp and moderation fields are written later.
   Map<String, dynamic> toMap() => {
         'reviewerId': reviewerId,
         'reviewerName': reviewerName,
@@ -47,7 +49,9 @@ class Review {
         if (jobTitle != null) 'jobTitle': jobTitle,
       };
 
-  /// Builds from the doc id and Timestamp-normalised data; older docs read as unflagged.
+  /// What:   Builds a review from a doc.
+  /// Input:  The doc [id] and Timestamp-normalised [m].
+  /// Output: Review; older docs read as unflagged and visible.
   factory Review.fromMap(String id, Map<String, dynamic> m) => Review(
         id: id,
         reviewerId: m['reviewerId'] as String? ?? '',

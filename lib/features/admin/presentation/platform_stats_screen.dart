@@ -26,12 +26,18 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
     _stats = context.read<StatsRepository>().load();
   }
 
+  /// What:   Reloads the stats for pull-to-refresh.
+  /// Input:  StatsRepository.load() (stats_repository.dart).
+  /// Output: Replaces _stats and completes when the new load finishes.
   Future<void> _refresh() async {
     final fresh = context.read<StatsRepository>().load();
     setState(() => _stats = fresh);
     await fresh;
   }
 
+  /// What:   Recomputes every user's Trust Score.
+  /// Input:  StatsRepository.recomputeTrustScores() (stats_repository.dart).
+  /// Output: Snackbar with the user count or an error; the button shows "Recomputing…" meanwhile.
   Future<void> _recomputeTrust() async {
     setState(() => _recomputing = true);
     try {
@@ -137,7 +143,9 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
   }
 }
 
-/// Two stat cards per row, equal height.
+/// What:   Grid of stat cards, two per row.
+/// Input:  [cells] as (label, value, icon) records.
+/// Output: Rows of equal-height StatCards; a lone last card keeps its normal width.
 class _CardGrid extends StatelessWidget {
   const _CardGrid({required this.cells});
 

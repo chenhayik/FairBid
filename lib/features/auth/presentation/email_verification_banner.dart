@@ -44,6 +44,9 @@ class _EmailVerificationBannerState extends State<EmailVerificationBanner>
     if (state == AppLifecycleState.resumed) _check();
   }
 
+  /// What:   Re-checks whether the email is verified.
+  /// Input:  AuthController.refreshEmailVerified().
+  /// Output: Spinner while checking; success removes the banner through the controller update.
   Future<void> _check() async {
     if (_checking) return;
     setState(() => _checking = true);
@@ -52,6 +55,9 @@ class _EmailVerificationBannerState extends State<EmailVerificationBanner>
     if (mounted) setState(() => _checking = false);
   }
 
+  /// What:   Re-sends the verification email.
+  /// Input:  AuthController.sendEmailVerification().
+  /// Output: Snackbar with the result and a resend cooldown on success.
   Future<void> _resend() async {
     final auth = context.read<AuthController>();
     final sent = await auth.sendEmailVerification();
@@ -64,6 +70,9 @@ class _EmailVerificationBannerState extends State<EmailVerificationBanner>
     ));
   }
 
+  /// What:   Counts down the resend button.
+  /// Input:  [_resendCooldown].
+  /// Output: Updates [_remaining] every second until zero.
   void _startCooldown() {
     _cooldownTimer?.cancel();
     setState(() => _remaining = _resendCooldown);

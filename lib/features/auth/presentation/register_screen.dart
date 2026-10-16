@@ -40,6 +40,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
+  /// What:   Creates the account.
+  /// Input:  The validated form fields, the chosen role and the Terms checkbox.
+  /// Output: AuthController.register(); a snackbar instead if the Terms are not agreed.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_agreedToTerms) {
@@ -55,6 +58,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         );
   }
 
+  /// What:   Signs up or in with Google using the picked role.
+  /// Input:  AuthController.signInWithGoogle(); the role applies only to a new account.
+  /// Output: Signs in, then prompts for the second factor if needed.
   Future<void> _google() async {
     // The picked role applies only if this Google account is new.
     final auth = context.read<AuthController>();

@@ -42,6 +42,9 @@ class DocumentGallery extends StatelessWidget {
   }
 }
 
+/// What:   Thumbnail row for one document.
+/// Input:  [document], a VerificationDocument (pending_verification.dart).
+/// Output: Label, 64px thumbnail and "Tap to view full size"; tap opens _DocumentViewer.
 class _DocumentTile extends StatelessWidget {
   const _DocumentTile({required this.document});
 
@@ -92,6 +95,9 @@ class _DocumentTile extends StatelessWidget {
       );
   }
 
+  /// What:   Square 64px box shown while a thumbnail loads or fails.
+  /// Input:  [child], a spinner or broken-image icon.
+  /// Output: Tinted container with [child] centred.
   Widget _thumbPlaceholder(BuildContext context, Widget child) => Container(
         width: 64,
         height: 64,
@@ -101,12 +107,17 @@ class _DocumentTile extends StatelessWidget {
       );
 }
 
-/// Full-screen, pinch-to-zoom viewer for a single document image.
+/// What:   Full-screen, pinch-to-zoom viewer for a single document image.
+/// Input:  [document]; opened through [show].
+/// Output: Dialog with zoomable image (0.5x to 4x), label and close button.
 class _DocumentViewer extends StatelessWidget {
   const _DocumentViewer({required this.document});
 
   final VerificationDocument document;
 
+  /// What:   Opens the full-screen viewer for [document].
+  /// Input:  [document], a VerificationDocument.
+  /// Output: Dark dialog route that completes when closed.
   static Future<void> show(
       BuildContext context, VerificationDocument document) {
     return showDialog(

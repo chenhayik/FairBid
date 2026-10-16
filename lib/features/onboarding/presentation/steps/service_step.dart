@@ -34,7 +34,9 @@ class _ServiceStepState extends State<ServiceStep> {
         suggestedCategoryFor(onboarding.ssmExtract?.natureOfBusiness);
   }
 
-  /// Opens the Penang picker; stores the label and the structured pick.
+  /// What:   Opens the Penang map picker for the coverage area.
+  /// Input:  The saved coverage point as the starting position.
+  /// Output: Stores the label, district, town and coordinates in the draft.
   Future<void> _pickLocation() async {
     final onboarding = context.read<OnboardingController>();
     final data = onboarding.data;
@@ -56,6 +58,9 @@ class _ServiceStepState extends State<ServiceStep> {
     });
   }
 
+  /// What:   Validates the service form and moves to the next stage.
+  /// Input:  The form fields and the picked coverage area.
+  /// Output: A snackbar if no coverage area is picked; otherwise OnboardingController.saveAndContinue().
   void _saveAndContinue() {
     if (!_formKey.currentState!.validate()) return;
     final onboarding = context.read<OnboardingController>();

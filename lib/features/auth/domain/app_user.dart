@@ -25,7 +25,6 @@ class AppUser {
     this.defaultTown,
     this.bio,
     this.walletBalanceSen = 0,
-    this.escrowLockedSen = 0,
     this.ratingCount = 0,
     this.ratingSum = 0,
     this.jobsCompleted = 0,
@@ -52,12 +51,6 @@ class AppUser {
 
   /// Wallet balance in sen.
   final int walletBalanceSen;
-
-  /// Sen the server holds back from the wallet; always 0 now that jobs are funded at award.
-  final int escrowLockedSen;
-
-  /// Balance free to spend or withdraw.
-  int get availableBalanceSen => walletBalanceSen - escrowLockedSen;
 
   /// Denormalised rating totals, so stars render without loading reviews.
   final int ratingCount;

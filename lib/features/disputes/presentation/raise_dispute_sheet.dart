@@ -26,6 +26,9 @@ class RaiseDisputeSheet extends StatefulWidget {
 
   final String? initialStatement;
 
+  /// What:   Opens the raise-dispute sheet.
+  /// Input:  [milestone] and an optional [initialStatement].
+  /// Output: True once the dispute is raised, otherwise null or false.
   static Future<bool?> show(BuildContext context,
       {required Milestone milestone, String? initialStatement}) {
     return showModalBottomSheet<bool>(
@@ -58,6 +61,9 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
     super.dispose();
   }
 
+  /// What:   Picks and uploads one evidence photo.
+  /// Input:  Gallery via ImagePicker (1600px, quality 85); DocumentStorageRepository.uploadDisputeEvidence().
+  /// Output: Adds the download URL to [_evidenceUrls]; shows an inline error on failure.
   Future<void> _addPhoto() async {
     final uid = context.read<AuthController>().user?.uid;
     final storage = context.read<DocumentStorageRepository>();
@@ -92,11 +98,17 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
     }
   }
 
+  /// What:   Removes one evidence photo.
+  /// Input:  [url] of the uploaded photo.
+  /// Output: Drops it from the list and deletes the stored file, ignoring delete errors.
   void _removePhoto(String url) {
     setState(() => _evidenceUrls.remove(url));
     context.read<DocumentStorageRepository>().deleteByUrl(url).catchError((_) {});
   }
 
+  /// What:   Raises the dispute.
+  /// Input:  The statement (required) and [_evidenceUrls]; DisputeRepository.raiseDispute().
+  /// Output: Pops true on success; shows the function's error message on failure.
   Future<void> _submit() async {
     final statement = _statement.text.trim();
     if (statement.isEmpty) {
@@ -184,7 +196,9 @@ class _RaiseDisputeSheetState extends State<RaiseDisputeSheet> {
   }
 }
 
-/// Evidence thumbnails plus an add-photo tile.
+/// What:   Evidence thumbnails plus an add-photo tile.
+/// Input:  [urls] uploaded so far; [uploading]; [canAdd] under the photo limit; [onAdd] / [onRemove] callbacks.
+/// Output: Wrap of thumbnails with remove buttons and an add tile.
 class _EvidenceRow extends StatelessWidget {
   const _EvidenceRow({
     required this.urls,

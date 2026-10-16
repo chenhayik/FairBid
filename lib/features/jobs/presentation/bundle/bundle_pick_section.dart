@@ -29,6 +29,8 @@ class BundlePickSection extends StatelessWidget {
   final void Function(String taskId, String? providerId) onPick;
   final ValueChanged<Job> onOpenTask;
 
+  /// What:   Opens the provider sheet for one task.
+  /// Output: Calls [onPick] with the chosen provider id, or null for "Don't award".
   Future<void> _change(BuildContext context, Job task) async {
     final chosen = await showBundlePickSheet(
       context,
@@ -70,6 +72,9 @@ class BundlePickSection extends StatelessWidget {
   }
 }
 
+/// What:   One task row in the pick list.
+/// Input:  [task], [bids], [providerId] (current pick).
+/// Output: Title with open-task button, then the pick line (provider and price, "Not awarded" or "No bids on this task") and Change.
 class _PickRow extends StatelessWidget {
   const _PickRow({
     required this.task,

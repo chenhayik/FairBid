@@ -74,6 +74,7 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 16),
               ReviewList(
                 uid: user.uid,
+                seeAllCount: user.ratingCount,
                 header: Text('Reviews (${user.ratingCount})',
                     style: Theme.of(context).textTheme.titleLarge),
                 onFlag: (review) => _flagReview(context, user, review),
@@ -108,7 +109,10 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-/// Confirms, then deletes the account; `cleanupUserDoc` removes the data and the router returns to sign-in.
+/// What:   Deletes the signed-in account after a confirm dialog.
+/// Input:  [auth] and [user]; the password from _DeleteAccountDialog (null = cancelled).
+/// Output: AuthController.deleteAccount(); the `cleanupUserDoc` function removes the data and the router returns to sign-in; an error snackbar on failure.
+/// Notes:  deleteAccount re-authenticates internally, so an MFA challenge surfaces here: the code sheet is shown and the delete retried once.
 Future<void> _confirmDelete(
   BuildContext context,
   AuthController auth,
@@ -148,6 +152,9 @@ Future<void> _confirmDelete(
   ));
 }
 
+/// What:   Delete-account confirmation with an optional password field.
+/// Input:  [requiresPassword] true for email/password accounts.
+/// Output: Pops the typed password (empty when not required) on Delete, null on Cancel.
 class _DeleteAccountDialog extends StatefulWidget {
   const _DeleteAccountDialog({required this.requiresPassword});
 
@@ -216,6 +223,9 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
   }
 }
 
+/// What:   Avatar, name and role subtitle at the top of the profile.
+/// Input:  [user] from AuthController.
+/// Output: Column with the photo, display name (or email) and provider type or role label.
 class _Header extends StatelessWidget {
   const _Header({required this.user});
   final AppUser user;
@@ -244,7 +254,9 @@ class _Header extends StatelessWidget {
       };
 }
 
-/// Admin-only banner describing platform access.
+/// What:   Admin-only banner describing platform access.
+/// Input:  None.
+/// Output: InfoBanner pointing to the Home tab tools.
 class _AdminAccessCard extends StatelessWidget {
   const _AdminAccessCard();
 
@@ -260,7 +272,9 @@ class _AdminAccessCard extends StatelessWidget {
   }
 }
 
-/// Admin-only live count of applicants awaiting review.
+/// What:   Admin-only live count of applicants awaiting review.
+/// Input:  VerificationRepository.watchPending() (verification_repository.dart).
+/// Output: StatCard with the count, "-" until loaded.
 class _AdminActivityCard extends StatelessWidget {
   const _AdminActivityCard();
 
@@ -280,6 +294,10 @@ class _AdminActivityCard extends StatelessWidget {
   }
 }
 
+/// What:   The user's Trust Score with its four sub-score bars.
+/// Input:  [user] with the server-computed score and breakdown.
+/// Output: Score out of 100 once visible, otherwise a "New" pill and jobs-to-go text; Reviews, Track Record, Verification and Profile bars with coaching hints.
+/// Notes:  The Verification and Profile bars link to onboarding and Edit Profile when they can still improve.
 class _TrustScoreCard extends StatelessWidget {
   const _TrustScoreCard({required this.user});
   final AppUser user;
@@ -345,7 +363,8 @@ class _TrustScoreCard extends StatelessWidget {
             percent: trust?.trackRecordScore ?? 0,
             hint: (trust?.trackRecordScore ?? 0) < 100
                 ? 'Each completed job adds '
-                    '+${PlatformConfig.trackRecordPerJob}.'
+                    '+${PlatformConfig.trackRecordPerJob}; each lost dispute '
+                    'takes off ${PlatformConfig.disputeLostPenalty}.'
                 : null,
           ),
           TrustScoreBar(
@@ -376,7 +395,9 @@ class _TrustScoreCard extends StatelessWidget {
     );
   }
 
-  /// Names what the profile sub-score still lacks; null when complete.
+  /// What:   Names what the Profile sub-score still lacks.
+  /// Input:  [user] name, phone, bio, photo and location.
+  /// Output: "Add your ..." text, or null when complete.
   String? _missingProfileHint() {
     final missing = [
       if ((user.displayName ?? '').isEmpty) 'name',
@@ -389,7 +410,9 @@ class _TrustScoreCard extends StatelessWidget {
   }
 }
 
-/// Tappable card with an icon, title, subtitle and chevron that opens [route].
+/// What:   Tappable card with an icon, title, subtitle and chevron that opens [route].
+/// Input:  [icon], [title], [subtitle], [route].
+/// Output: AppCard that pushes [route] on tap.
 class _NavCard extends StatelessWidget {
   const _NavCard({
     required this.icon,
@@ -433,6 +456,9 @@ class _NavCard extends StatelessWidget {
   }
 }
 
+/// What:   The user's bio with an Edit link.
+/// Input:  [user].bio.
+/// Output: The bio, or a muted prompt to add one.
 class _AboutCard extends StatelessWidget {
   const _AboutCard({required this.user});
   final AppUser user;
@@ -469,6 +495,9 @@ class _AboutCard extends StatelessWidget {
   }
 }
 
+/// What:   Name, email, phone and location rows with an Edit link.
+/// Input:  [user].
+/// Output: AppCard; empty values show "Not set".
 class _BasicDetailsCard extends StatelessWidget {
   const _BasicDetailsCard({required this.user});
   final AppUser user;
@@ -514,7 +543,9 @@ class _BasicDetailsCard extends StatelessWidget {
   }
 }
 
-/// The blue "Edit" link to Edit Profile.
+/// What:   The blue "Edit" link to Edit Profile.
+/// Input:  None.
+/// Output: Tappable text (48px minimum target) that pushes `/profile/edit`.
 class _EditLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -539,7 +570,9 @@ class _EditLink extends StatelessWidget {
   }
 }
 
-/// Asks for a reason, then flags [review] on [user]'s own profile for the admin moderation queue.
+/// What:   Reports a review on the user's own profile to the admins.
+/// Input:  [review] and [user]; the reason from a ReasonDialog (null = cancelled).
+/// Output: ReviewRepository.flagReview() puts it in the moderation queue; it stays visible until an admin rules; snackbar with the result.
 Future<void> _flagReview(
     BuildContext context, AppUser user, Review review) async {
   final reviews = context.read<ReviewRepository>();

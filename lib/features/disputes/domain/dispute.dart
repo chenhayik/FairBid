@@ -1,4 +1,6 @@
-/// Dispute lifecycle: open until an admin rules or the raiser withdraws.
+/// What:   Dispute lifecycle state.
+/// Input:  The `status` field of `disputes/{id}` via DisputeStatus.fromStorage().
+/// Output: Open until an admin rules (resolved) or the raiser withdraws (withdrawn).
 enum DisputeStatus {
   open,
   resolved,
@@ -10,7 +12,9 @@ enum DisputeStatus {
       values.asNameMap()[value] ?? DisputeStatus.open;
 }
 
-/// The admin's ruling: release the escrow to the provider, or refund the requestor.
+/// What:   The admin's ruling on a dispute.
+/// Input:  Chosen in DisputeDetailScreen; sent to DisputeRepository.resolveDispute().
+/// Output: `release` pays the escrow to the provider; `refund` returns it to the requestor.
 enum DisputeResolution {
   release,
   refund;

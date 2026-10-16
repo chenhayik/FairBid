@@ -38,6 +38,9 @@ class SubmitBidSheet extends StatefulWidget {
   final AppUser bidder;
   final Bid? existing;
 
+  /// What:   Opens the sheet as a modal bottom sheet.
+  /// Input:  [job], [bidder], optional [existing] bid; BidRepository via context.read.
+  /// Output: Future that completes when the sheet closes.
   static Future<void> show(BuildContext context,
       {required Job job, required AppUser bidder, Bid? existing}) {
     final bids = context.read<BidRepository>();
@@ -88,6 +91,8 @@ class _SubmitBidSheetState extends State<SubmitBidSheet> {
     super.dispose();
   }
 
+  /// What:   Submit button handler.
+  /// Output: Validates the form and the escrow checkbox together; on success pops with a snackbar.
   Future<void> _submit() async {
     // Check both gates so all errors show together.
     final formValid = _formKey.currentState!.validate();

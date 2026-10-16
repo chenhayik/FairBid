@@ -39,6 +39,9 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
     _idExtract = context.read<VerificationRepository>().loadIdExtract(v.uid);
   }
 
+  /// What:   Approves the applicant after a confirm dialog.
+  /// Input:  Applicant [v] (the PendingVerification passed in).
+  /// Output: Runs _decide(approved: true) if confirmed.
   Future<void> _approve() async {
     final confirmed = await showConfirmDialog(
       context,
@@ -52,6 +55,9 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
     }
   }
 
+  /// What:   Rejects the applicant with an optional reason.
+  /// Input:  Reason from _RejectReasonDialog (null = cancelled, empty = no reason).
+  /// Output: Runs _decide(approved: false, reason) unless cancelled.
   Future<void> _reject() async {
     final reason = await showDialog<String>(
       context: context,
@@ -63,6 +69,10 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
     }
   }
 
+  /// What:   Saves the admin's decision and returns to the queue.
+  /// Input:  [approved]; optional [reason] for a rejection; VerificationRepository.decide() (verification_repository.dart).
+  /// Output: Pops the screen and shows a snackbar on success; stays and shows an error on failure.
+  /// Notes:  The messenger is captured before the pop so the snackbar lands on the queue.
   Future<void> _decide({required bool approved, String? reason}) async {
     // Captured early: this screen's context is gone after the pop, and the snackbar belongs on the queue.
     final messenger = ScaffoldMessenger.of(context);
@@ -180,7 +190,9 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
   }
 }
 
-/// ID face beside selfie face for a visual match; hidden unless both photos exist.
+/// What:   ID face beside selfie face for a visual match.
+/// Input:  [documents] from VerificationRepository.loadIdentityDocuments() (verification_repository.dart).
+/// Output: Two FaceCrops (ID, selfie) at half the card width each; hidden unless both photos exist.
 class _FaceComparisonCard extends StatelessWidget {
   const _FaceComparisonCard({required this.documents});
 
@@ -234,13 +246,18 @@ class _FaceComparisonCard extends StatelessWidget {
   }
 }
 
-/// The server's advisory MyKad check; the admin decides.
+/// What:   The server's advisory MyKad check; the admin decides.
+/// Input:  [extract] via VerificationRepository.loadIdExtract() (verification_repository.dart); [loading] while it loads.
+/// Output: Verdict pill, masked IC, age / name / gender results and failure reasons; "No automated check yet" if null.
 class _IdChecksCard extends StatelessWidget {
   const _IdChecksCard({required this.extract, required this.loading});
 
   final IdExtract? extract;
   final bool loading;
 
+  /// What:   Text for a three-valued check.
+  /// Input:  [v] true / false / null; the [yes] and [no] texts.
+  /// Output: [yes], [no], or "Unknown" when null.
   static String _tri(bool? v, String yes, String no) =>
       v == null ? 'Unknown' : (v ? yes : no);
 
@@ -282,7 +299,9 @@ class _IdChecksCard extends StatelessWidget {
   }
 }
 
-/// Sticky bottom bar with Reject and Approve.
+/// What:   Sticky bottom bar with Reject and Approve.
+/// Input:  [busy] disables the buttons; [onApprove] / [onReject] callbacks.
+/// Output: Two equal-width buttons above a top border.
 class _DecisionBar extends StatelessWidget {
   const _DecisionBar({
     required this.busy,
@@ -331,7 +350,9 @@ class _DecisionBar extends StatelessWidget {
   }
 }
 
-/// Avatar, name, role pill and submission details.
+/// What:   Avatar, name, role pill and submission details.
+/// Input:  [item], the PendingVerification being reviewed.
+/// Output: AppCard with a short applicant ID, email and "Submitted" time ago.
 class _ApplicantHeader extends StatelessWidget {
   const _ApplicantHeader({required this.item});
 
@@ -401,6 +422,9 @@ class _ApplicantHeader extends StatelessWidget {
   }
 }
 
+/// What:   One icon, label and right-aligned value line.
+/// Input:  [icon], [label], [value] strings.
+/// Output: Row used by _ApplicantHeader.
 class _MetaRow extends StatelessWidget {
   const _MetaRow(
       {required this.icon, required this.label, required this.value});
@@ -433,7 +457,9 @@ class _MetaRow extends StatelessWidget {
   }
 }
 
-/// Onboarding profile fields as labelled rows.
+/// What:   Onboarding profile fields as labelled rows.
+/// Input:  [item]; phone, location, service, coverage, company, SSM, skills and bio.
+/// Output: Rows for non-empty fields, skill pills and an About block, or a "no details" note.
 class _DetailsCard extends StatelessWidget {
   const _DetailsCard({required this.item});
 
@@ -489,7 +515,9 @@ class _DetailsCard extends StatelessWidget {
   }
 }
 
-/// [rows] as `_KeyValue`s separated by [gap].
+/// What:   Label / value rows spaced by [gap].
+/// Input:  [rows] as (label, value) records; [gap] height between rows.
+/// Output: A list of _KeyValue widgets.
 List<Widget> _keyValueRows(List<(String, String)> rows, double gap) => [
       for (final (i, (label, value)) in rows.indexed) ...[
         if (i > 0) SizedBox(height: gap),
@@ -497,6 +525,9 @@ List<Widget> _keyValueRows(List<(String, String)> rows, double gap) => [
       ],
     ];
 
+/// What:   Fixed-width label beside a bold value.
+/// Input:  [label] and [value] strings.
+/// Output: Row used by _keyValueRows.
 class _KeyValue extends StatelessWidget {
   const _KeyValue({required this.label, required this.value});
 
@@ -525,7 +556,9 @@ class _KeyValue extends StatelessWidget {
   }
 }
 
-/// Reject dialog with an optional reason; pops the text on confirm, null on cancel.
+/// What:   Reject dialog with an optional reason field.
+/// Input:  None; the admin types the reason.
+/// Output: Pops the text on confirm, null on cancel.
 class _RejectReasonDialog extends StatefulWidget {
   const _RejectReasonDialog();
 

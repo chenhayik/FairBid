@@ -80,7 +80,7 @@ void main() {
       final repo = FakeAuthRepository();
       await pumpApp(tester, buildApp(repo));
 
-      await tester.tap(find.text('Forgot?'));
+      await tester.tap(find.text('Forgot Email or Password?'));
       await tester.pump(); // let the snackbar animate in
 
       expect(find.text('Enter your email first'), findsOneWidget);
@@ -94,7 +94,7 @@ void main() {
       await pumpApp(tester, buildApp(repo));
 
       await fillField(tester, 'Email', 'test@fairbid.app');
-      await tester.tap(find.text('Forgot?'));
+      await tester.tap(find.text('Forgot Email or Password?'));
       await tester.pumpAndSettle();
 
       expect(repo.passwordResetsSent, ['test@fairbid.app']);

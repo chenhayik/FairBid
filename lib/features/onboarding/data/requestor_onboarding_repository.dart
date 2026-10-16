@@ -68,8 +68,9 @@ class FirestoreRequestorOnboardingRepository
         'completedAt': FieldValue.serverTimestamp(),
       });
 
-  /// Writes the profile fields (plus [extra]) and both private docs in one batch.
-  /// The phone and SSM number are deleted from the public doc; they live in the private docs.
+  /// What:   Writes the requestor's onboarding data.
+  /// Input:  [uid]; [data] (public, private and payout maps); optional [extra] top-level fields.
+  /// Output: One batch across the user doc and both private docs; the phone and SSM number are deleted from the public doc.
   Future<void> _commit(
     String uid,
     RequestorOnboardingData data, [

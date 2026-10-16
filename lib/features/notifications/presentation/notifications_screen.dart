@@ -34,6 +34,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
+  /// What:   Opens a tapped notification.
+  /// Input:  [notification] with its optional `route`.
+  /// Output: Marks it read in the background, then pushes its route when set.
   Future<void> _open(AppNotification notification) async {
     // Fire-and-forget: navigation shouldn't wait.
     if (!notification.read) {
@@ -104,7 +107,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 }
 
-/// One row: type icon, title, body and time; unread rows are tinted.
+/// What:   One row: type icon, title, body and time; unread rows are tinted.
+/// Input:  [notification]; [onTap] callback.
+/// Output: AppCard with the blue tint and bold title when unread.
 class _NotificationTile extends StatelessWidget {
   const _NotificationTile({required this.notification, required this.onTap});
   final AppNotification notification;

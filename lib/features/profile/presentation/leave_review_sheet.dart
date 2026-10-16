@@ -33,6 +33,9 @@ class LeaveReviewSheet extends StatefulWidget {
   /// The bundle to key the review by when [job] is a live bundle task; else keyed by job id.
   final String? bundleId;
 
+  /// What:   Opens the review sheet.
+  /// Input:  [job], [reviewer], [revieweeId], [revieweeName] and an optional [bundleId].
+  /// Output: True once a review exists, otherwise null.
   static Future<bool?> show(
     BuildContext context, {
     required Job job,
@@ -71,6 +74,9 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
     super.dispose();
   }
 
+  /// What:   Submits the review.
+  /// Input:  The star rating (required) and comment; ReviewRepository.leaveReview().
+  /// Output: Pops true on success; an already-reviewed job also pops true with a snackbar; other errors show inline.
   Future<void> _submit() async {
     if (_rating == 0) {
       setState(() => _error = 'Please select a star rating.');
@@ -161,7 +167,9 @@ class _LeaveReviewSheetState extends State<LeaveReviewSheet> {
   }
 }
 
-/// Tappable row of five stars.
+/// What:   Tappable row of five stars.
+/// Input:  [rating] filled so far; [onChanged] called with 1-5.
+/// Output: Five IconButtons.
 class _StarSelector extends StatelessWidget {
   const _StarSelector({required this.rating, required this.onChanged});
 

@@ -101,6 +101,9 @@ class PendingReviewScreen extends StatelessWidget {
   }
 }
 
+/// What:   Hourglass inside a spinning ring on a tinted circle.
+/// Input:  None.
+/// Output: 120px decorative header.
 class _ReviewSpinnerArt extends StatelessWidget {
   const _ReviewSpinnerArt();
 
@@ -136,6 +139,9 @@ class _ReviewSpinnerArt extends StatelessWidget {
   }
 }
 
+/// What:   One status row with an icon, title and subtitle.
+/// Input:  [icon], [iconColor], [title], [subtitle].
+/// Output: AppCard row.
 class _StatusTile extends StatelessWidget {
   const _StatusTile({
     required this.icon,

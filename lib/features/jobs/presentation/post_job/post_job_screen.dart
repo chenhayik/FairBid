@@ -50,6 +50,9 @@ class PostJobScreen extends StatelessWidget {
   }
 }
 
+/// What:   The form itself, under the PostJobController provider.
+/// Input:  PostJobController via context.watch (post_job_controller.dart); user defaults from AuthController.
+/// Output: Job form that becomes a bundle form once a task is added, with a blocking overlay while submitting.
 class _PostJobView extends StatefulWidget {
   const _PostJobView();
 
@@ -136,6 +139,8 @@ class _PostJobViewState extends State<_PostJobView> {
     super.dispose();
   }
 
+  /// What:   Opens the map picker for the job location.
+  /// Output: Sets the controller location and the address field; the location is no longer the saved default.
   Future<void> _pickLocation() async {
     final controller = context.read<PostJobController>();
     final existing = controller.location;
@@ -151,7 +156,8 @@ class _PostJobViewState extends State<_PostJobView> {
     setState(() => _locationDefaulted = false);
   }
 
-  /// The street-level suggestion for [location]: its own, else a cached reverse geocode.
+  /// What:   Street-level suggestion for [location].
+  /// Output: Its own hint, else a cached reverse geocode of the pin, or null.
   Future<AddressHint?> _addressHint(PickedLocation? location) {
     if (location == null) return Future.value();
     if (location.addressHint != null) return Future.value(location.addressHint);
@@ -162,7 +168,8 @@ class _PostJobViewState extends State<_PostJobView> {
     return _seededHint!;
   }
 
-  /// Opens the address sheet, pre-filled from the pin and town. Optional.
+  /// What:   Opens the optional service-address sheet.
+  /// Output: Pre-filled from the pin and town (a typed address wins); the result goes to PostJobController.setAddress().
   Future<void> _pickAddress() async {
     final controller = context.read<PostJobController>();
     final user = context.read<AuthController>().user;
@@ -181,11 +188,15 @@ class _PostJobViewState extends State<_PostJobView> {
     controller.setAddress(result);
   }
 
+  /// What:   Picks the bidding deadline.
+  /// Output: Sets [_deadline] from pickBiddingDeadline().
   Future<void> _pickDeadline() async {
     final picked = await pickBiddingDeadline(context, initial: _deadline);
     if (picked != null) setState(() => _deadline = picked);
   }
 
+  /// What:   Adds a task, turning the post into a bundle.
+  /// Output: Appends a _TaskFields and scrolls the new card into view.
   void _addTask() {
     final added = _TaskFields();
     setState(() => _extraTasks.add(added));
@@ -198,6 +209,8 @@ class _PostJobViewState extends State<_PostJobView> {
     });
   }
 
+  /// What:   Removes an added task.
+  /// Output: Disposes it, drops its photo tags and re-syncs the assist photos.
   void _removeTask(int index) {
     setState(() {
       final removed = _extraTasks.removeAt(index);
@@ -209,7 +222,8 @@ class _PostJobViewState extends State<_PostJobView> {
     _syncAssistPhotos();
   }
 
-  /// "All tasks", or the task numbers a bundle photo is tagged with.
+  /// What:   Tag text for a bundle photo.
+  /// Output: "All tasks", or "Task 1, 3" for the tasks it is tagged with.
   String _photoLabel(String url) {
     final tags = _photoTasks[url] ?? const {};
     final numbers = [
@@ -219,13 +233,16 @@ class _PostJobViewState extends State<_PostJobView> {
     return numbers.isEmpty ? 'All tasks' : 'Task ${numbers.join(', ')}';
   }
 
-  /// Positions in [urls] of the photos tagged with [tag].
+  /// What:   Photos that belong to one task.
+  /// Input:  Task [tag] and the photo [urls].
+  /// Output: Positions in [urls] of the photos tagged with it.
   List<int> _photoIndexesFor(Object tag, List<String> urls) => [
     for (final (i, url) in urls.indexed)
       if (_photoTasks[url]?.contains(tag) ?? false) i,
   ];
 
-  /// Tells the AI assists which photos don't show task 1.
+  /// What:   Tells the AI assists which photos don't show task 1.
+  /// Output: Sets PostJobController.skipForAssist to photos tagged only to other tasks.
   void _syncAssistPhotos() {
     context.read<PostJobController>().skipForAssist = {
       for (final MapEntry(key: url, value: tags) in _photoTasks.entries)
@@ -233,12 +250,15 @@ class _PostJobViewState extends State<_PostJobView> {
     };
   }
 
+  /// What:   Removes a photo and its task tags.
   void _removePhoto(String url) {
     context.read<PostJobController>().removePhoto(url);
     _photoTasks.remove(url);
     _syncAssistPhotos();
   }
 
+  /// What:   Lets the user tag a bundle photo with the tasks it shows.
+  /// Output: Sets [_photoTasks] for [url] from _PhotoTasksSheet and re-syncs the assist photos.
   Future<void> _pickPhotoTasks(String url) async {
     // Otherwise closing the sheet re-focuses the last text field.
     FocusScope.of(context).unfocus();
@@ -261,7 +281,8 @@ class _PostJobViewState extends State<_PostJobView> {
     _syncAssistPhotos();
   }
 
-  /// "Task 2: Re-tile the wall", or just "Task 2" before it has a title.
+  /// What:   Label for a task.
+  /// Output: "Task 2: Re-tile the wall", or just "Task 2" before it has a title.
   String _taskTitle(int index) {
     final title = (index == 0 ? _title : _extraTasks[index - 1].title)
         .text
@@ -269,7 +290,8 @@ class _PostJobViewState extends State<_PostJobView> {
     return title.isEmpty ? 'Task ${index + 1}' : 'Task ${index + 1}: $title';
   }
 
-  /// Summary sent when left blank, since `createBundle` requires a description.
+  /// What:   Bundle summary used when the user leaves it blank.
+  /// Output: "N tasks: title, title."; needed because `createBundle` requires a description.
   String _composedSummary() {
     final titles = [
       _title.text.trim(),
@@ -278,7 +300,8 @@ class _PostJobViewState extends State<_PostJobView> {
     return '${titles.length} tasks: ${titles.join(', ')}.';
   }
 
-  /// Scrolls to the first invalid field; its error may be off-screen.
+  /// What:   Scrolls to the first invalid field.
+  /// Output: Brings it into view (its error may be off-screen) and shows a snackbar.
   void _scrollToFirstError() {
     final keys = [
       _task1CategoryKey,
@@ -306,7 +329,8 @@ class _PostJobViewState extends State<_PostJobView> {
     _snack('Some fields need attention');
   }
 
-  /// True to post without photos; "Add a photo" opens the picker and cancels.
+  /// What:   "Post without photos?" dialog.
+  /// Output: True to post anyway; "Add a photo" opens the picker and returns false.
   Future<bool> _confirmNoMedia() async {
     final postAnyway = await showDialog<bool>(
       context: context,
@@ -336,6 +360,10 @@ class _PostJobViewState extends State<_PostJobView> {
     return postAnyway == true;
   }
 
+  /// What:   Post button handler.
+  /// Input:  Form fields, the picked location, budget and deadline.
+  /// Output: Validates (scrolls to the first error), requires a location, confirms no photos, then PostJobController.submit()
+  ///         for one task or [_submitBundle] for several; success pops home with a snackbar.
   Future<void> _submit() async {
     final controller = context.read<PostJobController>();
     final auth = context.read<AuthController>();
@@ -389,6 +417,9 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
+  /// What:   Posts the form as a bundle.
+  /// Input:  [controller] and the shared [location]; task 1 plus every extra task as BundleTaskDrafts with their photo indexes.
+  /// Output: PostJobController.submitBundle(); success pops home with a snackbar.
   Future<void> _submitBundle(
       PostJobController controller, JobLocation location) async {
     final summary = _postingSummary.text.trim();
@@ -429,10 +460,12 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
+  /// What:   Shows a snackbar.
   void _snack(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
 
-  /// Asks for a rough note and drafts the empty fields from it.
+  /// What:   AI draft flow.
+  /// Output: Asks for a rough note in _DraftSheet, then PostJobController.suggestDraft() and [_applyDraft]; a snackbar if unavailable.
   Future<void> _draftFromNote() async {
     final note = await showModalBottomSheet<String>(
       context: context,
@@ -454,7 +487,9 @@ class _PostJobViewState extends State<_PostJobView> {
     _applyDraft(draft);
   }
 
-  /// Fills only empty fields; never overwrites what the user typed.
+  /// What:   Fills the form from an AI draft.
+  /// Input:  [draft] (title, category, description, budget range).
+  /// Output: Fills only empty fields, never overwriting what the user typed; a snackbar lists what changed.
   void _applyDraft(JobDraft draft) {
     final controller = context.read<PostJobController>();
     final filled = <String>[];
@@ -484,7 +519,8 @@ class _PostJobViewState extends State<_PostJobView> {
         : 'Filled in ${filled.join(', ')}. Check each one before posting.');
   }
 
-  /// Fetches an indicative RM range; the user taps "Use this" to apply it.
+  /// What:   Fair-price assist.
+  /// Output: Needs a category and a description; PostJobController.suggestPrice() sets the range hint the user can apply with "Use this".
   Future<void> _suggestPrice() async {
     final controller = context.read<PostJobController>();
     if (controller.category == null) {
@@ -503,7 +539,8 @@ class _PostJobViewState extends State<_PostJobView> {
     }
   }
 
-  /// Task 1's category, title and description, flat in single mode or in a card in bundle mode.
+  /// What:   Task 1's category, title and description fields.
+  /// Output: Widgets placed flat in single mode or inside a card in bundle mode.
   List<Widget> _task1Fields(PostJobController controller, ThemeData theme) {
     return [
       _categoryField(
@@ -548,6 +585,8 @@ class _PostJobViewState extends State<_PostJobView> {
     );
   }
 
+  /// What:   The scrollable form scaffold.
+  /// Output: Draft card, basics (task 1), extra task cards, photos, location and address, deadline and budget, bundle name, Post button.
   Widget _buildForm(BuildContext context, PostJobController controller,
       ThemeData theme, String uid) {
     return Scaffold(
@@ -892,7 +931,8 @@ class _DraftCard extends StatelessWidget {
   }
 }
 
-// Collects the rough note and returns it to the form.
+/// What:   Bottom sheet that collects the rough note for the AI draft.
+/// Output: Pops with the trimmed note text.
 class _DraftSheet extends StatefulWidget {
   const _DraftSheet();
 
@@ -942,7 +982,8 @@ class _DraftSheetState extends State<_DraftSheet> {
   }
 }
 
-// The controllers behind one added task, so adding/removing is one list operation.
+/// What:   The controllers and keys behind one added task.
+/// Output: Title, description, budget controllers, category and field keys; one object to add, remove and dispose.
 class _TaskFields {
   final key = GlobalKey(); // So a new card can be scrolled into view.
 
@@ -964,7 +1005,9 @@ class _TaskFields {
   }
 }
 
-// One added task of a bundle ("Task 2" on; Task 1 uses the form's own fields).
+/// What:   One added task of a bundle ("Task 2" on; Task 1 uses the form's own fields).
+/// Input:  [number], [fields], [onRemove], [onCategory].
+/// Output: Card with category, title, description and budget range fields.
 class _TaskCard extends StatelessWidget {
   const _TaskCard({
     super.key,
@@ -1036,6 +1079,9 @@ class _TaskCard extends StatelessWidget {
   }
 }
 
+/// What:   Category dropdown.
+/// Input:  Form field [key], current [value] and [onChanged]; options from kServiceCategories.
+/// Output: Dropdown that fails validation until a category is picked.
 Widget _categoryField(
   ThemeData theme, {
   required Key key,
@@ -1064,6 +1110,9 @@ Widget _categoryField(
   );
 }
 
+/// What:   From/To RM amount fields.
+/// Input:  [min] and [max] controllers.
+/// Output: Two decimal-number fields side by side.
 Widget _rangeFields(TextEditingController min, TextEditingController max) {
   return Row(
     children: [
@@ -1090,7 +1139,9 @@ Widget _rangeFields(TextEditingController min, TextEditingController max) {
   );
 }
 
-// Blocking overlay while a submit runs.
+/// What:   Blocking overlay while a submit runs.
+/// Input:  [isBundle] picks the wording.
+/// Output: Dimmed barrier with a progress card, since the button's own spinner may be scrolled off-screen.
 class _SubmitOverlay extends StatelessWidget {
   const _SubmitOverlay({required this.isBundle});
 
@@ -1130,6 +1181,8 @@ class _SubmitOverlay extends StatelessWidget {
   }
 }
 
+/// What:   Section title text.
+/// Input:  [label].
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader(this.label);
   final String label;
@@ -1140,7 +1193,9 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-// Price range inputs plus the "Suggest a fair range" assist and its "Use this" shortcut.
+/// What:   Price range inputs with the fair-range assist.
+/// Input:  [controller] priceHint and assisting state; [budgetMin], [budgetMax]; [onSuggestPrice].
+/// Output: "Suggest a fair range" button and, once a hint exists, a "Use this" shortcut that fills the fields.
 class _BudgetFields extends StatelessWidget {
   const _BudgetFields({
     required this.controller,
@@ -1209,7 +1264,9 @@ class _BudgetFields extends StatelessWidget {
   }
 }
 
-// Nudges the user to add a photo for the AI assists; flips to a confirmation once added.
+/// What:   Nudge to add a photo for the AI assists.
+/// Input:  [hasPhoto]; [onAddPhoto].
+/// Output: "Add a photo" button, or a confirmation once a photo exists.
 class _PhotoAssistHint extends StatelessWidget {
   const _PhotoAssistHint({required this.hasPhoto, required this.onAddPhoto});
   final bool hasPhoto;
@@ -1248,7 +1305,9 @@ class _PhotoAssistHint extends StatelessWidget {
   }
 }
 
-// Lets the user tick which bundle tasks a photo shows; none = all.
+/// What:   Sheet to tick which bundle tasks a photo shows.
+/// Input:  [taskTitles] and the [selected] task indexes.
+/// Output: Pops with the chosen indexes; none means the photo shows on all tasks.
 class _PhotoTasksSheet extends StatefulWidget {
   const _PhotoTasksSheet({required this.taskTitles, required this.selected});
   final List<String> taskTitles;
@@ -1299,6 +1358,9 @@ class _PhotoTasksSheetState extends State<_PhotoTasksSheet> {
   }
 }
 
+/// What:   Photo thumbnail with a remove button.
+/// Input:  [url], [onRemove]; optional [tagLabel] and [onTag] in bundle mode.
+/// Output: 80px image with a remove icon, plus a task-tag button under it when [tagLabel] is set.
 class _PhotoThumb extends StatelessWidget {
   const _PhotoThumb({
     required this.url,

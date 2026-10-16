@@ -149,8 +149,10 @@ exports.onJobCompleted = functions.firestore
     });
 
 /**
- * Adds the deltas to a user's job counters and recalculates `hireRate`
- * (removed while no jobs are posted, instead of showing 0%).
+ * What:   Job-counter updater for a requestor.
+ * Input:  [uid] and {postedDelta, assignedDelta} to add (default 0).
+ * Output: `jobsPosted` and `jobsAssigned` bumped in one transaction; `hireRate`
+ *         recalculated, or removed while no jobs are posted (not shown as 0%).
  */
 async function bumpRequestorCounters(uid, {postedDelta = 0, assignedDelta = 0}) {
   const db = admin.firestore();
@@ -202,7 +204,11 @@ exports.bumpJobsAssignedOnAccept = functions.firestore
 // Wallet and escrow. Clients can't write money fields, so only these
 // callables (using the admin SDK) move money.
 
-/** Validates a client-supplied sen amount. */
+/**
+ * What:   Validator for a client-sent sen amount.
+ * Input:  [amountSen] from the callable's data.
+ * Output: [amountSen]; throws `invalid-argument` unless a positive integer.
+ */
 function checkAmount(amountSen) {
   if (!Number.isInteger(amountSen) || amountSen <= 0) {
     throw new functions.https.HttpsError(
@@ -212,15 +218,22 @@ function checkAmount(amountSen) {
 }
 
 /**
- * Reads `users/{uid}` in [tx] and throws if suspended. Call it before any
- * write; suspended users can read, but can't take money or work actions.
+ * What:   Suspension guard inside a transaction.
+ * Input:  [tx] and the caller [uid]; reads `users/{uid}`.
+ * Output: Nothing; throws `permission-denied` when suspended.
+ * Notes:  Call it before any write. Suspended users can read, but can't take
+ *         money or work actions.
  */
 async function assertNotSuspended(tx, uid) {
   throwIfSuspended(
       (await tx.get(admin.firestore().doc(`users/${uid}`))).data());
 }
 
-/** Turns a milestones query snapshot into rows for the payout rules. */
+/**
+ * What:   Milestone rows for the payout rules.
+ * Input:  A milestones query snapshot.
+ * Output: [{id, ...milestone data}].
+ */
 const milestoneRows = (snap) => snap.docs.map((d) => ({id: d.id, ...d.data()}));
 
 /**
@@ -363,17 +376,30 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
       {uid, jobId, milestoneId});
 });
 
-// Max per top-up. Keep in sync with PlatformConfig.maxTopUpSen.
+/**
+ * What:   Per-top-up cap, in sen.
+ * Output: 1,000,000 (RM 10,000); keep in sync with PlatformConfig.maxTopUpSen.
+ */
 const MAX_TOPUP_SEN = 1000000; // RM 10,000
 
-// Max wallet balance, so repeated top-ups can't mint unlimited money.
-// Keep in sync with PlatformConfig.maxWalletBalanceSen.
+/**
+ * What:   Wallet balance cap, in sen.
+ * Output: 5,000,000 (RM 50,000), so repeated top-ups can't mint unlimited
+ *         money; keep in sync with PlatformConfig.maxWalletBalanceSen.
+ */
 const MAX_WALLET_BALANCE_SEN = 5000000; // RM 50,000
 
-/** True only in the Firebase emulator; deployed functions never set this. */
+/**
+ * What:   Emulator check.
+ * Output: True only in the Firebase emulator; deployed functions never set it.
+ */
 const isEmulator = () => process.env.FUNCTIONS_EMULATOR === "true";
 
-/** Throws if [amountSen] is over the per-top-up cap; [fn] names the caller. */
+/**
+ * What:   Per-top-up cap guard.
+ * Input:  [amountSen], the callable name [fn] for the log, caller [uid].
+ * Output: Nothing; throws `invalid-argument` when over MAX_TOPUP_SEN.
+ */
 function capTopUp(amountSen, fn, uid) {
   if (amountSen > MAX_TOPUP_SEN) {
     functions.logger.error(`${fn} rejected: over per-call cap`,
@@ -469,11 +495,9 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     }
     const wallet = walletSnap.data() || {};
     const balance = wallet.walletBalanceSen || 0;
-    // `escrowLockedSen` is legacy (nothing writes it); old docs may hold it.
-    const available = balance - (wallet.escrowLockedSen || 0);
-    if (available < amountSen) {
+    if (balance < amountSen) {
       functions.logger.error("withdrawFromWallet rejected: insufficient balance",
-          {uid, amountSen, available});
+          {uid, amountSen, balance});
       throw new functions.https.HttpsError(
           "failed-precondition", "Insufficient wallet balance.");
     }
@@ -579,8 +603,16 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
     });
 
 /**
- * Checks a bill with toyyibPay and credits the wallet at most once. Used by
- * the webhook and the reconcile call; returns `{credited, reason}`.
+ * What:   Credits a paid toyyibPay bill to the wallet, at most once.
+ * Input:  [billCode]; asks toyyibPay for the bill's payments and reads
+ *         `topups/{billCode}`.
+ * Output: `{credited, reason}`; reason is not_paid, unknown_bill,
+ *         amount_mismatch, already_credited or credited. Used by the webhook
+ *         and the reconcile call.
+ * How:    The paid ringgit text is converted to sen and must equal the amount
+ *         we stored; the credit, topup status and ledger entry share one
+ *         transaction.
+ * Notes:  Paid money is always credited, even if it passes the wallet cap.
  */
 async function creditToyyibpayTopup(billCode) {
   const db = admin.firestore();
@@ -617,6 +649,7 @@ async function creditToyyibpayTopup(billCode) {
           {billCode, expected: rec.amountSen, got: paidSen});
       return {credited: false, reason: "amount_mismatch"};
     }
+    // Idempotency guard: the webhook and reconcile can both arrive.
     if (rec.status === "credited") {
       functions.logger.info("creditToyyibpayTopup: already credited",
           {billCode, uid: rec.uid, amountSen: rec.amountSen});
@@ -845,7 +878,10 @@ exports.adminClearMfa = functions.https.onCall(async (data, context) => {
 
 // Disputes. Raising one freezes the milestone; an admin ruling pays out escrow.
 
-/** `rulingNote` on disputes closed because another dispute ended the job. */
+/**
+ * What:   `rulingNote` of disputes closed when another one ended the job.
+ * Output: A string; backfillTrust uses it to skip those disputes.
+ */
 const AUTO_CLOSED_NOTE = "Closed because the job ended after another dispute.";
 
 /**
@@ -1177,15 +1213,23 @@ const STAGE_DELIVERED_MESSAGE =
     "A delivered or disputed stage must be released or resolved before " +
     "this job can be cancelled.";
 
-/** Returns why the job can't be cancelled now, or null if it can. */
+/**
+ * What:   Cancellation guard.
+ * Input:  A milestones query snapshot.
+ * Output: Why the job can't be cancelled now, or null if it can.
+ */
 function cancellationBlocker(milestonesSnap) {
   return canCancelFunded(milestoneRows(milestonesSnap)) ?
     null : STAGE_DELIVERED_MESSAGE;
 }
 
 /**
- * Cancels the job and settles money: unfunded milestones are deleted and
- * funded stages refunded. Caller checks authority and [cancellationBlocker].
+ * What:   Cancels the job and settles its money.
+ * Input:  [tx], [jobRef], [job] data, the milestones snapshot and the
+ *         [cancelledBy] value.
+ * Output: Unfunded stages deleted, funded stages refunded to the requestor's
+ *         wallet with ledger entries, job set to "cancelled".
+ * Notes:  The caller checks authority and cancellationBlocker() first.
  */
 function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy) {
   const plan = cancellationPlan(milestoneRows(milestonesSnap));
@@ -1414,8 +1458,12 @@ exports.requestPriceChange = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * Moves money for a price change of [delta] sen on a funded-at-award job.
- * Increase: wallet to escrow. Decrease: refund. True means the job is done.
+ * What:   Money move for an accepted price change on a funded-at-award job.
+ * Input:  [tx] and {job, jobRef, milestonesRef, rows, walletRef, delta} where
+ *         [delta] is the new price minus the old, in sen.
+ * Output: Increase: wallet to escrow, growing the only funded stage or adding
+ *         a "Price change" stage. Decrease: refund from funded stages. Ledger
+ *         entry written; returns true when the decrease finished the job.
  */
 function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
   delta}) {
@@ -1616,7 +1664,10 @@ exports.closeExpiredJobs = functions.pubsub
       functions.logger.info(`closeExpiredJobs: closed ${snap.size} job(s)`);
     });
 
-// Chat stays open 14 days after a job ends, then is read-only (kept as evidence).
+/**
+ * What:   Chat grace period after a job ends.
+ * Output: 14 days in ms; after it the chat is read-only (kept as evidence).
+ */
 const CHAT_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
@@ -1650,12 +1701,20 @@ exports.closeChatOnJobEnd = functions.firestore
 // Notifications. Code queues them with notifyUser (common.js); a trigger
 // then sends the FCM push.
 
-/** Formats sen as `RM 1,234.50` for notification copy. */
+/**
+ * What:   Money formatter for notification copy.
+ * Input:  [sen].
+ * Output: e.g. `RM 1,234.50`.
+ */
 function rm(sen) {
   return `RM ${(sen / 100).toLocaleString("en-MY",
       {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
 }
 
+/**
+ * What:   FCM error codes that mean a device token is dead.
+ * Output: Strings; onNotificationCreated removes tokens that return them.
+ */
 const DEAD_TOKEN_CODES = [
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
@@ -1937,14 +1996,20 @@ exports.logMilestoneStatusChange = functions.firestore
 const geminiKey = defineSecret("GEMINI_KEY");
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
-/** System instruction for the fair-price guide. */
+/**
+ * What:   System instruction for the fair-price guide.
+ * Output: Prompt text sent to Gemini by suggestJobDetails.
+ */
 const PRICE_SYSTEM = "You estimate fair market prices for home services " +
     "in Malaysia. Give a realistic ringgit range for the job described, " +
     "based only on what it states. If a photo is provided, factor it in. " +
     "Never invent a price from an assumed brand name, measurement, or " +
     "detail the description does not give. Do not use em dashes.";
 
-/** System instruction for the one-shot post draft. */
+/**
+ * What:   System instruction for the one-shot post draft.
+ * Output: Prompt text sent to Gemini by suggestJobDetails.
+ */
 const DRAFT_SYSTEM = "You help customers on FairBid, a Malaysian " +
     "home-services marketplace, turn one rough note into a complete job " +
     "posting. Pick the category that fits best from the allowed list. " +
@@ -1960,7 +2025,10 @@ const DRAFT_SYSTEM = "You help customers on FairBid, a Malaysian " +
     "commitments the note did not state; leave out what you do not know. " +
     "If a photo is provided, use it to be more specific.";
 
-/** Structured-output schema for the one-shot draft. */
+/**
+ * What:   Structured-output schema for the one-shot draft.
+ * Output: Gemini must reply with title, category, description, minRm, maxRm.
+ */
 const DRAFT_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -1974,7 +2042,10 @@ const DRAFT_SCHEMA = {
   propertyOrdering: ["title", "category", "description", "minRm", "maxRm"],
 };
 
-/** Structured-output schema for the fair-price guide: a ringgit range. */
+/**
+ * What:   Structured-output schema for the fair-price guide.
+ * Output: Gemini must reply with a ringgit range, minRm and maxRm.
+ */
 const PRICE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -1986,8 +2057,11 @@ const PRICE_SCHEMA = {
 };
 
 /**
- * Parses the model's price reply into `{minSen, maxSen}`, or null if bad.
- * try/catch because a cut-off reply can still throw.
+ * What:   Parser for the model's price reply.
+ * Input:  The reply [text] (JSON).
+ * Output: `{minSen, maxSen}`, or null when bad (not numbers, min not above 0,
+ *         max under min or over RM 1,000,000).
+ * Notes:  try/catch because a cut-off reply can still throw.
  */
 function parsePriceJson(text) {
   try {
@@ -2000,7 +2074,13 @@ function parsePriceJson(text) {
   }
 }
 
-/** Parses the draft reply, or null if unusable (blank title, odd range). */
+/**
+ * What:   Parser for the model's draft reply.
+ * Input:  The reply [text] (JSON).
+ * Output: `{title, category, description, minSen, maxSen}`, or null when
+ *         unusable (blank title or description, unknown category).
+ * Notes:  The price range may be null; it reuses parsePriceJson's checks.
+ */
 function parseDraftJson(text) {
   try {
     const draft = JSON.parse(String(text));
@@ -2022,9 +2102,18 @@ function parseDraftJson(text) {
   }
 }
 
+/**
+ * What:   Size limit for a photo sent to the model.
+ * Output: 5 MB, in bytes.
+ */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Fetches a job photo as base64, or null; only our own bucket is allowed. */
+/**
+ * What:   Photo fetcher for the model.
+ * Input:  A job [photoUrl]; only URLs in our own bucket (IMG_PREFIX) pass.
+ * Output: `{mimeType, data}` with base64 data, or null on any failure,
+ *         non-image or size over MAX_IMAGE_BYTES.
+ */
 async function fetchInlineImage(photoUrl) {
   try {
     if (typeof photoUrl !== "string" || !photoUrl.startsWith(IMG_PREFIX)) {

@@ -20,6 +20,11 @@ const MAX_OPTIONS = 3;
 const MAX_ALSO = 10;
 const MAX_NOTE_LEN = 300;
 
+/**
+ * What:   Epoch-millisecond check.
+ * Input:  Any [value].
+ * Output: True for a positive integer.
+ */
 const isMs = (value) => Number.isInteger(value) && value > 0;
 
 /**
@@ -124,13 +129,27 @@ const isAllowedEta = (minutes) => ETA_MINUTES.includes(minutes);
 /** What: Copy label. Input: caller role. Output: "The client"/"The provider". */
 const roleLabel = (role) => role === "requestor" ? "The client" : "The provider";
 
-/** What: Error builders. Input: message. Output: an HttpsError to throw. */
+/**
+ * What:   Error builder for a caller who may not do this.
+ * Input:  A readable [message].
+ * Output: A `permission-denied` HttpsError to throw.
+ */
 const denied = (message) =>
   new functions.https.HttpsError("permission-denied", message);
+/**
+ * What:   Error builder for a job in the wrong state.
+ * Input:  A readable [message].
+ * Output: A `failed-precondition` HttpsError to throw.
+ */
 const precondition = (message) =>
   new functions.https.HttpsError("failed-precondition", message);
 
-/** Reads the job in [tx]; returns it with the caller's role or throws. */
+/**
+ * What:   Job reader for the scheduling callables.
+ * Input:  [tx], the [jobRef] and the caller [uid].
+ * Output: `{job, role}`; throws `permission-denied` unless the caller is the
+ *         job's requestor or accepted provider.
+ */
 async function readJob(tx, jobRef, uid) {
   const job = (await tx.get(jobRef)).data();
   const role = jobRole(job, uid);

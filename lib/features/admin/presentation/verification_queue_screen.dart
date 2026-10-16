@@ -78,6 +78,9 @@ class VerificationQueueScreen extends StatelessWidget {
   }
 }
 
+/// What:   One pending applicant row.
+/// Input:  [item], a PendingVerification; [onTap] opens the detail screen.
+/// Output: AppCard with avatar, name, email, role pill and time submitted.
 class _QueueCard extends StatelessWidget {
   const _QueueCard({required this.item, required this.onTap});
 

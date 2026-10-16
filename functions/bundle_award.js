@@ -13,7 +13,12 @@ const {
 // Must match PlatformConfig.neutralTrustScore.
 const NEUTRAL_TRUST = 700;
 
-/** Sen per task if [bid] wins [taskIds]; the bundle price only for all of them. */
+/**
+ * What:   Price of a bid for a set of tasks.
+ * Input:  [bid] {taskPrices, bundlePriceSen} and the [taskIds] it would win.
+ * Output: Map of task id to sen; the bundle price (split by splitBundlePrice)
+ *         applies only when the bid wins every task it priced.
+ */
 function amountsFor(bid, taskIds) {
   return taskIds.length === Object.keys(bid.taskPrices).length &&
       bid.bundlePriceSen != null ?
@@ -44,7 +49,11 @@ function offersFor(bid, taskIndex) {
   return offers;
 }
 
-/** Trust Score weighted by how much money each provider is paid. */
+/**
+ * What:   Trust Score of an award, weighted by money.
+ * Input:  [awards] and [trustByProvider] (provider id to score).
+ * Output: Whole number; each provider counts by how many sen they are paid.
+ */
 function weightedTrust(awards, trustByProvider) {
   let money = 0;
   let weighted = 0;
@@ -56,7 +65,13 @@ function weightedTrust(awards, trustByProvider) {
   return money === 0 ? 0 : Math.floor(weighted / money);
 }
 
-/** Cheaper wins; on an exact tie, the higher weighted Trust Score. */
+/**
+ * What:   Option tie-break.
+ * Input:  A [candidate] and an [existing] partial award (or null), and
+ *         [trustByProvider].
+ * Output: True when the candidate is cheaper, or equal in cost with a higher
+ *         weighted Trust Score.
+ */
 function beats(candidate, existing, trustByProvider) {
   if (!existing) return true;
   if (candidate.costSen !== existing.costSen) {
@@ -66,19 +81,36 @@ function beats(candidate, existing, trustByProvider) {
       weightedTrust(existing.awards, trustByProvider);
 }
 
-/** How many tasks a coverage mask holds. */
+/**
+ * What:   Task counter for a coverage mask.
+ * Input:  A bit mask, one bit per task.
+ * Output: How many bits are set.
+ */
 function countBits(value) {
   let count = 0;
   for (let rest = value; rest !== 0; rest >>= 1) count += rest & 1;
   return count;
 }
 
-/** The most a fewer-provider option may cost above the cheapest (smaller cap). */
+/**
+ * What:   Consolidation allowance.
+ * Input:  The [cheapestSen] total, the cap percent [capPct] and the cap
+ *         [capSen].
+ * Output: The most a fewer-provider option may cost above the cheapest: the
+ *         smaller of the percent and the sen cap.
+ */
 function allowanceSen(cheapestSen, capPct, capSen) {
   return Math.min(Math.floor(cheapestSen * capPct / 100), capSen);
 }
 
-/** Best award with exactly `k` providers within `ceiling` (top Trust Score). */
+/**
+ * What:   Best award with exactly [k] providers within a cost [ceiling].
+ * Input:  [bidOffers] (offersFor() per bid), [trustByProvider], the task
+ *         [coverage] count, [k] and [ceiling] in sen.
+ * Output: {costSen, awards} with the top weighted Trust Score (cheaper on a
+ *         tie), or null when none fits.
+ * How:    Depth-first search over bids, pruned by provider count and ceiling.
+ */
 function bestWithinCap({bidOffers, trustByProvider, coverage, k, ceiling}) {
   let best = null;
   const awards = [];
@@ -121,7 +153,11 @@ function bestWithinCap({bidOffers, trustByProvider, coverage, k, ceiling}) {
   return best;
 }
 
-/** Trust Score snapshot per bidder, keyed by provider id. */
+/**
+ * What:   Trust Score lookup.
+ * Input:  [bids] in the bidFromSnap shape.
+ * Output: Map of provider id to the Trust Score snapshot on the bid.
+ */
 function trustByProviderFrom(bids) {
   return Object.fromEntries(bids.map((b) => [b.providerId, b.trustScore || 0]));
 }
@@ -220,7 +256,13 @@ function buildAwardOptions({tasks, bids, capPct, capSen}) {
   ];
 }
 
-/** Turns a part-built award into the card the requestor sees. */
+/**
+ * What:   Option card for the requestor.
+ * Input:  {key, label, partial (costSen, awards), tasks, bids,
+ *         trustByProvider, cheapestCostSen}.
+ * Output: {key, label, totalSen, providerCount, premiumSen, weightedTrust,
+ *         trustVisible, uncoveredTaskIds, awards}.
+ */
 function option(
     {key, label, partial, tasks, bids, trustByProvider, cheapestCostSen}) {
   const nameByProvider = Object.fromEntries(
@@ -295,7 +337,11 @@ function checkManualAward({tasks, bids, providerByTaskId}) {
   return {awards, problems};
 }
 
-/** What a set of awards costs, added up across every task in them. */
+/**
+ * What:   Cost of a set of awards.
+ * Input:  [awards] with `taskAmountsSen`.
+ * Output: Total sen across every task in them.
+ */
 function totalSenOf(awards) {
   return awards.reduce((sum, award) =>
     sum + Object.values(award.taskAmountsSen)
@@ -322,7 +368,11 @@ function manualOption({tasks, bids, providerByTaskId, cheapestCostSen}) {
   return {manual, problems: []};
 }
 
-/** The shape the award engine needs from one task's job document. */
+/**
+ * What:   Task shape for the award engine.
+ * Input:  A job document snapshot.
+ * Output: {id, title, status}.
+ */
 function taskFromSnap(snap) {
   return {
     id: snap.id,
@@ -331,7 +381,13 @@ function taskFromSnap(snap) {
   };
 }
 
-/** The shape the award engine needs from a bundle bid, incl. Trust Score. */
+/**
+ * What:   Bid shape for the award engine.
+ * Input:  A `bundles/{id}/bundleBids/{uid}` snapshot.
+ * Output: {providerId, providerName, trustScore, scoreVisible, taskPrices,
+ *         bundlePriceSen}.
+ * Notes:  A hidden ("New") score ranks as NEUTRAL_TRUST.
+ */
 function bidFromSnap(doc) {
   const d = doc.data();
   const visible = d.providerScoreVisible === true;
@@ -346,7 +402,12 @@ function bidFromSnap(doc) {
   };
 }
 
-/** Reads a bundle, its tasks and its pending bids, in the shapes above. */
+/**
+ * What:   Loader for an award or preview.
+ * Input:  Firestore [db], [bundleId] and the caller [uid].
+ * Output: {bundle, tasks, bids} with only pending bids; throws `not-found`, or
+ *         `permission-denied` unless the caller posted the bundle.
+ */
 async function readBundleForAward(db, bundleId, uid) {
   const bundleSnap = await db.doc(`bundles/${bundleId}`).get();
   const bundle = bundleSnap.data();
@@ -413,10 +474,18 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   return {options, manual, problems};
 });
 
-/** Days a released task gets to find a provider; the requestor can override. */
+/**
+ * What:   Days a released task gets to find a provider.
+ * Output: 7; the requestor can override it when awarding.
+ */
 const RELEASED_DEADLINE_DAYS = 7;
 
-/** The new deadline for tasks nobody wins, as a Timestamp. */
+/**
+ * What:   New deadline for tasks nobody wins.
+ * Input:  Epoch [millis] from the client, or null.
+ * Output: A Timestamp: [millis], or 7 days from now when null; throws unless
+ *         [millis] is in the future.
+ */
 function releasedDeadline(millis) {
   if (millis == null) {
     return Timestamp.fromMillis(
@@ -428,7 +497,12 @@ function releasedDeadline(millis) {
   return Timestamp.fromMillis(millis);
 }
 
-/** The write for an unawarded task: released to bidding, or cancelled (as cancelBundle does). */
+/**
+ * What:   Write for a task that was not awarded.
+ * Input:  {drop, uid, deadline}.
+ * Output: A job update: cancelled when [drop] (as cancelBundle does), else
+ *         released back to bidding with [deadline] and a zero `bidCount`.
+ */
 function leftoverTaskUpdate({drop, uid, deadline}) {
   if (drop) {
     return {
@@ -442,7 +516,11 @@ function leftoverTaskUpdate({drop, uid, deadline}) {
   return {deadline, bidCount: 0, releasedAt: FieldValue.serverTimestamp()};
 }
 
-/** The requestor's task-to-provider picks, checked for shape only. */
+/**
+ * What:   Shape check for the requestor's picks.
+ * Input:  [raw] map of task id to provider id.
+ * Output: The map; throws unless it has at least one entry and string ids.
+ */
 function checkPicks(raw) {
   const picks = raw == null ? {} : raw;
   if (typeof picks !== "object" || Array.isArray(picks)) {

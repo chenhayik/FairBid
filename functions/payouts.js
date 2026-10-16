@@ -2,10 +2,19 @@
 // spread over the funded stages and what a cancellation refunds. Needs no
 // Firebase. [milestones] is an array of `{id, status, amountSen, order}` rows.
 
-/** True for a finished stage; `resolved` is only kept for old data. */
+/**
+ * What:   Finished-stage check.
+ * Input:  A milestone [status] string.
+ * Output: True for released, refunded, or the old `resolved`.
+ */
 const isTerminal = (status) =>
   status === "released" || status === "resolved" || status === "refunded";
 
+/**
+ * What:   Total of stage amounts.
+ * Input:  [rows] with an optional `amountSen`.
+ * Output: Sum in sen; a missing amount counts as 0.
+ */
 const sumAmounts = (rows) => rows.reduce((s, m) => s + (m.amountSen || 0), 0);
 
 /**

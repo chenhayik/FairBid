@@ -83,8 +83,9 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
   @override
   Future<void> deleteByUrl(String url) => _storage.refFromURL(url).delete();
 
-  /// Uploads [file] at `[prefix]<timestamp><ext>` and returns its download URL.
-  /// [contentType] overrides the mime type; [timeout] the default time limit.
+  /// What:   Uploads a file to Storage.
+  /// Input:  [prefix] path; [file]; optional [contentType] override and [timeout].
+  /// Output: The download URL; the file is stored at `[prefix]<timestamp><ext>`.
   Future<String> _upload(
     String prefix,
     XFile file, {
@@ -104,7 +105,10 @@ class FirebaseDocumentStorageRepository implements DocumentStorageRepository {
     return ref.getDownloadURL().timeout(effectiveTimeout);
   }
 
-  /// The override, else the mime type, else guessed from the extension (file_picker gives no mime on mobile).
+  /// What:   The mime type to upload with.
+  /// Input:  [override] and the [file].
+  /// Output: The override, else the file's mime type, else guessed from the extension.
+  /// Notes:  file_picker gives no mime type on mobile.
   String _contentTypeFor(String? override, XFile file) {
     if (override != null) return override;
     final mime = file.mimeType;

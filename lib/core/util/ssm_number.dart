@@ -1,4 +1,6 @@
-/// The entity type in digits 5-6 of a current-format SSM number.
+/// What:   Entity type in digits 5-6 of a current-format SSM number.
+/// Input:  Two-digit [code] via [fromCode].
+/// Output: localCompany, foreignCompany, business, localLlp, foreignLlp or professionalLlp.
 enum SsmEntityType {
   localCompany('01'),
   foreignCompany('02'),
@@ -12,6 +14,8 @@ enum SsmEntityType {
   /// The two digits as they appear in the number, e.g. `'03'`.
   final String code;
 
+  /// What:   Looks up an entity type by its two digits.
+  /// Output: The matching type, or null if the code is unknown.
   static SsmEntityType? fromCode(String code) {
     for (final type in values) {
       if (type.code == code) return type;
@@ -20,6 +24,8 @@ enum SsmEntityType {
   }
 }
 
+/// What:   Which SSM numbering scheme a number uses.
+/// Output: [current] (12 digits) or [legacy] (pre-2019).
 enum SsmNumberFormat {
   /// 12 digits, `YYYY` + entity type + running number. Mandatory since
   /// 11 October 2019 and applied retrospectively to existing entities.
@@ -59,10 +65,15 @@ class SsmNumber {
   /// The legacy number when the combined form was pasted, so it survives.
   final String? legacyNumber;
 
+  /// What:   Parses typed text into an SsmNumber.
+  /// Input:  [input] from the form; may be null.
+  /// Output: SsmNumber, or null when invalid.
   static SsmNumber? parse(String? input) =>
       input == null ? null : _parse(input).$1;
 
-  /// `TextFormField` validator: null when acceptable, else the message.
+  /// What:   `TextFormField` validator for the SSM number.
+  /// Input:  [value] typed by the user.
+  /// Output: Null when acceptable, else the error message.
   static String? validate(String? value) {
     final text = value?.trim() ?? '';
     if (text.isEmpty) return 'SSM registration number is required.';
@@ -77,12 +88,15 @@ class SsmNumber {
   static final _legacyFormat = RegExp(r'^[A-Z]{0,2}\d{5,9}[A-Z]$');
   static final _digitsOnly = RegExp(r'^\d+$');
 
-  /// Spaces, hyphens and dots are punctuation on these numbers, never
-  /// significant.
+  /// What:   Removes punctuation from a number.
+  /// Output: Uppercase letters and digits only; spaces, hyphens and dots are never significant.
   static String _strip(String value) =>
       value.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
 
-  /// Parsed number or the failure reason; shared by [parse] and [validate] so they agree.
+  /// What:   Shared parser behind [parse] and [validate], so they always agree.
+  /// Input:  Typed text, possibly the combined `current (legacy)` form.
+  /// Output: Record of (parsed number, failure reason); exactly one is non-null.
+  /// How:    Splits the combined form before stripping; current format checks year and entity code, legacy checks the pattern.
   static (SsmNumber?, String?) _parse(String input) {
     final text = input.trim();
 

@@ -42,6 +42,9 @@ class _ProfileStepState extends State<ProfileStep> {
     super.dispose();
   }
 
+  /// What:   Copies the profile fields into the draft and moves to the next stage.
+  /// Input:  Display name, bio and the portfolio link field.
+  /// Output: OnboardingController.saveAndContinue().
   void _saveAndContinue() {
     final onboarding = context.read<OnboardingController>();
     final data = onboarding.data;

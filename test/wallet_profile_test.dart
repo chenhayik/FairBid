@@ -1,4 +1,5 @@
 import 'package:fairbid/core/location/penang_districts.dart';
+import 'package:fairbid/core/util/malaysian_banks.dart';
 import 'package:fairbid/core/widgets/location_field.dart';
 import 'package:fairbid/features/auth/data/auth_exception.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
@@ -270,6 +271,15 @@ void main() {
   });
 
   group('Payout method', () {
+    test('bank account numbers accept copied spaces and dashes', () {
+      final maybank = kMalaysianBanks.first;
+      expect(MalaysianBank.clean('1234 5678-9012'), '123456789012');
+      expect(maybank.checkAccount('1234 5678-9012'), isNull);
+      expect(maybank.checkAccount('12345'), contains('12 digits'));
+      expect(maybank.checkAccount('1234abcd9012'), 'Use digits only.');
+      expect(maybank.lengthHint, '12 digits');
+    });
+
     Future<FakeWalletRepository> openEarnings(
       WidgetTester tester, {
       PayoutMethod? method,

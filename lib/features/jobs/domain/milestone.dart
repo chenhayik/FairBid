@@ -1,5 +1,6 @@
-/// Escrow stage lifecycle. New stages start `funded`; `proposed`, `pending` and
-/// `resolved` are legacy values kept so old documents still decode.
+/// What:   Escrow stage lifecycle.
+/// Input:  Stored `status` string via [fromStorage]; unknown values read as proposed.
+/// Output: New stages start funded; proposed, pending and resolved are legacy values kept so old documents still decode.
 enum MilestoneStatus {
   proposed,
   pending,
@@ -14,7 +15,8 @@ enum MilestoneStatus {
 
   String get storage => name;
 
-  /// Money has finished moving: paid out, or the legacy `resolved` alias.
+  /// What:   Whether the money has finished moving.
+  /// Output: True when paid out, refunded, or the legacy `resolved` alias.
   bool get isTerminal => this == released || this == resolved || this == refunded;
 
   String get label => switch (this) {

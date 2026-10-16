@@ -37,6 +37,9 @@ class HomeAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
+/// What:   Notification bell with an unread count badge.
+/// Input:  [uid]; NotificationRepository.watchUnreadCount(uid) (notification_repository.dart).
+/// Output: Plain bell when signed out; otherwise a badge shown only when the count is above zero.
 class _BellIcon extends StatelessWidget {
   const _BellIcon({required this.uid});
   final String? uid;

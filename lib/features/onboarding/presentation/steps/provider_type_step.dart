@@ -76,6 +76,9 @@ class ProviderTypeStep extends StatelessWidget {
   }
 }
 
+/// What:   Selectable card for one provider type.
+/// Input:  [type]; [icon], [description], [badge] and [badgeIcon] text; [selected].
+/// Output: SelectableCard; tapping calls OnboardingController.selectProviderType().
 class _TypeCard extends StatelessWidget {
   const _TypeCard({
     required this.type,

@@ -60,7 +60,9 @@ class FirestoreVerificationRepository implements VerificationRepository {
     });
   }
 
-  /// Builds the snapshot with the applicant's private payout and verification docs merged in.
+  /// What:   Builds one queue entry from a pending user doc.
+  /// Input:  [doc] from the pending query; the applicant's private `payout` and `verification` docs via [_tryPrivate].
+  /// Output: PendingVerification with the private data merged in.
   Future<PendingVerification?> _toPendingVerification(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) async {
@@ -72,7 +74,9 @@ class FirestoreVerificationRepository implements VerificationRepository {
   DocumentReference<Map<String, dynamic>> _private(String uid, String id) =>
       _users.doc(uid).collection('private').doc(id);
 
-  /// Reads `private/[id]`; a missing or unreadable doc gives null instead of breaking the queue.
+  /// What:   Reads one of an applicant's private docs.
+  /// Input:  [uid] and the doc [id] under `private/`.
+  /// Output: The data; a missing or unreadable doc gives null instead of breaking the queue.
   Future<Map<String, dynamic>?> _tryPrivate(String uid, String id) async {
     try {
       return (await _private(uid, id).get()).data();

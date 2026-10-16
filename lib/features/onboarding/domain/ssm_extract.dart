@@ -1,4 +1,6 @@
-/// The server's verdict on an SSM document.
+/// What:   The server's verdict on an SSM document.
+/// Input:  The `verdict` field of the SSM extract via SsmVerdict.fromStorage().
+/// Output: passed, needsReview or rejected; unknown values give null.
 enum SsmVerdict {
   passed,
 
@@ -60,8 +62,14 @@ class SsmExtract {
         'team will check it by hand.',
   };
 
+  /// What:   Applicant-facing sentences for the failure codes.
+  /// Input:  [failures] codes from `extractSsmDocument`.
+  /// Output: One sentence per code; unknown codes are returned as they are.
   List<String> get reasons => [for (final f in failures) _reasons[f] ?? f];
 
+  /// What:   Builds an SsmExtract from the Firestore map.
+  /// Input:  [map] of the SSM extract doc.
+  /// Output: Null when the map or its verdict is missing.
   static SsmExtract? fromMap(Map<String, dynamic>? map) {
     if (map == null) return null;
     final verdict = SsmVerdict.fromStorage(map['verdict'] as String?);

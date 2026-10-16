@@ -27,6 +27,9 @@ class RegionPickerScreen extends StatefulWidget {
   /// Pre-fills the district and town when editing an existing pick.
   final Region? initialRegion;
 
+  /// What:   Opens the picker as a full-screen route.
+  /// Input:  Optional [initialCenter] (defaults to kGeorgeTown) and [initialRegion] to preselect.
+  /// Output: Future of the PickedLocation, or null if dismissed.
   static Future<PickedLocation?> show(
     BuildContext context, {
     LatLng? initialCenter,
@@ -81,7 +84,9 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     super.dispose();
   }
 
-  /// Re-classifies the district from [_center], clearing [_town] if it no longer belongs.
+  /// What:   Keeps district and town in step with the map centre.
+  /// Input:  [_center] via PenangDistricts.districtCodeAt (penang_districts.dart).
+  /// Output: Sets [_districtCode]; clears [_town] if it no longer belongs to that district.
   void _syncDistrictForCenter() {
     _districtCode = _districts.districtCodeAt(_center);
     final towns = kPenangTowns[_districtCode];
@@ -107,6 +112,8 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     if (target != null) _mapController.move(target, 13);
   }
 
+  /// What:   Handles a town pick from the dropdown.
+  /// Output: Moves the map to the town's geocoded position, or the district seat if that falls outside Penang.
   Future<void> _onTownChanged(String? town) async {
     setState(() => _town = town);
     if (town == null) return;
@@ -119,7 +126,8 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     if (target != null) _mapController.move(target, 15);
   }
 
-  /// Best-effort forward geocode; null on failure so the caller falls back to the district seat.
+  /// What:   Best-effort forward geocode of [address].
+  /// Output: A LatLng, or null on failure so the caller falls back to the district seat.
   Future<LatLng?> _forwardGeocode(String address) async {
     try {
       final results = await Geocoding().locationFromAddress(address);
@@ -130,6 +138,10 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     }
   }
 
+  /// What:   Confirm button handler.
+  /// Input:  Current map centre, district and town.
+  /// Output: Pops with a PickedLocation (rounded coordinates, Region, geocoder hint); does nothing outside Penang.
+  /// Notes:  The town is only accepted from kPenangTowns, never raw geocoder text.
   Future<void> _confirm() async {
     final code = _districtCode;
     if (code == null || !_districts.isInPenang(_center)) return;

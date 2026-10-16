@@ -19,13 +19,18 @@ const PROFILE_WEIGHT_PCT = 10;
 
 const TRACK_RECORD_PER_JOB = 10;
 const TRACK_RECORD_JOB_CAP = 10;
-const DISPUTE_LOST_PENALTY = 20;
+const DISPUTE_LOST_PENALTY = 10;
 const VERIFICATION_PENDING_SCORE = 40;
 
 // The score stays hidden ("New Provider") until admin-approved AND this many
 // completed jobs.
 const MIN_JOBS_FOR_VISIBLE_SCORE = 3;
 
+/**
+ * What:   Range limiter.
+ * Input:  [value] and the bounds [lo] and [hi].
+ * Output: [value] held between [lo] and [hi].
+ */
 const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 
 /**

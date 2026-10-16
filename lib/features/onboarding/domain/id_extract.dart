@@ -1,4 +1,6 @@
-/// What the server concluded about an uploaded MyKad photo.
+/// What:   What the server concluded about an uploaded MyKad photo.
+/// Input:  The `verdict` field of `private/idExtract` via IdVerdict.fromStorage().
+/// Output: passed, needsReview or rejected; unknown values give null.
 enum IdVerdict {
   passed,
   needsReview,
@@ -7,7 +9,9 @@ enum IdVerdict {
   static IdVerdict? fromStorage(String? value) => values.asNameMap()[value];
 }
 
-/// Short friendly text for a failure code written by `extractIdDocument`.
+/// What:   Short friendly text for a failure code.
+/// Input:  [code] written by the `extractIdDocument` function.
+/// Output: A sentence for the applicant or admin; unknown codes are returned as they are.
 String idFailureLabel(String code) => switch (code) {
   'not-an-image' => 'That file is not a JPEG or PNG photo',
   'no-ic-found' => 'We could not read an IC number on the photo',
@@ -48,6 +52,9 @@ class IdExtract {
   final bool? nameMatches;
   final bool? genderConsistent;
 
+  /// What:   Builds an IdExtract from the Firestore map.
+  /// Input:  [map] of `private/idExtract`.
+  /// Output: Null when the map or its verdict is missing.
   static IdExtract? fromMap(Map<String, dynamic>? map) {
     if (map == null) return null;
     final verdict = IdVerdict.fromStorage(map['verdict'] as String?);

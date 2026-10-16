@@ -147,6 +147,9 @@ JobDetailViewModel buildJobDetailVm(
   };
 }
 
+/// What:   Works out the viewer's role on a job.
+/// Input:  [job], signed-in user [me] and their bid [myBid].
+/// Output: Owner, acceptedProvider, bidder (pending bid on an open job), browser (open job) or outsider.
 JobViewerRole _resolveRole(Job job, AppUser? me, Bid? myBid) {
   if (me != null && me.uid == job.requestorId) return JobViewerRole.owner;
   if (me != null &&
@@ -163,6 +166,9 @@ JobViewerRole _resolveRole(Job job, AppUser? me, Bid? myBid) {
   return JobViewerRole.outsider;
 }
 
+/// What:   View model for the job's requestor.
+/// Input:  [job] status, bid count, pending cancellation or price change, and appointment state.
+/// Output: Headline, bar action (compare bids, message or review), and which sections show.
 JobDetailViewModel _forOwner(Job job) {
   final hasProvider = job.acceptedProviderId != null;
   final showAddress = hasProvider;
@@ -252,6 +258,9 @@ JobDetailViewModel _forOwner(Job job) {
   }
 }
 
+/// What:   View model for the hired provider.
+/// Input:  [job] status, pending cancellation or price change, and appointment state.
+/// Output: Headline, Message client or Review action, with milestones and address shown.
 JobDetailViewModel _forAcceptedProvider(Job job) {
   switch (job.status) {
     case JobStatus.inProgress:
@@ -307,6 +316,9 @@ JobDetailViewModel _forAcceptedProvider(Job job) {
   }
 }
 
+/// What:   View model for a provider with a pending bid on an open job.
+/// Input:  [job] and [myBid].
+/// Output: Headline with the bid amount; an Edit bid action unless the bidding deadline has passed.
 JobDetailViewModel _forBidder(Job job, Bid myBid) {
   final deadlinePassed =
       job.deadline != null && job.deadline!.isBefore(DateTime.now());
@@ -328,6 +340,10 @@ JobDetailViewModel _forBidder(Job job, Bid myBid) {
   );
 }
 
+/// What:   View model for someone looking at an open job without a bid on it.
+/// Input:  [job], [me] and [myBundleBid] (a live bundle task takes package bids).
+/// Output: Non-providers get no action; unverified providers get Get verified to bid; verified ones get Submit a bid
+///         (or Edit bundle bid / Bid on this bundle), unless bidding has closed.
 JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
   final isProvider = me?.role == UserRole.provider;
   final verified = me?.verificationStatus == 'approved';
@@ -395,6 +411,8 @@ JobDetailViewModel _forBrowser(Job job, AppUser? me, BundleBid? myBundleBid) {
   );
 }
 
+/// What:   View model for a losing bidder or stranger once the job is no longer open.
+/// Output: Headline only (cancelled, or no longer open for bids).
 JobDetailViewModel _forOutsider(Job job) {
   return JobDetailViewModel(
     role: JobViewerRole.outsider,

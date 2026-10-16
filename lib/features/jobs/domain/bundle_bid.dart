@@ -1,4 +1,6 @@
-/// Package bid lifecycle: like BidStatus plus `partlyAccepted` (some tasks won, the rest rejected).
+/// What:   Package bid lifecycle.
+/// Input:  Stored `status` string via [fromStorage]; unknown values read as pending.
+/// Output: Like BidStatus plus partlyAccepted (some tasks won, the rest rejected) and closed (bundle cancelled while pending).
 enum BundleBidStatus {
   pending,
   accepted,
@@ -91,19 +93,23 @@ class BundleBid {
   /// Moves on every submit or edit; [createdAt] stays fixed.
   final DateTime? updatedAt;
 
-  /// How many tasks this bid covers.
+  /// What:   How many tasks this bid covers.
   int get taskCount => taskPrices.length;
 
-  /// Sum of the task prices: charged if the award splits this bid or no bundle price was offered.
+  /// What:   Sum of the task prices.
+  /// Notes:  Charged if the award splits this bid or no bundle price was offered.
   int get taskTotalSen =>
       taskPrices.values.fold(0, (sum, price) => sum + price);
 
-  /// What they charge if they win every task: the bundle price, else [taskTotalSen].
+  /// What:   What the provider charges if they win every task.
+  /// Output: The bundle price, else [taskTotalSen].
   int get quotedTotalSen => bundlePriceSen ?? taskTotalSen;
 
+  /// What:   Whether this bid prices the task [jobId].
   bool coversTask(String jobId) => taskPrices.containsKey(jobId);
 
-  /// The price for [jobId], or null if not covered.
+  /// What:   Price offered for one task.
+  /// Output: Sen, or null if not covered.
   int? priceFor(String jobId) => taskPrices[jobId];
 
   factory BundleBid.fromMap(

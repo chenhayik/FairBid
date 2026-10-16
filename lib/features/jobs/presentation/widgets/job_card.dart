@@ -135,7 +135,9 @@ class JobCard extends StatelessWidget {
   }
 }
 
-// "Closes in..." row; warning-coloured under 24 hours.
+/// What:   "Closes in..." row for an open job.
+/// Input:  [deadline]; text from deadlineLabel().
+/// Output: Timer icon and label, warning-coloured under 24 hours.
 class _DeadlineChip extends StatelessWidget {
   const _DeadlineChip({required this.deadline});
   final DateTime deadline;

@@ -78,6 +78,9 @@ class DisputeQueueScreen extends StatelessWidget {
   }
 }
 
+/// What:   One open dispute row.
+/// Input:  [dispute] from DisputeRepository.watchOpenDisputes(); [onTap] opens the detail screen.
+/// Output: AppCard with job title, milestone, amount, "Raised by" pill and time opened.
 class _DisputeCard extends StatelessWidget {
   const _DisputeCard({required this.dispute, required this.onTap});
 

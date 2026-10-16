@@ -86,6 +86,7 @@ class BundleProviderView extends StatelessWidget {
     );
   }
 
+  /// What:   Bundle summary and photo strip.
   List<Widget> _header(BuildContext context) {
     final theme = Theme.of(context);
     return [
@@ -99,7 +100,9 @@ class BundleProviderView extends StatelessWidget {
     ];
   }
 
-  /// The bid button; only for providers while bidding is open.
+  /// What:   The bottom bid button.
+  /// Input:  [mine] (own bid) and the viewer's role and verification status.
+  /// Output: Null unless a provider and bidding is open; sends unverified providers to onboarding, else opens the bid sheet.
   Widget? _bidBar(BuildContext context, BundleBid? mine) {
     if (!bundle.biddingOpen || me.role != UserRole.provider) return null;
     final verified = me.verificationStatus == 'approved';
@@ -130,7 +133,9 @@ class BundleProviderView extends StatelessWidget {
   }
 }
 
-// "Your bundle bid: RM x for N tasks" with its status.
+/// What:   The provider's own bid summary.
+/// Input:  [bid].
+/// Output: "Your bundle bid: RM x for N tasks" with its status pill.
 class _MyBidCard extends StatelessWidget {
   const _MyBidCard({required this.bid});
 
@@ -160,7 +165,9 @@ class _MyBidCard extends StatelessWidget {
   }
 }
 
-// One task of the bundle; taps through to its job detail.
+/// What:   One task of the bundle.
+/// Input:  [task]; [onTap] opens its job detail.
+/// Output: Title, category and budget, expandable description and licence notice.
 class _TaskCard extends StatefulWidget {
   const _TaskCard({
     required this.task,

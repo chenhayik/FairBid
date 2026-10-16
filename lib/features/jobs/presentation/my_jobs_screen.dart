@@ -63,6 +63,9 @@ class MyJobsScreen extends StatelessWidget {
   }
 }
 
+/// What:   Requestor view of the tab.
+/// Input:  Jobs via JobRepository.watchMyJobs(uid) and bundles via BundleRepository.watchMyBundles(uid).
+/// Output: Status filter bar, then bundle cards and standalone job cards, or an empty/error state.
 class _RequestorJobs extends StatefulWidget {
   const _RequestorJobs({required this.uid});
   final String uid;
@@ -125,7 +128,10 @@ class _RequestorJobsState extends State<_RequestorJobs> {
     );
   }
 
-  /// Groups bundle tasks under their [bundles] card (a plain [JobCard] if it hasn't loaded).
+  /// What:   Builds the filtered card list.
+  /// Input:  [allJobs] and [bundles] from the two streams; the selected status filter.
+  /// Output: Bundle tasks grouped under a BundleJobsCard (a plain JobCard if the bundle hasn't loaded), then standalone JobCards.
+  /// Notes:  A bundle card is hidden unless one of its tasks matches the filter.
   Widget _list(BuildContext context, List<Job> allJobs, List<Bundle> bundles) {
     final bundleById = {for (final b in bundles) b.id: b};
     final tasksByBundle = <String, List<Job>>{};
@@ -197,7 +203,8 @@ class BundleJobsCard extends StatelessWidget {
   final List<Job> allTasks;
   final List<Job> tasks;
 
-  /// e.g. "4 tasks · 2 in progress · 1 done · 1 open".
+  /// What:   Progress summary across all of the bundle's tasks.
+  /// Output: e.g. "4 tasks · 2 in progress · 1 done · 1 open".
   String get _progressLine {
     final counts = <JobStatus, int>{};
     for (final task in allTasks) {
@@ -265,7 +272,9 @@ class BundleJobsCard extends StatelessWidget {
   }
 }
 
-// One task row in a [BundleJobsCard]; taps through to the task.
+/// What:   One task row in a [BundleJobsCard].
+/// Input:  [task]; [onTap] opens it.
+/// Output: Title with a status pill.
 class _BundleTaskRow extends StatelessWidget {
   const _BundleTaskRow({required this.task, required this.onTap});
   final Job task;
@@ -304,7 +313,9 @@ class _BundleTaskRow extends StatelessWidget {
   }
 }
 
-// Horizontally scrolling single-select status filter; null means All.
+/// What:   Single-select status filter.
+/// Input:  [selected] (null means All); [onSelected].
+/// Output: Horizontally scrolling choice chips for All and each JobStatus.
 class _JobFilterBar extends StatelessWidget {
   const _JobFilterBar({required this.selected, required this.onSelected});
   final JobStatus? selected;
@@ -332,7 +343,10 @@ class _JobFilterBar extends StatelessWidget {
   }
 }
 
-// Provider view: won jobs, then pending per-job and package bids.
+/// What:   Provider view of the tab.
+/// Input:  Won jobs via JobRepository.watchAssignedJobs(uid); bids via BidRepository.watchMyBids(uid);
+///         package bids via BundleBidRepository.watchMyBundleBids(uid).
+/// Output: Won jobs, then pending per-job and package bids, or an empty/error state.
 class _ProviderJobs extends StatelessWidget {
   const _ProviderJobs({required this.uid});
   final String uid;
@@ -432,7 +446,9 @@ class _ProviderJobs extends StatelessWidget {
   }
 }
 
-// A pending per-job bid; taps through to the job.
+/// What:   A pending per-job bid.
+/// Input:  [bid].
+/// Output: Amount, time since bid and status; taps through to the job.
 class _PendingBidTile extends StatelessWidget {
   const _PendingBidTile({required this.bid});
   final Bid bid;
@@ -473,8 +489,10 @@ class _PendingBidTile extends StatelessWidget {
   }
 }
 
-// A pending package bid. Opens the covered task with the lowest bundleOrder
-// (the taskPrices map has no ordering guarantee).
+/// What:   A pending package bid.
+/// Input:  [bid].
+/// Output: Quoted total, bundle title and task count; opens the covered task with the lowest bundleOrder.
+/// Notes:  The taskPrices map has no ordering guarantee, so the tasks are read and sorted.
 class _PendingBundleBidTile extends StatelessWidget {
   const _PendingBundleBidTile({required this.bid});
   final BundleBid bid;

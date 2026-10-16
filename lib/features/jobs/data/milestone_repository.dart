@@ -7,17 +7,21 @@ import '../domain/milestone.dart';
 /// Input:  Firestore `jobs/{jobId}/milestones`; release goes through a callable.
 /// Output: Milestone streams, submit (plain write) and release (callable that moves money).
 abstract interface class MilestoneRepository {
-  /// Streams a job's milestones in order.
+  /// What:   Live list of a job's milestones.
+  /// Output: Milestones in order.
   Stream<List<Milestone>> watchMilestones(String jobId);
 
-  /// Streams the provider's milestones across jobs, newest first (Earnings figures).
+  /// What:   Live list of the provider's milestones across jobs.
+  /// Output: Milestones newest first (Earnings figures).
   Stream<List<Milestone>> watchProviderMilestones(String providerId);
 
-  /// Provider marks a funded milestone delivered (rules allow funded -> submitted only).
+  /// What:   Provider marks a funded milestone delivered.
+  /// Output: Rules allow funded to submitted only.
   Future<void> submitMilestone(String jobId, String milestoneId,
       {String? note});
 
-  /// Pays the provider and releases the milestone; the last one completes the job.
+  /// What:   Requestor releases a delivered milestone.
+  /// Output: Pays the provider via callable; releasing the last one completes the job.
   Future<void> releaseMilestone(String jobId, String milestoneId);
 }
 
@@ -72,6 +76,8 @@ class FirestoreMilestoneRepository implements MilestoneRepository {
         {'jobId': jobId, 'milestoneId': milestoneId});
   }
 
+  /// What:   Maps a Firestore doc to a Milestone.
+  /// Output: Milestone with createdAt converted to DateTime.
   Milestone _fromDoc(
       String jobId, DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = Map<String, dynamic>.of(doc.data() ?? {});

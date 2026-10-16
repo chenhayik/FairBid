@@ -33,6 +33,10 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
 
   Dispute get d => widget.dispute;
 
+  /// What:   Rules on the dispute with a required explanation.
+  /// Input:  [resolution]; the note typed in a ReasonDialog (null = cancelled).
+  /// Output: DisputeRepository.resolveDispute(), then pops with a snackbar; on failure stays and shows the error.
+  /// Notes:  The messenger is captured before the pop so the snackbar lands on the queue.
   Future<void> _rule(DisputeResolution resolution) async {
     final release = resolution == DisputeResolution.release;
     final note = await showDialog<String>(
@@ -141,7 +145,9 @@ class _DisputeDetailScreenState extends State<DisputeDetailScreen> {
   }
 }
 
-/// Job and milestone summary, disputed amount and who raised it.
+/// What:   Job and milestone summary, disputed amount and who raised it.
+/// Input:  [dispute] passed from the screen.
+/// Output: AppCard with title, "Raised by" pill, amount in escrow and a short case id with its age.
 class _DisputeHeader extends StatelessWidget {
   const _DisputeHeader({required this.dispute});
 
@@ -190,7 +196,10 @@ class _DisputeHeader extends StatelessWidget {
   }
 }
 
-/// Read-only job chat (client left, provider right) for weighing what was agreed.
+/// What:   Read-only job chat (client left, provider right) for weighing what was agreed.
+/// Input:  ChatRepository.watchMessages(dispute.conversationId) (chat_repository.dart).
+/// Output: Messages oldest first with a count line, or an empty state.
+/// How:    The repository returns newest first, so the list is reversed for reading.
 class _ChatHistoryCard extends StatelessWidget {
   const _ChatHistoryCard({required this.dispute});
 
@@ -241,7 +250,9 @@ class _ChatHistoryCard extends StatelessWidget {
   }
 }
 
-/// One message: client left in grey, provider right in blue.
+/// What:   One chat message, client left in grey and provider right in blue.
+/// Input:  [message]; [isProvider] when the sender is the dispute's provider.
+/// Output: Bubble with role label, text and time ago.
 class _ChatLine extends StatelessWidget {
   const _ChatLine({required this.message, required this.isProvider});
 
@@ -286,7 +297,9 @@ class _ChatLine extends StatelessWidget {
   }
 }
 
-/// Sticky bottom bar with the Pay and Refund rulings.
+/// What:   Sticky bottom bar with the Pay and Refund rulings.
+/// Input:  [amountSen] shown on the Pay button; [busy]; [onRelease] / [onRefund] callbacks.
+/// Output: Two stacked buttons above a top border.
 class _RulingBar extends StatelessWidget {
   const _RulingBar({
     required this.amountSen,

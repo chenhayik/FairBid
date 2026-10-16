@@ -17,6 +17,9 @@ import '../domain/payout_method.dart';
 class PayoutMethodScreen extends StatefulWidget {
   const PayoutMethodScreen({super.key});
 
+  /// What:   Opens the payout method screen.
+  /// Input:  [context].
+  /// Output: True if a method was saved.
   static Future<bool?> open(BuildContext context) =>
       context.push<bool>('/profile/payout-method');
 
@@ -38,9 +41,12 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
   bool _busy = false;
   String? _error;
 
+  /// Set from the stream so [_save] can warn about the 24-hour hold.
+  bool _hasExisting = false;
+
   late final Stream<PayoutMethod?> _existing = context
       .read<WalletRepository>()
-      .watchPayoutMethod(context.read<AuthController>().user!.uid);
+      .watchPayoutMethod(_user.uid);
 
   @override
   void dispose() {
@@ -49,15 +55,35 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
     super.dispose();
   }
 
+  /// What:   Saves the chosen payout method.
+  /// Input:  The form; the profile name and phone; WalletRepository.savePayoutMethod().
+  /// Output: Pops true on success; inline error if the profile lacks a name or a DuitNow ID; asks to confirm when changing an existing method.
+  /// How:    The account holder is always the profile name. After a change, withdrawals pause for 24 hours.
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    final user = context.read<AuthController>().user;
+    // The account holder is always the profile name, so it can't be blank.
+    if ((user?.displayName ?? '').trim().isEmpty) {
+      setState(() => _error = 'Add your full name in Edit profile first.');
+      return;
+    }
     // DuitNow needs an ID that exists on this profile.
-    final phone = (context.read<AuthController>().user?.phone ?? '').trim();
+    final phone = (user?.phone ?? '').trim();
     final idReady = _proxyType == 'mobile' ? phone.isNotEmpty : _isBusiness;
     if (_method == 'duitnow' && !idReady) {
       setState(() => _error = 'Add a mobile number in Edit profile first, '
           'or use a bank account.');
       return;
+    }
+    if (_hasExisting) {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: 'Change payout method?',
+        body: 'Withdrawals pause for 24 hours after a change, in case someone '
+            'else got into your account.',
+        actionLabel: 'Change',
+      );
+      if (!confirmed || !mounted) return;
     }
     setState(() {
       _busy = true;
@@ -69,7 +95,7 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
             method: _method,
             proxyType: bank ? null : _proxyType,
             bankSwift: bank ? _bank!.swift : null,
-            accountNumber: bank ? _account.text.trim() : null,
+            accountNumber: bank ? MalaysianBank.clean(_account.text) : null,
           );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -99,6 +125,7 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
           stream: _existing,
           builder: (context, snapshot) {
             final existing = snapshot.data;
+            _hasExisting = existing != null;
             return Form(
               key: _formKey,
               child: ListView(
@@ -169,6 +196,7 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
                     AppTextField(
                       controller: _account,
                       label: 'Account number',
+                      helperText: _bank?.lengthHint,
                       keyboardType: TextInputType.number,
                       validator: (v) => _bank?.checkAccount(v ?? ''),
                     ),
@@ -176,7 +204,8 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
                       controller: _accountAgain,
                       label: 'Account number again',
                       keyboardType: TextInputType.number,
-                      validator: (v) => v?.trim() == _account.text.trim()
+                      validator: (v) => MalaysianBank.clean(v ?? '') ==
+                              MalaysianBank.clean(_account.text)
                           ? null
                           : "The two numbers don't match.",
                     ),
@@ -221,6 +250,9 @@ class _PayoutMethodScreenState extends State<PayoutMethodScreen> {
   }
 }
 
+/// What:   One selectable DuitNow ID type (mobile number or SSM number) as a radio row.
+/// Input:  [title], [subtitle], [selected]; [onTap] (null = disabled).
+/// Output: ListTile with a radio icon.
 class _IdOption extends StatelessWidget {
   const _IdOption({
     required this.title,

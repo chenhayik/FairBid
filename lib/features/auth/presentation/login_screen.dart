@@ -32,6 +32,9 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  /// What:   Signs in with email and password.
+  /// Input:  The validated form fields.
+  /// Output: AuthController.signInWithEmail(), then the MFA prompt if Firebase asked for one.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     final auth = context.read<AuthController>();
@@ -40,6 +43,9 @@ class _LoginScreenState extends State<LoginScreen> {
     await _resolveMfaIfNeeded(auth);
   }
 
+  /// What:   Signs in with Google (as a requestor if the account is new).
+  /// Input:  AuthController.signInWithGoogle().
+  /// Output: Signs in, then prompts for the second factor if needed.
   Future<void> _google() async {
     final auth = context.read<AuthController>();
     // roleIfNew only applies to a first-time Google account.
@@ -48,13 +54,18 @@ class _LoginScreenState extends State<LoginScreen> {
     await _resolveMfaIfNeeded(auth);
   }
 
-  /// Prompts for the second factor when Firebase asked for one.
+  /// What:   Prompts for the second factor when Firebase asked for one.
+  /// Input:  AuthController.takePendingChallenge().
+  /// Output: Shows MfaCodeSheet if a challenge is pending.
   Future<void> _resolveMfaIfNeeded(AuthController auth) async {
     final challenge = auth.takePendingChallenge();
     if (challenge == null) return;
     await MfaCodeSheet.show(context, challenge: challenge);
   }
 
+  /// What:   Sends a password-reset email to the typed address.
+  /// Input:  The email field; AuthController.sendPasswordReset().
+  /// Output: Snackbar with the result, or "Enter your email first".
   Future<void> _forgotPassword() async {
     final email = _email.text.trim();
     if (email.isEmpty) {
@@ -120,7 +131,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           labelTrailing: GestureDetector(
                             onTap: auth.isBusy ? null : _forgotPassword,
                             child: Text(
-                              'Forgot?',
+                              'Forgot Email or Password?',
                               style: theme.textTheme.bodyMedium?.copyWith(
                                   color: context.fairbid.verified,
                                   fontWeight: FontWeight.w600),
@@ -159,7 +170,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-/// The Log In / Sign Up tab strip; Log In is always selected.
+/// What:   The Log In / Sign Up tab strip; Log In is always selected.
+/// Input:  [onSignUp] called when Sign Up is tapped.
+/// Output: Two underlined tabs.
 class _AuthTabs extends StatelessWidget {
   const _AuthTabs({required this.onSignUp});
 

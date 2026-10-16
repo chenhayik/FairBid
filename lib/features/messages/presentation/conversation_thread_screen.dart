@@ -45,6 +45,9 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
     super.dispose();
   }
 
+  /// What:   Sends the typed message.
+  /// Input:  The composer text; [conversation] and [myUid]; ChatRepository.sendMessage().
+  /// Output: Clears the composer on success; snackbar on failure; ignores empty text or a send in flight.
   Future<void> _send(Conversation conversation, String myUid) async {
     final text = _composer.text.trim();
     if (text.isEmpty || _sending) return;
@@ -137,6 +140,10 @@ class _ConversationThreadScreenState extends State<ConversationThreadScreen> {
   }
 }
 
+/// What:   Scrolling list of the thread's messages, newest at the bottom.
+/// Input:  [stream] from ChatRepository.watchMessages() (chat_repository.dart); [myUid] marks own messages.
+/// Output: Message bubbles, or loading, error and "Start the conversation" states.
+/// How:    The data is newest first, so a reversed ListView puts the newest at the bottom.
 class _MessageList extends StatelessWidget {
   const _MessageList({required this.stream, required this.myUid});
   final Stream<List<Message>> stream;
@@ -180,6 +187,9 @@ class _MessageList extends StatelessWidget {
   }
 }
 
+/// What:   One chat bubble, brand-coloured and right-aligned for me, white and left-aligned for the other party.
+/// Input:  [message]; [isMine].
+/// Output: Rounded bubble with text and time ago.
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message, required this.isMine});
   final Message message;
@@ -233,7 +243,9 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-/// Replaces the composer with an icon and message (stream failed, or chat closed); [error] tints the icon.
+/// What:   Replaces the composer with an icon and message (stream failed, or chat closed); [error] tints the icon.
+/// Input:  [icon], [text], [error].
+/// Output: Bar above the bottom edge.
 class _Footer extends StatelessWidget {
   const _Footer({required this.icon, required this.text, this.error = false});
 
@@ -273,6 +285,9 @@ class _Footer extends StatelessWidget {
   }
 }
 
+/// What:   Message input bar with a send button.
+/// Input:  [controller]; [sending]; [onSend] (null while the conversation or user is not loaded).
+/// Output: Text field and send button, both disabled when [onSend] is null or a send is in flight.
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,

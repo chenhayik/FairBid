@@ -20,13 +20,17 @@ class MergedBundleOption {
   final BundleAwardOption option;
   final List<String> labels;
 
+  /// What:   Joined option labels.
   String get combinedLabel => labels.join(' · ');
 
-  /// The server's top pick is among the labels; only it gets the filled button.
+  /// What:   Whether the server's top pick is among the labels.
+  /// Notes:  Only the recommended card gets the filled button.
   bool get isRecommended => labels.any((l) => l == 'Recommended');
 }
 
-/// Merges options with identical awards, so there are no duplicate cards.
+/// What:   Merges options with identical awards, so there are no duplicate cards.
+/// Input:  [options] from BundleRepository.previewAward().
+/// Output: One MergedBundleOption per distinct award (compared by providerByTaskId), labels joined.
 List<MergedBundleOption> mergeBundleOptions(List<BundleAwardOption> options) {
   final merged = <MergedBundleOption>[];
   for (final option in options) {
