@@ -128,43 +128,46 @@ void main() {
       expect(review.left.single.rating, 4);
     });
 
-    testWidgets('a second review on the same job is rejected', (tester) async {
+    testWidgets(
+      'an ordinary completed job already reviewed by this user shows '
+      '"Review submitted" and the bar action does not reopen the sheet',
+      (tester) async {
+        final review = FakeReviewRepository();
+        await review.leaveReview(
+          revieweeId: 'prov-1',
+          review: const Review(
+            id: '',
+            reviewerId: 'uid-1',
+            reviewerName: 'Test User',
+            rating: 5,
+            jobId: 'job-1',
+          ),
+        );
+        final job = sampleJob(
+          status: JobStatus.completed,
+          acceptedProviderId: 'prov-1',
+          acceptedProviderName: 'Pro Fixer',
+          acceptedBidAmountSen: 15000,
+        );
+        await pumpApp(tester, buildApp(FakeAuthRepository(), jobs: [job], review: review), size: const Size(500, 1600));
+        await logIn(tester);
 
-      final review = FakeReviewRepository();
-      // The requestor already reviewed the provider on this job.
-      await review.leaveReview(
-        revieweeId: 'prov-1',
-        review: const Review(
-          id: '',
-          reviewerId: 'uid-1',
-          reviewerName: 'Test User',
-          rating: 5,
-          jobId: 'job-1',
-        ),
-      );
-      final job = sampleJob(
-        status: JobStatus.completed,
-        acceptedProviderId: 'prov-1',
-        acceptedProviderName: 'Pro Fixer',
-        acceptedBidAmountSen: 15000,
-      );
-      await pumpApp(tester, buildApp(FakeAuthRepository(), jobs: [job], review: review), size: const Size(500, 1600));
-      await logIn(tester);
+        await openTab(tester, 'My jobs');
+        await tester.tap(find.text('Fix leaking sink').first);
+        await tester.pumpAndSettle();
+        await scrollToReviewSection(tester);
 
-      // Completed jobs are hidden from Active Jobs, so open it via My Jobs.
-      await openTab(tester, 'My jobs');
-      await tester.tap(find.text('Fix leaking sink').first);
-      await tester.pumpAndSettle();
+        expect(find.text('Review submitted'), findsOneWidget);
 
-      // "Review Pro Fixer" is the bottom bar's button only.
-      final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
-      expect(reviewBtn, findsOneWidget);
-      await tester.tap(reviewBtn);
-      await tester.pumpAndSettle();
-      await giveStarsAndSubmit(tester, 5);
-
-      expect(find.text('You have already reviewed this job.'), findsOneWidget);
-    });
+        // The bar still shows its action, but it must not open the sheet.
+        final reviewBtn = find.widgetWithText(FilledButton, 'Review Pro Fixer');
+        expect(reviewBtn, findsOneWidget);
+        await tester.tap(reviewBtn);
+        await tester.pumpAndSettle();
+        expect(find.text('Leave a Review'), findsNothing);
+        expect(review.left, hasLength(1));
+      },
+    );
 
     for (final released in [false, true]) {
       testWidgets(
