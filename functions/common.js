@@ -96,6 +96,38 @@ function assertCanPay(wallet, requiredSen, message) {
 }
 
 /**
+ * What:   Writes a funded stage and its `fund` ledger entry.
+ * Input:  [tx], and {jobRef, title, requestorId, providerId, amountSen,
+ *         order = 0, description = "Full job"}.
+ * Output: The stage `m{order}`; the caller writes the wallet and `fundedAtAward`.
+ */
+function writeFundedMilestone(tx, {jobRef, title, requestorId, providerId,
+  amountSen, order = 0, description = "Full job"}) {
+  const milestoneRef = jobRef.collection("milestones").doc(`m${order}`);
+  tx.set(milestoneRef, {
+    providerId,
+    description,
+    amountSen,
+    order,
+    status: "funded",
+    submissionNote: null,
+    reworkNote: null,
+    reworkCount: 0,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  appendLedger(tx, {
+    fromUid: requestorId,
+    toUid: ESCROW,
+    amountSen,
+    type: "fund",
+    jobId: jobRef.id,
+    jobTitle: title || null,
+    milestoneId: milestoneRef.id,
+    participantIds: [requestorId],
+  });
+}
+
+/**
  * What:   Role lookup on a job.
  * Input:  Job data and a [uid].
  * Output: "requestor", "provider", or null for anyone else.
@@ -164,37 +196,7 @@ function appendLedger(txOrBatch, entry) {
   });
 }
 
-/**
- * What:   Writes a funded stage and its `fund` ledger entry.
- * Input:  [tx], and {jobRef, title, requestorId, providerId, amountSen,
- *         order = 0, description = "Full job"}.
- * Output: The stage `m{order}`; the caller writes the wallet and `fundedAtAward`.
- */
-function writeFundedMilestone(tx, {jobRef, title, requestorId, providerId,
-  amountSen, order = 0, description = "Full job"}) {
-  const milestoneRef = jobRef.collection("milestones").doc(`m${order}`);
-  tx.set(milestoneRef, {
-    providerId,
-    description,
-    amountSen,
-    order,
-    status: "funded",
-    submissionNote: null,
-    reworkNote: null,
-    reworkCount: 0,
-    createdAt: FieldValue.serverTimestamp(),
-  });
-  appendLedger(tx, {
-    fromUid: requestorId,
-    toUid: ESCROW,
-    amountSen,
-    type: "fund",
-    jobId: jobRef.id,
-    jobTitle: title || null,
-    milestoneId: milestoneRef.id,
-    participantIds: [requestorId],
-  });
-}
+
 
 exports.callerUid = callerUid;
 exports.bad = bad;

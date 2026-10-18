@@ -57,6 +57,34 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
 });
 
 /**
+ * What:   Recomputes and stores one user's Trust Score.
+ * Input:  [userRef]; reads `users/{uid}` and its `private/payout` doc (phone).
+ * Output: `trustScore` and `trust` updated via trust.js; skipped when nothing
+ *         changed, which stops a trigger loop.
+ */
+async function refreshTrust(userRef) {
+  const [userSnap, payoutSnap] = await Promise.all([
+    userRef.get(),
+    userRef.collection("private").doc("payout").get(),
+  ]);
+  if (!userSnap.exists) return;
+  const user = userSnap.data();
+  const trust = computeTrust(user, payoutSnap.data() || {});
+
+  const stored = user.trust || {};
+  const unchanged = user.trustScore === trust.composite &&
+      ["reviewScore", "trackRecordScore", "verificationScore",
+        "profileScore", "scoreVisible"]
+          .every((key) => stored[key] === trust[key]);
+  if (unchanged) return;
+
+  await userRef.update({
+    trustScore: trust.composite,
+    trust: {...trust, computedAt: FieldValue.serverTimestamp()},
+  });
+}
+
+/**
  * What:   Trigger that keeps a user's Trust Score current.
  * Input:  Every write to `users/{uid}`.
  * Output: `trustScore` and `trust` updated via trust.js; skipped when nothing
@@ -65,22 +93,24 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
 exports.recomputeTrustOnUserWrite = functions.firestore
     .document("users/{uid}")
     .onWrite(async (change) => {
-      if (!change.after.exists) return;
-      const user = change.after.data();
-      const trust = computeTrust(user);
+        if (!change.after.exists) return;
+        await refreshTrust(change.after.ref);
+     });
 
-      const stored = user.trust || {};
-      const unchanged = user.trustScore === trust.composite &&
-          ["reviewScore", "trackRecordScore", "verificationScore",
-            "profileScore", "scoreVisible"]
-              .every((key) => stored[key] === trust[key]);
-      if (unchanged) return;
+ /**
+  * What:   Trigger that refreshes the Trust Score when the phone changes.
+  * Input:  A write to `users/{uid}/private/payout`.
+  * Output: Score refreshed by refreshTrust; skipped if the phone is the same.
+  */
+ exports.recomputeTrustOnPhoneWrite = functions.firestore
+     .document("users/{uid}/private/payout")
+     .onWrite(async (change, context) => {
+       const before = change.before.exists ? change.before.data().phone : null;
+       const after = change.after.exists ? change.after.data().phone : null;
+       if (before === after) return;
+       await refreshTrust(admin.firestore().doc(`users/${context.params.uid}`));
+     });
 
-      await change.after.ref.update({
-        trustScore: trust.composite,
-        trust: {...trust, computedAt: FieldValue.serverTimestamp()},
-      });
-    });
 
 /**
  * What:   Trigger that adds a new review's rating to the reviewee's totals.
@@ -1169,7 +1199,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
  * Input:  None (stats_repository.dart); safe to re-run.
  * Output: `jobsCompleted` and `disputesLost` rewritten from jobs and disputes
  *         with the live rules (bundle once per person; auto-closed disputes
- *         don't count); the trust trigger then rebuilds scores.
+ *         don't count), then every user's Trust Score recomputed.
  */
 exports.backfillTrust = functions.https.onCall(async (data, context) => {
   await assertAdmin(callerUid(context));
@@ -1196,12 +1226,14 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
     }
   }
 
-  // Always write: it fixes the counters and re-triggers the trust recompute.
+  // Fix the counters, then recompute the score directly: a write that
+  // changes nothing does not fire the trust trigger.
   for (const doc of users.docs) {
     await doc.ref.update({
       jobsCompleted: completed.get(doc.id)?.size ?? 0,
       disputesLost: lost.get(doc.id) ?? 0,
     });
+    await refreshTrust(doc.ref);
   }
   return {users: users.size};
 });
@@ -2223,3 +2255,6 @@ exports.withdrawAppointmentProposal = scheduling.withdrawAppointmentProposal;
 exports.markOnTheWay = scheduling.markOnTheWay;
 exports.markArrived = scheduling.markArrived;
 exports.sendVisitReminders = scheduling.sendVisitReminders;
+
+
+
