@@ -482,7 +482,19 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                     ),
                   ],
                 ] else ...[
-                  Text('Award options', style: theme.textTheme.titleLarge),
+                  Text(
+                    'Compare award options',
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Each option covers as many tasks as the bids allow. '
+                    'Compare total price, number of providers and Trust '
+                    'Score.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   if (bids.isEmpty)
                     Text(
@@ -521,7 +533,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                       BundleOptionCard(
                         merged: merged,
                         tasks: tasks,
-                        primary: merged.isRecommended,
+                        primary: merged.isBestValue,
                         busy: _awarding,
                         enabled: optionsFresh,
                         onAward: () => _award(merged.option, tasks),

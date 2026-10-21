@@ -197,10 +197,10 @@ BundleBid sampleBundleBid({
 
 /// What:   A bundle award option; by default Aida Renovation wins job-1 for RM375.
 /// Input:  Any field to override; [awards] replaces the default winner list.
-/// Output: A BundleAwardOption keyed `recommended`.
+/// Output: A BundleAwardOption keyed `bestValue`.
 BundleAwardOption sampleOption({
-  String key = 'recommended',
-  String label = 'Recommended',
+  String key = 'bestValue',
+  String label = 'Best Value',
   int totalSen = 37500,
   int providerCount = 1,
   int premiumSen = 0,

@@ -400,7 +400,7 @@ void main() {
           bundleOrder: 1, bundleTaskCount: 2),
     ];
 
-    final recommended = sampleOption(totalSen: 87500, providerCount: 2, premiumSen: 3500, weightedTrust: 751, awards: [
+    final bestValue = sampleOption(totalSen: 87500, providerCount: 2, premiumSen: 3500, weightedTrust: 751, awards: [
         BundleAwardItem(
           providerId: 'prov-1',
           providerName: 'Aida Renovation',
@@ -419,7 +419,7 @@ void main() {
     }) async {
       final bundles = FakeBundleRepository([
         bundle ?? sampleBundle(id: 'b1', taskIds: const ['job-1', 'job-2']),
-      ])..awardOptions = [recommended];
+      ])..awardOptions = [bestValue];
       await pumpOwnerBundleScreen(
         tester,
         bundles: bundles,
@@ -437,9 +437,10 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton,
           'Show award options'));
       await tester.pumpAndSettle();
-      expect(find.text('Recommended'), findsOneWidget);
-      expect(find.textContaining('RM\u00A035.00 (4.2%) more than the cheapest'),
+      expect(find.text('Best Value'), findsOneWidget);
+      expect(find.textContaining('+RM 35.00 vs lowest'),
           findsOneWidget);
+      expect(find.textContaining('2 providers'), findsOneWidget);
 
       await tester.tap(find.widgetWithText(FilledButton, 'Award this option'));
       await tester.pumpAndSettle();
@@ -518,7 +519,7 @@ void main() {
       expect(find.text('The bids changed.'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Show award options'),
           findsOneWidget);
-      expect(find.text('Recommended'), findsNothing);
+      expect(find.text('Best Value'), findsNothing);
     });
 
     testWidgets('an insufficient balance shows the Top up dialog', (
