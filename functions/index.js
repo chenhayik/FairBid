@@ -21,6 +21,7 @@ const scheduling = require("./scheduling");
 const payoutMethod = require("./payout_method");
 const ssm = require("./ssm");
 const idcheck = require("./idcheck");
+const {withBusyRetry, errorStatus} = require("./gemini_retry");
 
 admin.initializeApp();
 
@@ -1753,7 +1754,7 @@ const DEAD_TOKEN_CODES = [
 ];
 
 /**
- * What:   Trigger that sends a new notification as an FCM push.
+ * What:   Trigger that send notification as an FCM push.
  * Input:  A new `users/{uid}/notifications/{id}` doc.
  * Output: A push to the user's devices; dead tokens are removed.
  * Notes:  Best-effort; the in-app list is the source of truth.
@@ -2212,16 +2213,31 @@ exports.suggestJobDetails = functions
           contents = text;
         }
 
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents,
-          config,
-        });
-        return draft ? parseDraftJson(response.text) :
-            parsePriceJson(response.text);
+        // Gemini often answers 503/429 for a moment, so retry those briefly.
+        const response = await withBusyRetry(
+            () => ai.models.generateContent({
+              model: GEMINI_MODEL,
+              contents,
+              config,
+            }),
+            {
+              onRetry: ({status, attempt}) => functions.logger.info(
+                  "assist retrying after busy reply", {status, attempt, kind}),
+            });
+        // `response.text` is a getter, so read it once.
+        const reply = response.text;
+        const result = draft ? parseDraftJson(reply) : parsePriceJson(reply);
+        if (result === null) {
+          // Metadata only: the reply text echoes the user's note.
+          functions.logger.warn("assist unusable reply", {
+            kind,
+            replyLength: typeof reply === "string" ? reply.length : null,
+            finishReason: response.candidates?.[0]?.finishReason ?? null,
+          });
+        }
+        return result;
       } catch (err) {
-        const status = typeof err?.status === "number" ? err.status :
-            (typeof err?.code === "number" ? err.code : null);
+        const status = errorStatus(err);
         // 400/403/404 are config bugs, so log them as errors; other failures
         // are soft misses. Never log the API key or request body.
         if (status === 400 || status === 403 || status === 404) {
