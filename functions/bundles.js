@@ -12,10 +12,6 @@ const {
 const MIN_BUNDLE_TASKS = 2;
 const MAX_BUNDLE_TASKS = 6;
 
-// Consolidation cap, saved on each bundle when posted (matches PlatformConfig).
-const CONSOLIDATION_CAP_PCT = 5;
-const CONSOLIDATION_CAP_SEN = 50000; // RM 500
-
 // Same per-amount ceiling the bid rules enforce: RM 1,000,000.
 const MAX_AMOUNT_SEN = 100000000;
 
@@ -254,8 +250,6 @@ exports.createBundle = functions.https.onCall(async (data, context) => {
     ...(deadline ? {deadline} : {}),
     status: "open",
     taskIds: jobRefs.map((ref) => ref.id),
-    consolidationCapPct: CONSOLIDATION_CAP_PCT,
-    consolidationCapSen: CONSOLIDATION_CAP_SEN,
     createdAt: FieldValue.serverTimestamp(),
   });
   await batch.commit();

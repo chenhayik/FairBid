@@ -14,7 +14,7 @@ class BundleAwardOption {
     this.awards = const [],
   });
 
-  /// 'cheapest', 'fewest' or 'recommended'.
+  /// 'cheapest', 'fewest' or 'bestValue'.
   final String key;
   final String label;
   final int totalSen;

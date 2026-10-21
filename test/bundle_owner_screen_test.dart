@@ -261,9 +261,9 @@ void main() {
     testWidgets('two options with the same award are shown as one card', (
       tester,
     ) async {
-      final cheapest = sampleOption(key: 'cheapest', label: 'Cheapest', uncoveredTaskIds: ['job-2']);
+      final cheapest = sampleOption(key: 'cheapest', label: 'Lowest total', uncoveredTaskIds: ['job-2']);
       final fewest = sampleOption(key: 'fewest', label: 'Fewest providers', uncoveredTaskIds: ['job-2']);
-      final recommended = sampleOption(totalSen: 89500, providerCount: 2, weightedTrust: 751, awards: [
+      final bestValue = sampleOption(totalSen: 89500, providerCount: 2, weightedTrust: 751, awards: [
           BundleAwardItem(
             providerId: 'prov-1',
             providerName: 'Aida Renovation',
@@ -279,14 +279,28 @@ void main() {
       await pumpBundle(
         tester,
         bids: [sampleBundleBid(), sampleBundleBid(providerId: 'prov-2', providerName: 'Dev Tiling')],
-        awardOptions: [cheapest, fewest, recommended],
+        awardOptions: [cheapest, fewest, bestValue],
       );
       await tester.tap(find.widgetWithText(FilledButton, 'Show award options'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Cheapest · Fewest providers'), findsOneWidget);
-      expect(find.text('Recommended'), findsOneWidget);
-      // Only the recommended card gets the filled Award button; the merged
+      expect(find.text('Compare award options'), findsOneWidget);
+      expect(
+        find.text('Each option covers as many tasks as the bids allow. '
+            'Compare total price, number of providers and Trust Score.'),
+        findsOneWidget,
+      );
+      expect(find.text('Lowest total · Fewest providers'), findsOneWidget);
+      expect(find.text('Best Value'), findsOneWidget);
+      // Each card explains itself; a merged card shows its top-priority line.
+      expect(find.text('The cheapest way to cover every task.'),
+          findsOneWidget);
+      expect(
+        find.text('Balances total price (60%) and Trust Score (40%), the same '
+            'as single jobs.'),
+        findsOneWidget,
+      );
+      // Only the Best Value card gets the filled Award button; the merged
       // one is outlined.
       expect(find.widgetWithText(FilledButton, 'Award this option'),
           findsOneWidget);
@@ -301,7 +315,7 @@ void main() {
     testWidgets('an edited bid disables Award until Refresh is pressed', (
       tester,
     ) async {
-      final recommended = sampleOption(totalSen: 89500, awards: [
+      final bestValue = sampleOption(totalSen: 89500, awards: [
           BundleAwardItem(
             providerId: 'prov-1',
             providerName: 'Aida Renovation',
@@ -312,7 +326,7 @@ void main() {
       final bundles = await pumpBundle(
         tester,
         bundleBids: live,
-        awardOptions: [recommended],
+        awardOptions: [bestValue],
       );
 
       await tester.tap(find.widgetWithText(FilledButton, 'Show award options'));
@@ -334,7 +348,7 @@ void main() {
       );
       expect(awardButton.onPressed, isNull);
 
-      bundles.awardOptions = [recommended];
+      bundles.awardOptions = [bestValue];
       await tester.tap(find.widgetWithText(TextButton, 'Refresh'));
       await tester.pumpAndSettle();
 
@@ -429,7 +443,7 @@ void main() {
         home: Scaffold(
           body: SingleChildScrollView(
             child: BundleOptionCard(
-              merged: MergedBundleOption(option, const ['Recommended']),
+              merged: MergedBundleOption(option, const ['Best Value']),
               tasks: const [],
               primary: true,
               busy: false,
@@ -450,7 +464,84 @@ void main() {
 
     testWidgets('trust is hidden while any provider is new', (tester) async {
       await pumpCard(tester, visible: false);
-      expect(find.textContaining('Trust'), findsNothing);
+      expect(find.textContaining('/100'), findsNothing);
+      expect(find.textContaining('Includes a new provider'), findsOneWidget);
+    });
+
+    testWidgets('every card shows total, premium, providers and trust', (
+      tester,
+    ) async {
+      final lowest = sampleOption(
+        key: 'cheapest',
+        label: 'Lowest total',
+        totalSen: 100000,
+        weightedTrust: 700,
+        trustVisible: true,
+      );
+      final pricier = sampleOption(
+        key: 'bestValue',
+        label: 'Best Value',
+        totalSen: 110000,
+        premiumSen: 10000,
+        providerCount: 2,
+        weightedTrust: 850,
+        trustVisible: true,
+        awards: const [
+          BundleAwardItem(
+            providerId: 'prov-2',
+            providerName: 'Dev Tiling',
+            taskAmountsSen: {'job-1': 110000},
+          ),
+        ],
+      );
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Column(
+              children: [
+                for (final merged in mergeBundleOptions([lowest, pricier]))
+                  BundleOptionCard(
+                    merged: merged,
+                    tasks: const [],
+                    primary: merged.isBestValue,
+                    busy: false,
+                    enabled: true,
+                    onAward: () {},
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      expect(find.text('RM 1,000.00'), findsOneWidget);
+      // The 2nd total also appears as that provider's row.
+      expect(find.text('RM 1,100.00'), findsWidgets);
+      expect(find.textContaining('1 provider  •  Lowest  •  Trust 70/100'),
+          findsOneWidget);
+      expect(
+        find.textContaining(
+            '2 providers  •  +RM 100.00 vs lowest  •  Trust 85/100'),
+        findsOneWidget,
+      );
+      expect(find.text('The cheapest way to cover every task.'),
+          findsOneWidget);
+    });
+
+    test('a merged card keys off bestValue, not the label text', () {
+      final merged = mergeBundleOptions([
+        sampleOption(key: 'cheapest', label: 'Lowest total'),
+        sampleOption(key: 'bestValue', label: 'Anything'),
+      ]).single;
+      expect(merged.combinedLabel, 'Lowest total · Anything');
+      expect(merged.isBestValue, isTrue);
+      expect(merged.explanation, startsWith('Balances total price (60%)'));
+
+      final other = mergeBundleOptions([
+        sampleOption(key: 'fewest', label: 'Best Value'),
+      ]).single;
+      expect(other.isBestValue, isFalse);
     });
   });
 
@@ -541,7 +632,7 @@ void main() {
         final bundles = await pump(
           tester,
           awardOptions: [
-            _option('Recommended', {'job-1': 'prov-2', 'job-2': 'prov-1'}),
+            _option('Best Value', {'job-1': 'prov-2', 'job-2': 'prov-1'}),
           ],
         );
         await tester.tap(find.widgetWithText(FilledButton, 'Show award options'));

@@ -12,20 +12,36 @@ import 'bundle_task_section.dart';
 import 'bundle_warning_banner.dart';
 
 /// What:   Award options with identical awards, shown as one card with joined labels.
-/// Input:  [option], [labels].
-/// Output: [combinedLabel] and the recommended flag for the card.
+/// Input:  [option], [labels] and, optionally, the option [keys] they came from.
+/// Output: [combinedLabel], the best-value flag and the explanation line for the card.
 class MergedBundleOption {
-  MergedBundleOption(this.option, this.labels);
+  MergedBundleOption(this.option, this.labels, [List<String>? keys])
+    : keys = keys ?? [option.key];
 
   final BundleAwardOption option;
   final List<String> labels;
 
+  /// Server keys of every option merged into this card.
+  final List<String> keys;
+
   /// What:   Joined option labels.
   String get combinedLabel => labels.join(' · ');
 
-  /// What:   Whether the server's top pick is among the labels.
-  /// Notes:  Only the recommended card gets the filled button.
-  bool get isRecommended => labels.any((l) => l == 'Recommended');
+  /// What:   Whether the server's Best Value option is among the keys.
+  /// Notes:  Only the Best Value card gets the filled button.
+  bool get isBestValue => keys.contains('bestValue');
+
+  /// What:   One line saying what this card optimises.
+  /// Output: The line for the highest-priority key (bestValue, cheapest, fewest), or null.
+  String? get explanation {
+    if (keys.contains('bestValue')) {
+      return 'Balances total price (60%) and Trust Score (40%), the same as '
+          'single jobs.';
+    }
+    if (keys.contains('cheapest')) return 'The cheapest way to cover every task.';
+    if (keys.contains('fewest')) return 'Fewest separate providers to deal with.';
+    return null;
+  }
 }
 
 /// What:   Merges options with identical awards, so there are no duplicate cards.
@@ -39,14 +55,15 @@ List<MergedBundleOption> mergeBundleOptions(List<BundleAwardOption> options) {
         .firstOrNull;
     if (match != null) {
       match.labels.add(option.label);
+      match.keys.add(option.key);
     } else {
-      merged.add(MergedBundleOption(option, [option.label]));
+      merged.add(MergedBundleOption(option, [option.label], [option.key]));
     }
   }
   return merged;
 }
 
-/// What:   One award option card: cost, providers hired, Award button.
+/// What:   One award option card: total, premium, providers, Trust Score, Award button.
 /// Input:  [merged] from mergeBundleOptions(); [tasks] for titles; [primary] fills the button.
 /// Output: Card calling [onAward], and [onUse] to fill the manual picks from it.
 class BundleOptionCard extends StatelessWidget {
@@ -80,10 +97,7 @@ class BundleOptionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final option = merged.option;
-    final cheapestSen = option.totalSen - option.premiumSen;
-    final premiumPct = option.premiumSen > 0 && cheapestSen > 0
-        ? option.premiumSen * 100 / cheapestSen
-        : 0.0;
+    final explanation = merged.explanation;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: AppCard(
@@ -91,6 +105,13 @@ class BundleOptionCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(merged.combinedLabel, style: theme.textTheme.titleMedium),
+            if (explanation != null)
+              Text(
+                explanation,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             const SizedBox(height: 2),
             Text(
               formatRm(option.totalSen),
@@ -101,11 +122,10 @@ class BundleOptionCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               '${plural(option.providerCount, 'provider')}'
-              '${option.premiumSen > 0 ? '  •  ${formatRm(option.premiumSen)} '
-                        '(${premiumPct.toStringAsFixed(1)}%) more than the '
-                        'cheapest' : ''}'
-              '${option.trustVisible ? '  •  Trust '
-                        '${(option.weightedTrust / 10).round()}/100' : ''}',
+              '  •  ${option.premiumSen > 0 ? '+${formatRm(option.premiumSen)} '
+                        'vs lowest' : 'Lowest'}'
+              '  •  ${option.trustVisible ? 'Trust '
+                        '${(option.weightedTrust / 10).round()}/100' : 'Includes a new provider'}',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
