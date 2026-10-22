@@ -9,7 +9,7 @@ import 'bundle_task_section.dart';
 import 'bundle_warning_banner.dart';
 
 /// What:   "Pick providers yourself": one row per task with its pick.
-/// Input:  [tasks], [bids] and [picks] from BundleDetailScreen.
+/// Input:  [tasks], [bids], [picks] and the server-priced [pricedSen] from BundleDetailScreen.
 /// Output: Rows that open a bid sheet per task; [onPick] reports the choice.
 class BundlePickSection extends StatelessWidget {
   const BundlePickSection({
@@ -19,6 +19,7 @@ class BundlePickSection extends StatelessWidget {
     required this.picks,
     required this.onPick,
     required this.onOpenTask,
+    this.pricedSen = const {},
   });
 
   final List<Job> tasks;
@@ -26,6 +27,9 @@ class BundlePickSection extends StatelessWidget {
 
   /// Task id -> provider id (null or missing: not awarded).
   final Map<String, String?> picks;
+
+  /// Task id -> amount the server priced for the current picks; empty while pricing.
+  final Map<String, int> pricedSen;
   final void Function(String taskId, String? providerId) onPick;
   final ValueChanged<Job> onOpenTask;
 
@@ -57,6 +61,7 @@ class BundlePickSection extends StatelessWidget {
             task: task,
             bids: bids,
             providerId: picks[task.id],
+            pricedSen: pricedSen[task.id],
             onChange: () => _change(context, task),
             onOpenTask: onOpenTask,
           ),
@@ -73,13 +78,15 @@ class BundlePickSection extends StatelessWidget {
 }
 
 /// What:   One task row in the pick list.
-/// Input:  [task], [bids], [providerId] (current pick).
+/// Input:  [task], [bids], [providerId] (current pick) and [pricedSen] (server amount for it, null while pricing).
 /// Output: Title with open-task button, then the pick line (provider and price, "Not awarded" or "No bids on this task") and Change.
+/// How:    Shows [pricedSen] instead of the single price, and marks the name "(bundle deal)" when it is lower.
 class _PickRow extends StatelessWidget {
   const _PickRow({
     required this.task,
     required this.bids,
     required this.providerId,
+    required this.pricedSen,
     required this.onChange,
     required this.onOpenTask,
   });
@@ -87,6 +94,7 @@ class _PickRow extends StatelessWidget {
   final Job task;
   final List<BundleBid> bids;
   final String? providerId;
+  final int? pricedSen;
   final VoidCallback onChange;
   final ValueChanged<Job> onOpenTask;
 
@@ -105,9 +113,13 @@ class _PickRow extends StatelessWidget {
     } else if (picked == null) {
       pickLine = Text('Not awarded', style: muted);
     } else {
+      final single = picked.priceFor(task.id) ?? 0;
+      final amount = pricedSen ?? single;
       pickLine = PriceRow(
-        name: picked.providerName,
-        amountSen: picked.priceFor(task.id) ?? 0,
+        name: amount < single
+            ? '${picked.providerName} (bundle deal)'
+            : picked.providerName,
+        amountSen: amount,
         style: theme.textTheme.bodyMedium,
       );
     }
