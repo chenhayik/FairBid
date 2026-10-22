@@ -533,6 +533,7 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                       BundleOptionCard(
                         merged: merged,
                         tasks: tasks,
+                        bids: bids,
                         primary: merged.isBestValue,
                         busy: _awarding,
                         enabled: optionsFresh,
@@ -546,6 +547,10 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                       tasks: tasks,
                       bids: bids,
                       picks: _picks,
+                      pricedSen: {
+                        for (final award in _manualOption?.awards ?? const [])
+                          ...award.taskAmountsSen,
+                      },
                       onPick: (taskId, id) => _onPick(taskId, id, bids),
                       onOpenTask: _openTask,
                     )

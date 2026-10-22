@@ -1,4 +1,6 @@
 import 'package:fairbid/core/theme/app_theme.dart';
+import 'package:fairbid/core/util/money.dart';
+import 'package:fairbid/core/widgets/user_avatar.dart';
 import 'package:fairbid/features/jobs/data/bundle_bid_repository.dart';
 import 'package:fairbid/features/jobs/data/bundle_repository.dart';
 import 'package:fairbid/features/jobs/domain/bundle.dart';
@@ -9,6 +11,7 @@ import 'package:fairbid/features/jobs/presentation/bundle/bundle_option_card.dar
 import 'package:fairbid/features/jobs/presentation/bundle/bundle_pick_logic.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'helpers/builders.dart';
 import 'helpers/fakes.dart';
@@ -18,12 +21,13 @@ BundleAwardOption _option(
   String label,
   Map<String, String> providerByTask, {
   int totalSen = 30000,
+  int amountSen = 1000,
 }) => sampleOption(key: label, label: label, totalSen: totalSen, awards: [
     for (final entry in providerByTask.entries)
       BundleAwardItem(
         providerId: entry.value,
         providerName: entry.value,
-        taskAmountsSen: {entry.key: 1000},
+        taskAmountsSen: {entry.key: amountSen},
       ),
   ]);
 
@@ -545,6 +549,89 @@ void main() {
     });
   });
 
+  group('Provider rows on award cards', () {
+    final aida = sampleBundleBid(bundlePriceSen: 80000);
+    final dev = sampleBundleBid(
+      providerId: 'prov-2',
+      providerName: 'Dev Tiling',
+      taskPrices: const {'job-1': 40000, 'job-2': 60000},
+    );
+    // Aida wins both tasks at her bundle price; the other option splits them
+    // at single prices.
+    final bundled = sampleOption(totalSen: 80000, awards: const [
+      BundleAwardItem(
+        providerId: 'prov-1',
+        providerName: 'Aida Renovation',
+        taskAmountsSen: {'job-1': 35000, 'job-2': 45000},
+      ),
+    ]);
+    final split = sampleOption(key: 'cheapest', label: 'Lowest total', totalSen: 97500, awards: const [
+      BundleAwardItem(
+        providerId: 'prov-1',
+        providerName: 'Aida Renovation',
+        taskAmountsSen: {'job-1': 37500},
+      ),
+      BundleAwardItem(
+        providerId: 'prov-2',
+        providerName: 'Dev Tiling',
+        taskAmountsSen: {'job-2': 60000},
+      ),
+    ]);
+
+    testWidgets('a provider row opens the profile and shows the amount, '
+        'tasks and bundle saving', (tester) async {
+      await pumpBundle(
+        tester,
+        bids: [aida, dev],
+        awardOptions: [bundled, split],
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Show award options'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Waterproof the floor, Tile the floor'), findsOneWidget);
+      // The card total and the provider's row.
+      expect(find.text(formatRm(80000)), findsNWidgets(2));
+      // Only Aida's bundled award is cheaper than her single prices.
+      expect(find.text('Bundle deal: saves ${formatRm(9500)}'), findsOneWidget);
+
+      await tapAt(tester, find.text('Aida Renovation').first);
+      expect(find.text('Profile: prov-1'), findsOneWidget);
+    });
+
+    testWidgets('no saving line without a bid or without a saving', (
+      tester,
+    ) async {
+      Future<void> pumpCard(List<BundleBid> bids) => tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: BundleOptionCard(
+                merged: MergedBundleOption(bundled, const ['Best Value']),
+                tasks: const [],
+                bids: bids,
+                primary: true,
+                busy: false,
+                enabled: true,
+                onAward: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await pumpCard([aida]);
+      expect(find.textContaining('Bundle deal'), findsOneWidget);
+
+      await pumpCard(const []);
+      expect(find.textContaining('Bundle deal'), findsNothing);
+
+      // Aida's bid without a bundle price: the same amounts are no saving.
+      await pumpCard([sampleBundleBid(taskPrices: const {'job-1': 35000, 'job-2': 45000})]);
+      expect(find.textContaining('Bundle deal'), findsNothing);
+    });
+  });
+
   group('Award layout', () {
     final tasks = [
       sampleJob(id: 'job-1', title: 'Waterproof the floor', bundleId: 'b1'),
@@ -600,7 +687,9 @@ void main() {
           'sets the pick and prices it', (tester) async {
         final bundles = await pump(
           tester,
-          manualOption: _option('Your pick', {'job-1': 'prov-2'}),
+          manualOption: _option('Your pick', {
+            'job-1': 'prov-2',
+          }, amountSen: 30000),
         );
 
         await tester.tap(find.text('Waterproof the floor'));
@@ -609,11 +698,20 @@ void main() {
         final dev = tester.getTopLeft(find.text('Dev Tiling')).dy;
         final aida = tester.getTopLeft(find.text('Aida Renovation')).dy;
         expect(dev, lessThan(aida));
-        expect(find.text('Lowest price'), findsOneWidget);
+        expect(find.text('Lowest price alone'), findsOneWidget);
         expect(
           find.textContaining('if they win all 4 tasks'),
           findsOneWidget,
         );
+        // Aida: single prices total RM 1,115.00, bundle price RM 1,000.00.
+        expect(
+          find.text(
+            'Bundle deal ${formatRm(100000)} if they win all 4 tasks (saves ${formatRm(11500)})',
+          ),
+          findsOneWidget,
+        );
+        // Dev has no bundle price, so no note.
+        expect(find.textContaining('Bundle deal'), findsOneWidget);
         expect(find.text("Don't award"), findsOneWidget);
 
         await tester.tap(find.text('Dev Tiling'));
@@ -657,6 +755,82 @@ void main() {
 
         expect(find.textContaining('drops their bundle price'), findsOneWidget);
       });
+
+      testWidgets('each bid in the sheet has a profile button that keeps the '
+          'sheet open', (tester) async {
+        await pump(tester);
+        await tester.tap(find.text('Waterproof the floor'));
+        await tester.pumpAndSettle();
+
+        expect(find.byTooltip('View profile'), findsNWidgets(2));
+        expect(find.byType(UserAvatar), findsNWidgets(2));
+
+        // Cheapest first, so the first button is Dev Tiling's (prov-2).
+        await tester.tap(find.byTooltip('View profile').first);
+        await tester.pumpAndSettle();
+        expect(find.text('Profile: prov-2'), findsOneWidget);
+
+        GoRouter.of(tester.element(find.text('Profile: prov-2'))).pop();
+        await tester.pumpAndSettle();
+        expect(find.text("Don't award"), findsOneWidget);
+      });
+
+      testWidgets('the bundle note leaves out "saves" when the bundle price '
+          'is no lower', (tester) async {
+        await pumpBundle(
+          tester,
+          bids: [sampleBundleBid(bundlePriceSen: 89500)],
+        );
+        await tester.tap(find.text('Waterproof the floor'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Bundle deal ${formatRm(89500)} if they win all 2 tasks'),
+          findsOneWidget,
+        );
+      });
+
+      for (final (name, priced, shown) in [
+        ('a server-priced bundle amount replaces the single price', 30000, true),
+        ('an amount equal to the single price shows no bundle mark', 37500, false),
+      ]) {
+        testWidgets(name, (tester) async {
+          await pump(
+            tester,
+            manualOption: _option(
+              'Your pick',
+              {'job-1': 'prov-1'},
+              totalSen: 99900,
+              amountSen: priced,
+            ),
+          );
+          await tester.tap(find.text('Waterproof the floor'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Aida Renovation'));
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text('Aida Renovation (bundle deal)'),
+            shown ? findsOneWidget : findsNothing,
+          );
+          expect(find.text('Aida Renovation'), shown ? findsNothing : findsOneWidget);
+          expect(find.text(formatRm(priced)), findsOneWidget);
+          expect(find.text(formatRm(37500)), priced == 37500 ? findsOneWidget : findsNothing);
+        });
+      }
+
+      testWidgets('while the pick is being priced the row shows the single '
+          'price', (tester) async {
+        await pump(tester);
+        await tester.tap(find.text('Waterproof the floor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Aida Renovation'));
+        await tester.pumpAndSettle();
+
+        // The fake returned no priced option, so there is nothing to show.
+        expect(find.text('Aida Renovation'), findsOneWidget);
+        expect(find.text(formatRm(37500)), findsOneWidget);
+      });
     });
 
     group('Bids section', () {
@@ -671,6 +845,13 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.textContaining('Bundle price (all tasks)'), findsOneWidget);
       });
+    });
+
+    test('bundleSavingSen is the single-task total minus the amounts paid', () {
+      expect(bundleSavingSen(aida, {'job-1': 30000, 'job-2': 45000}), 14500);
+      expect(bundleSavingSen(aida, {'job-1': 37500}), 0);
+      // A task the bid doesn't price counts as no saving.
+      expect(bundleSavingSen(aida, {'job-9': 500}), 0);
     });
 
     group('pickHints', () {
