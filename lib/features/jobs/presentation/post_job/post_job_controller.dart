@@ -35,28 +35,28 @@ class PostJobController extends ChangeNotifier {
   ServiceAddress? pendingAddress;
   final List<String> photoUrls = [];
 
-  /// Bundle photos tagged only to other tasks, so task 1's AI skips them.
-  Set<String> skipForAssist = {};
-
-  /// What:   The photo the AI assists read.
-  /// Output: The first photo that shows task 1 (not in [skipForAssist]), or null.
-  String? get _assistPhoto =>
-      photoUrls.where((u) => !skipForAssist.contains(u)).firstOrNull;
-
   // Separate flags so the submit overlay and the photo spinner never mix.
   bool _isSubmitting = false;
   bool _uploadingPhoto = false;
   String? _errorMessage;
 
-  // Assist state. A price lookup never blocks posting; a draft does (see [isBusy]).
+  // Assist state, keyed by the screen's task tags. A price lookup never blocks
+  // posting; a draft does (see [isBusy]).
   // Failures leave [_errorMessage] alone: a missing suggestion is not a form error.
-  bool assistingPrice = false;
-  bool assistingDraft = false;
+  Object? draftingTask;
+  final Map<Object, ({int minSen, int maxSen})> priceHints = {};
+  final Set<Object> _pricingTasks = {};
 
   bool _disposed = false;
 
-  /// The last suggested fair-price range, shown beside the budget fields.
-  ({int minSen, int maxSen})? priceHint;
+  /// What:   Whether a draft is in flight.
+  /// Output: True while [draftingTask] is set.
+  bool get assistingDraft => draftingTask != null;
+
+  /// What:   Whether a task's price suggestion is loading.
+  /// Input:  [task], the screen's tag for that task.
+  /// Output: True while its suggestPrice() runs.
+  bool isPricing(Object task) => _pricingTasks.contains(task);
 
   /// What:   Whether the job is being created.
   /// Output: True while submitting; drives the blocking overlay.
@@ -76,40 +76,50 @@ class PostJobController extends ChangeNotifier {
   String? _addressWarning;
   String? get addressWarning => _addressWarning;
 
-  /// What:   Drafts a post from a rough note.
-  /// Input:  [roughText]; AssistRepository.suggestDraft() (assist_repository.dart) with the assist photo.
-  /// Output: JobDraft, or null when none is available; toggles [assistingDraft].
-  Future<JobDraft?> suggestDraft(String roughText) async {
-    assistingDraft = true;
+  /// What:   Drafts one task from a rough note.
+  /// Input:  [task] tag, [roughText] and that task's [photoUrl]; AssistRepository.suggestDraft() (assist_repository.dart).
+  /// Output: JobDraft, or null when none is available; sets [draftingTask] meanwhile.
+  Future<JobDraft?> suggestDraft(Object task, String roughText,
+      {String? photoUrl}) async {
+    draftingTask = task;
     _notify();
     try {
       return await _assist.suggestDraft(
-          roughText: roughText,
-          photoUrl: _assistPhoto);
+          roughText: roughText, photoUrl: photoUrl);
     } finally {
-      assistingDraft = false;
+      draftingTask = null;
       _notify();
     }
   }
 
-  /// What:   Fetches a fair-price range for the description.
-  /// Input:  [description] and the selected [category]; does nothing without a category.
-  /// Output: Sets [priceHint] via AssistRepository.suggestPriceRange(); toggles [assistingPrice].
-  Future<void> suggestPrice(String description) async {
-    final selectedCategory = category;
-    if (selectedCategory == null) return;
-    assistingPrice = true;
+  /// What:   Fetches a fair-price range for one task.
+  /// Input:  [task] tag, its [category], [description] and [photoUrl]; AssistRepository.suggestPriceRange().
+  /// Output: The range, or null; stores it in [priceHints] (clears it on null) and marks the task as pricing meanwhile.
+  Future<({int minSen, int maxSen})?> suggestPrice(
+    Object task, {
+    required String category,
+    required String description,
+    String? photoUrl,
+  }) async {
+    _pricingTasks.add(task);
     _notify();
     try {
-      priceHint = await _assist.suggestPriceRange(
-          category: selectedCategory,
-          description: description,
-          photoUrl: _assistPhoto);
+      final hint = await _assist.suggestPriceRange(
+          category: category, description: description, photoUrl: photoUrl);
+      if (hint != null) {
+        priceHints[task] = hint;
+      } else {
+        priceHints.remove(task);
+      }
+      return hint;
     } finally {
-      assistingPrice = false;
+      _pricingTasks.remove(task);
       _notify();
     }
   }
+
+  /// What:   Drops a removed task's price hint.
+  void forgetTask(Object task) => priceHints.remove(task);
 
   void setCategory(String? value) {
     category = value;
