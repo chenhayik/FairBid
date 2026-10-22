@@ -266,5 +266,41 @@ void main() {
       // The fields it did fill are named back to the requestor.
       expect(find.textContaining('Filled in'), findsOneWidget);
     });
+
+    testWidgets('task 2 drafts from its own note and leaves task 1 alone', (
+      tester,
+    ) async {
+      await openPostJob(tester, assist: FakeAssistRepository(draft: draft), height: 2400);
+      await tapAt(tester, find.textContaining('Add another task'));
+
+      await tapAt(tester, find.text("Describe task 2, we'll fill it in"));
+      await fillField(tester, 'In your own words', 'kitchen tap drips');
+      await tester.tap(find.widgetWithText(FilledButton, 'Draft my post'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextFormField, 'Fix the kitchen tap'),
+          findsOneWidget);
+      // Task 1's title is the first text field on the form, and stays empty.
+      final task1Title = tester.widget<TextFormField>(
+          find.byType(TextFormField).first);
+      expect(task1Title.controller!.text, isEmpty);
+    });
+
+    testWidgets('task 2 can ask for its own fair range', (tester) async {
+      await openPostJob(
+          tester,
+          assist: FakeAssistRepository(
+              priceRange: (minSen: 8000, maxSen: 15000)),
+          height: 2400);
+      await tapAt(tester, find.textContaining('Add another task'));
+
+      final dropdown = find.byType(DropdownButtonFormField<String>).at(1);
+      await tapAt(tester, dropdown);
+      await tapAt(tester, find.text('Plumbing').last);
+      await fillField(tester, 'Task 2 description', 'The tap drips.');
+      await tapAt(tester, find.text('Suggest a fair range').at(1));
+
+      expect(find.textContaining('Similar jobs'), findsOneWidget);
+    });
   });
 }
