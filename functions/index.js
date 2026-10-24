@@ -21,6 +21,7 @@ const scheduling = require("./scheduling");
 const payoutMethod = require("./payout_method");
 const ssm = require("./ssm");
 const idcheck = require("./idcheck");
+const {withBusyRetry, errorStatus} = require("./gemini_retry");
 
 admin.initializeApp();
 
@@ -57,6 +58,34 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
 });
 
 /**
+ * What:   Recomputes and stores one user's Trust Score.
+ * Input:  [userRef]; reads `users/{uid}` and its `private/payout` doc (phone).
+ * Output: `trustScore` and `trust` updated via trust.js; skipped when nothing
+ *         changed, which stops a trigger loop.
+ */
+async function refreshTrust(userRef) {
+  const [userSnap, payoutSnap] = await Promise.all([
+    userRef.get(),
+    userRef.collection("private").doc("payout").get(),
+  ]);
+  if (!userSnap.exists) return;
+  const user = userSnap.data();
+  const trust = computeTrust(user, payoutSnap.data() || {});
+
+  const stored = user.trust || {};
+  const unchanged = user.trustScore === trust.composite &&
+      ["reviewScore", "trackRecordScore", "verificationScore",
+        "profileScore", "scoreVisible"]
+          .every((key) => stored[key] === trust[key]);
+  if (unchanged) return;
+
+  await userRef.update({
+    trustScore: trust.composite,
+    trust: {...trust, computedAt: FieldValue.serverTimestamp()},
+  });
+}
+
+/**
  * What:   Trigger that keeps a user's Trust Score current.
  * Input:  Every write to `users/{uid}`.
  * Output: `trustScore` and `trust` updated via trust.js; skipped when nothing
@@ -65,22 +94,24 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
 exports.recomputeTrustOnUserWrite = functions.firestore
     .document("users/{uid}")
     .onWrite(async (change) => {
-      if (!change.after.exists) return;
-      const user = change.after.data();
-      const trust = computeTrust(user);
+        if (!change.after.exists) return;
+        await refreshTrust(change.after.ref);
+     });
 
-      const stored = user.trust || {};
-      const unchanged = user.trustScore === trust.composite &&
-          ["reviewScore", "trackRecordScore", "verificationScore",
-            "profileScore", "scoreVisible"]
-              .every((key) => stored[key] === trust[key]);
-      if (unchanged) return;
+ /**
+  * What:   Trigger that refreshes the Trust Score when the phone changes.
+  * Input:  A write to `users/{uid}/private/payout`.
+  * Output: Score refreshed by refreshTrust; skipped if the phone is the same.
+  */
+ exports.recomputeTrustOnPhoneWrite = functions.firestore
+     .document("users/{uid}/private/payout")
+     .onWrite(async (change, context) => {
+       const before = change.before.exists ? change.before.data().phone : null;
+       const after = change.after.exists ? change.after.data().phone : null;
+       if (before === after) return;
+       await refreshTrust(admin.firestore().doc(`users/${context.params.uid}`));
+     });
 
-      await change.after.ref.update({
-        trustScore: trust.composite,
-        trust: {...trust, computedAt: FieldValue.serverTimestamp()},
-      });
-    });
 
 /**
  * What:   Trigger that adds a new review's rating to the reviewee's totals.
@@ -1169,7 +1200,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
  * Input:  None (stats_repository.dart); safe to re-run.
  * Output: `jobsCompleted` and `disputesLost` rewritten from jobs and disputes
  *         with the live rules (bundle once per person; auto-closed disputes
- *         don't count); the trust trigger then rebuilds scores.
+ *         don't count), then every user's Trust Score recomputed.
  */
 exports.backfillTrust = functions.https.onCall(async (data, context) => {
   await assertAdmin(callerUid(context));
@@ -1196,12 +1227,14 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
     }
   }
 
-  // Always write: it fixes the counters and re-triggers the trust recompute.
+  // Fix the counters, then recompute the score directly: a write that
+  // changes nothing does not fire the trust trigger.
   for (const doc of users.docs) {
     await doc.ref.update({
       jobsCompleted: completed.get(doc.id)?.size ?? 0,
       disputesLost: lost.get(doc.id) ?? 0,
     });
+    await refreshTrust(doc.ref);
   }
   return {users: users.size};
 });
@@ -1721,7 +1754,7 @@ const DEAD_TOKEN_CODES = [
 ];
 
 /**
- * What:   Trigger that sends a new notification as an FCM push.
+ * What:   Trigger that send notification as an FCM push.
  * Input:  A new `users/{uid}/notifications/{id}` doc.
  * Output: A push to the user's devices; dead tokens are removed.
  * Notes:  Best-effort; the in-app list is the source of truth.
@@ -2180,16 +2213,31 @@ exports.suggestJobDetails = functions
           contents = text;
         }
 
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents,
-          config,
-        });
-        return draft ? parseDraftJson(response.text) :
-            parsePriceJson(response.text);
+        // Gemini often answers 503/429 for a moment, so retry those briefly.
+        const response = await withBusyRetry(
+            () => ai.models.generateContent({
+              model: GEMINI_MODEL,
+              contents,
+              config,
+            }),
+            {
+              onRetry: ({status, attempt}) => functions.logger.info(
+                  "assist retrying after busy reply", {status, attempt, kind}),
+            });
+        // `response.text` is a getter, so read it once.
+        const reply = response.text;
+        const result = draft ? parseDraftJson(reply) : parsePriceJson(reply);
+        if (result === null) {
+          // Metadata only: the reply text echoes the user's note.
+          functions.logger.warn("assist unusable reply", {
+            kind,
+            replyLength: typeof reply === "string" ? reply.length : null,
+            finishReason: response.candidates?.[0]?.finishReason ?? null,
+          });
+        }
+        return result;
       } catch (err) {
-        const status = typeof err?.status === "number" ? err.status :
-            (typeof err?.code === "number" ? err.code : null);
+        const status = errorStatus(err);
         // 400/403/404 are config bugs, so log them as errors; other failures
         // are soft misses. Never log the API key or request body.
         if (status === 400 || status === 403 || status === 404) {
@@ -2223,3 +2271,6 @@ exports.withdrawAppointmentProposal = scheduling.withdrawAppointmentProposal;
 exports.markOnTheWay = scheduling.markOnTheWay;
 exports.markArrived = scheduling.markArrived;
 exports.sendVisitReminders = scheduling.sendVisitReminders;
+
+
+

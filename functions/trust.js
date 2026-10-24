@@ -35,11 +35,11 @@ const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 
 /**
  * What:   Trust Score breakdown.
- * Input:  A `users/{uid}` document's data.
+ * Input:  A `users/{uid}` document's data and privateData from its 'private/payout' doc for phone number.
  * Output: {reviewScore, trackRecordScore, verificationScore, profileScore,
  *         composite, scoreVisible}.
  */
-function computeTrust(user) {
+function computeTrust(user, privateData = {}) {
   const ratingSum = user.ratingSum || 0;
   const ratingCount = user.ratingCount || 0;
   const weighted =
@@ -59,7 +59,7 @@ function computeTrust(user) {
 
   const has = (value) => typeof value === "string" && value !== "";
   const profileScore = 20 * [
-    has(user.displayName), has(user.phone), has(user.bio),
+    has(user.displayName), has(privateData.phone)|| has(user.phone), has(user.bio),
     has(user.profilePhotoUrl), has(user.location),
   ].filter(Boolean).length;
 

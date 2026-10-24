@@ -295,7 +295,7 @@ service cloud.firestore {
                       && resource.data.status == 'pending';
       }
 
-      // Milestones and money moves are written by Cloud Functions.
+      // Milestones/ Stages and money moves are written by Cloud Functions.
       // Clients may only mark a funded milestone as submitted, once any
       // required visit time is confirmed.
       match /milestones/{milestoneId} {

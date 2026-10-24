@@ -2024,40 +2024,37 @@ class _LeaveReviewCard extends StatefulWidget {
   State<_LeaveReviewCard> createState() => _LeaveReviewCardState();
 }
 
-/// What:   Whether a bundle task's review can be left yet.
-/// Output: ready, waiting (another task of this provider is still in progress) or alreadyReviewed.
+/// What:   Whether a review can be left yet on a completed job.
+/// Output: ready, waiting (another bundle task of this provider is still in progress) or alreadyReviewed.
 enum _ReviewGate { ready, waiting, alreadyReviewed }
 
 class _LeaveReviewCardState extends State<_LeaveReviewCard> {
   bool _submitted = false;
 
   /// What:   The task's bundle id, if any.
-  /// Notes:  A bundle task's gate must resolve before a review is offered.
+  /// Notes:  Every job's gate must resolve before a review is offered; a bundle task also waits on its siblings.
   String? get _bundleId => widget.job.bundleId;
 
-  /// Null for ordinary jobs (always ready) or while a gate is resolving.
+  /// Null while the gate is resolving.
   _ReviewGate? _gate;
 
   @override
   void initState() {
     super.initState();
-    if (_bundleId == null) {
-      _gate = _ReviewGate.ready;
-    } else {
-      _resolveGate(_bundleId!);
-    }
+    _resolveGate();
   }
 
-  /// What:   Resolves the review gate for a bundle task.
-  /// Input:  ReviewRepository.hasReviewed() and JobRepository.getBundleTasks().
-  /// Output: Sets [_gate]: alreadyReviewed wins; else waiting while another of this provider's tasks is in progress, else ready.
+  /// What:   Resolves the review gate for a completed job.
+  /// Input:  ReviewRepository.hasReviewed() and, for bundle tasks, JobRepository.getBundleTasks().
+  /// Output: Sets [_gate]: alreadyReviewed wins; else ready for an ordinary job; for a bundle task, waiting while another of this provider's tasks is in progress, else ready.
   /// Notes:  Fails open to ready, since review writes are deduped server-side.
-  Future<void> _resolveGate(String bundleId) async {
+  Future<void> _resolveGate() async {
     final me = context.read<AuthController>().user;
     if (me == null) return;
     // Read before the first await; `context` can't cross an async gap.
     final reviews = context.read<ReviewRepository>();
     final jobs = context.read<JobRepository>();
+    final bundleId = _bundleId;
     try {
       final alreadyReviewed = await reviews.hasReviewed(
         revieweeId: widget.revieweeId,
@@ -2067,6 +2064,10 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
       );
       if (alreadyReviewed) {
         if (mounted) setState(() => _gate = _ReviewGate.alreadyReviewed);
+        return;
+      }
+      if (bundleId == null) {
+        if (mounted) setState(() => _gate = _ReviewGate.ready);
         return;
       }
       final tasks = await jobs.getBundleTasks(bundleId);
@@ -2126,7 +2127,7 @@ class _LeaveReviewCardState extends State<_LeaveReviewCard> {
             'in this bundle are done.',
       );
     }
-    // Resolving a bundle task's gate, or a review is due (the bar offers it).
+    // Resolving the gate, or a review is due (the bar offers it).
     return const SizedBox.shrink();
   }
 }

@@ -15,6 +15,15 @@ List<BundleBid> bidsCoveringTask(List<BundleBid> bids, String taskId) => [
     if (bid.status == BundleBidStatus.pending && bid.coversTask(taskId)) bid,
 ]..sort((a, b) => a.priceFor(taskId)!.compareTo(b.priceFor(taskId)!));
 
+/// What:   Discount a bid's bundle deal gives on an award.
+/// Input:  [bid] and the [taskAmountsSen] it would be paid.
+/// Output: Sen saved versus its single-task prices (0 or less when there is no deal).
+int bundleSavingSen(BundleBid bid, Map<String, int> taskAmountsSen) =>
+    taskAmountsSen.entries.fold(
+      0,
+      (sum, e) => sum + (bid.priceFor(e.key) ?? e.value) - e.value,
+    );
+
 /// What:   Warnings about the client's picks.
 /// Input:  [picks] (task id to provider id) and [bids].
 /// Output: One hint per provider with a bundle price whose tasks are only partly picked, since that drops the bundle price.
