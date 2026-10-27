@@ -1203,6 +1203,7 @@ class FakeVerificationRepository implements VerificationRepository {
 
   /// Set to drive the admin's "Automated ID checks" section.
   IdExtract? idExtract;
+  SsmExtract? ssmExtract;
 
   @override
   Stream<List<PendingVerification>> watchPending() async* {
@@ -1226,6 +1227,9 @@ class FakeVerificationRepository implements VerificationRepository {
 
   @override
   Future<IdExtract?> loadIdExtract(String uid) async => idExtract;
+
+  @override
+  Future<SsmExtract?> loadSsmExtract(String uid) async => ssmExtract;
 
   @override
   Future<void> decide({

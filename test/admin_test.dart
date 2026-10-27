@@ -7,6 +7,7 @@ import 'package:fairbid/features/onboarding/data/face_checker.dart';
 import 'package:fairbid/features/onboarding/domain/onboarding_data.dart';
 import 'package:fairbid/features/onboarding/domain/requestor_onboarding_data.dart';
 import 'package:fairbid/features/onboarding/domain/id_extract.dart';
+import 'package:fairbid/features/onboarding/domain/ssm_extract.dart';
 import 'package:fairbid/features/profile/domain/review.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -89,6 +90,33 @@ void main() {
       expect(find.text('Does not match'), findsOneWidget);
       expect(find.textContaining(idFailureLabel('name-mismatch')),
           findsOneWidget);
+    });
+
+    testWidgets('detail shows the automated SSM check result', (tester) async {
+      final business = PendingVerification(
+        uid: 'prov-9',
+        displayName: 'Alex Rivera',
+        role: UserRole.provider,
+        providerType: 'business',
+        ssmNumber: '201903350205',
+      );
+      await openDetail(tester, FakeVerificationRepository([business])
+        ..ssmExtract = const SsmExtract(
+          verdict: SsmVerdict.needsReview,
+          failures: ['not-digitally-signed'],
+          businessName: 'JIN XIAO LONG TRADING',
+          registrationNumber: '201903350205',
+        ));
+      expect(find.text('Automated SSM checks'), findsOneWidget);
+      expect(find.text('JIN XIAO LONG TRADING'), findsOneWidget);
+      expect(find.text('Matches entered'), findsOneWidget);
+      expect(find.textContaining('Not a digitally certified copy'),
+          findsOneWidget);
+    });
+
+    testWidgets('individual detail hides the SSM checks', (tester) async {
+      await openDetail(tester, FakeVerificationRepository([samplePending()]));
+      expect(find.text('Automated SSM checks'), findsNothing);
     });
 
     testWidgets('detail shows the face comparison when ID and selfie exist', (

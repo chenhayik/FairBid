@@ -3,17 +3,19 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/util/ssm_number.dart';
 import '../../../core/util/time_ago.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/face_crop.dart';
 import '../../onboarding/domain/id_extract.dart';
+import '../../onboarding/domain/ssm_extract.dart';
 import '../data/verification_repository.dart';
 import '../domain/pending_verification.dart';
 import 'widgets/document_gallery.dart';
 
 /// What:   Admin review screen for one applicant.
-/// Input:  [verification] from the queue; identity photos and the ID check via VerificationRepository.
-/// Output: Profile, documents, face comparison and ID checks; Approve / Reject calls decide() then pops.
+/// Input:  [verification] from the queue; identity photos and the ID and SSM checks via VerificationRepository.
+/// Output: Profile, documents, face comparison, ID and SSM checks; Approve / Reject calls decide() then pops.
 class VerificationDetailScreen extends StatefulWidget {
   const VerificationDetailScreen({super.key, required this.verification});
 
@@ -28,6 +30,7 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
   bool _busy = false;
   late final Future<List<VerificationDocument>> _identityDocs;
   late final Future<IdExtract?> _idExtract;
+  late final Future<SsmExtract?> _ssmExtract;
 
   PendingVerification get v => widget.verification;
 
@@ -37,6 +40,7 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
     _identityDocs =
         context.read<VerificationRepository>().loadIdentityDocuments(v.uid);
     _idExtract = context.read<VerificationRepository>().loadIdExtract(v.uid);
+    _ssmExtract = context.read<VerificationRepository>().loadSsmExtract(v.uid);
   }
 
   /// What:   Approves the applicant after a confirm dialog.
@@ -170,6 +174,30 @@ class _VerificationDetailScreenState extends State<VerificationDetailScreen> {
                       loading: snap.connectionState == ConnectionState.waiting,
                     ),
                   ),
+                  FutureBuilder<SsmExtract?>(
+                    future: _ssmExtract,
+                    builder: (context, snap) {
+                      // Only business applicants upload an SSM certificate.
+                      if (v.providerType != 'business' && snap.data == null) {
+                        return const SizedBox.shrink();
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SizedBox(height: 24),
+                          Text('Automated SSM checks',
+                              style: theme.textTheme.titleLarge),
+                          const SizedBox(height: 12),
+                          _SsmChecksCard(
+                            extract: snap.data,
+                            typedNumber: v.ssmNumber,
+                            loading: snap.connectionState ==
+                                ConnectionState.waiting,
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                   const SizedBox(height: 24),
                   const InfoBanner(
                     icon: Icons.gpp_good_outlined,
@@ -292,6 +320,95 @@ class _IdChecksCard extends StatelessWidget {
           for (final f in e.failures) ...[
             const SizedBox(height: 8),
             Text('• ${idFailureLabel(f)}', style: theme.textTheme.bodySmall),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// What:   The server's advisory SSM document check; the admin decides.
+/// Input:  [extract] via VerificationRepository.loadSsmExtract() (verification_repository.dart); [typedNumber] the applicant entered; [loading] while it loads.
+/// Output: Verdict pill, name and number read from the document, number match, expiry, owner check and failure reasons.
+/// How:    The number match compares both numbers in SsmNumber's normalized form.
+class _SsmChecksCard extends StatelessWidget {
+  const _SsmChecksCard(
+      {required this.extract, required this.typedNumber, required this.loading});
+
+  final SsmExtract? extract;
+  final String? typedNumber;
+  final bool loading;
+
+  /// Admin-facing text for the codes written by `extractSsmDocument`.
+  static String _reason(String code) => switch (code) {
+        'not-a-pdf' => 'The file is not a PDF',
+        'hidden-text' => 'The PDF contains hidden text',
+        'no-text-layer' => 'No text layer: likely a photo or scan, not the '
+            'original SSM PDF',
+        'no-registration-number' => 'No registration number found',
+        'number-mismatch' => 'The number on the document does not match the '
+            'one entered',
+        'registration-expired' => 'The registration has expired',
+        'missing-ssm-markers' => 'The usual SSM markings are missing',
+        'not-digitally-signed' => 'Not a digitally certified copy; check it '
+            'by hand',
+        _ => code,
+      };
+
+  /// What:   Whether the document's number matches the typed one.
+  /// Output: true / false, or null when either number is missing.
+  bool? get _numberMatches {
+    String? norm(String? s) => s == null || s.trim().isEmpty
+        ? null
+        : SsmNumber.parse(s)?.normalized ??
+            s.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
+    final found = norm(extract?.registrationNumber);
+    final typed = norm(typedNumber);
+    return found == null || typed == null ? null : found == typed;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final e = extract;
+    if (e == null) {
+      return AppCard(
+        child: Text(loading ? 'Loading…' : 'No automated check yet',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+      );
+    }
+    final (label, color) = switch (e.verdict) {
+      SsmVerdict.passed => ('Passed', context.fairbid.successText),
+      SsmVerdict.needsReview => ('Needs review', context.fairbid.warningText),
+      SsmVerdict.rejected => ('Rejected', context.fairbid.danger),
+    };
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PillBadge(label: label, color: color),
+          const SizedBox(height: 12),
+          ..._keyValueRows([
+            ('Business name', e.businessName ?? 'Not read'),
+            ('Registration No.', e.registrationNumber ?? 'Not read'),
+            (
+              'Number',
+              _IdChecksCard._tri(
+                  _numberMatches, 'Matches entered', 'Does not match')
+            ),
+            ('Expiry', e.expiryDate ?? 'Not stated'),
+            // Null means no Business Profile, or no readable owner name on it.
+            (
+              'Owner',
+              e.ownerNameMatches == null
+                  ? 'Not checked'
+                  : (e.ownerNameMatches! ? 'Matches account' : 'Does not match')
+            ),
+          ], 8),
+          for (final f in e.failures) ...[
+            const SizedBox(height: 8),
+            Text('• ${_reason(f)}', style: theme.textTheme.bodySmall),
           ],
         ],
       ),
