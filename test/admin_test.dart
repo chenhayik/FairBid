@@ -114,6 +114,20 @@ void main() {
           findsOneWidget);
     });
 
+    testWidgets('a PDF document shows as a PDF, not a broken image', (
+      tester,
+    ) async {
+      await openDetail(tester, FakeVerificationRepository([samplePending()])
+        ..identityDocuments = const [
+          VerificationDocument(
+              label: 'SSM Document',
+              url: 'https://fake.storage/o/verification%2Fu%2Fssm_document_1.pdf'
+                  '?alt=media&token=t'),
+        ]);
+      expect(find.text('Tap to open PDF'), findsOneWidget);
+      expect(find.byIcon(Icons.picture_as_pdf_outlined), findsOneWidget);
+    });
+
     testWidgets('individual detail hides the SSM checks', (tester) async {
       await openDetail(tester, FakeVerificationRepository([samplePending()]));
       expect(find.text('Automated SSM checks'), findsNothing);
