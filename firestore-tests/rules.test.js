@@ -1,6 +1,7 @@
 // Security-rules tests for `firestore.rules`, run against the Firestore
 // emulator (see ./README.md). Each case proves one ALLOW or DENY the rules claim.
 
+const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -21,6 +22,9 @@ const {
   getDocs,
   serverTimestamp,
   Timestamp,
+  writeBatch,
+  runTransaction,
+  increment,
 } = require("firebase/firestore");
 
 const RULES_PATH = path.resolve(__dirname, "../firestore.rules");
@@ -55,9 +59,42 @@ async function seed(docs) {
   });
 }
 
-/** Firestore client authenticated as the given uid. */
-function dbAs(uid) {
-  return testEnv.authenticatedContext(uid).firestore();
+/** Firestore client signed in as [uid]; verified email unless [verified] is false. */
+function dbAs(uid, verified = true) {
+  return testEnv.authenticatedContext(uid, {email_verified: verified})
+      .firestore();
+}
+
+/**
+ * Submits a bid the way bid_repository.dart submitBid does: one transaction
+ * that reads the bid, writes it, and adds 1 to the job's bidCount only when
+ * the bid is new.
+ */
+function submitBidTx(uid, jobId, bid) {
+  const db = dbAs(uid);
+  const bidRef = doc(db, `jobs/${jobId}/bids/${uid}`);
+  return runTransaction(db, async (tx) => {
+    const existing = await tx.get(bidRef);
+    tx.set(bidRef, bid);
+    if (!existing.exists()) {
+      tx.update(doc(db, `jobs/${jobId}`), {bidCount: increment(1)});
+    }
+  });
+}
+
+/**
+ * Withdraws a bid the way withdrawBid does: read, delete, and -1 on the
+ * job's bidCount in one transaction.
+ */
+function withdrawBidTx(uid, jobId) {
+  const db = dbAs(uid);
+  const bidRef = doc(db, `jobs/${jobId}/bids/${uid}`);
+  return runTransaction(db, async (tx) => {
+    const existing = await tx.get(bidRef);
+    if (!existing.exists()) return;
+    tx.delete(bidRef);
+    tx.update(doc(db, `jobs/${jobId}`), {bidCount: increment(-1)});
+  });
 }
 
 const approvedProvider = {
@@ -94,15 +131,14 @@ describe("Bids", () => {
   });
 
   it("allows create with a valid amount and a truthful trust snapshot on an open job", async () => {
-    await assertSucceeds(
-        setDoc(doc(dbAs(PROVIDER), bidPath(JOB_ID)), validBid()));
+    await assertSucceeds(submitBidTx(PROVIDER, JOB_ID, validBid()));
   });
 
   const denied = {
     "a negative amountSen": {amountSen: -100},
     "a zero amountSen": {amountSen: 0},
     "a non-integer amountSen": {amountSen: 12.5},
-    "an amountSen over the 100,000,000 cap": {amountSen: 100000001},
+    "an amountSen over the 5,000,000 cap (RM 50,000)": {amountSen: 5000001},
     "a providerTrustScore that isn't the stored one": {providerTrustScore: 999},
     "a providerScoreVisible that isn't the stored one":
         {providerScoreVisible: false},
@@ -112,10 +148,14 @@ describe("Bids", () => {
   };
   for (const [name, overrides] of Object.entries(denied)) {
     it(`denies create with ${name}`, async () => {
-      await assertFails(setDoc(
-          doc(dbAs(PROVIDER), bidPath(JOB_ID)), validBid(overrides)));
+      await assertFails(submitBidTx(PROVIDER, JOB_ID, validBid(overrides)));
     });
   }
+
+  it("allows an amountSen of exactly 5,000,000 (PlatformConfig.maxBidSen)", async () => {
+    await assertSucceeds(
+        submitBidTx(PROVIDER, JOB_ID, validBid({amountSen: 5000000})));
+  });
 
   it("lets a provider edit their pending bid but not flip it to accepted", async () => {
     await seed([[bidPath(JOB_ID), validBid()]]);
@@ -131,8 +171,7 @@ describe("Bids", () => {
       status: "open",
       deadline: new Date(Date.now() - 60_000),
     }]]);
-    await assertFails(
-        setDoc(doc(dbAs(PROVIDER), bidPath("expired")), validBid()));
+    await assertFails(submitBidTx(PROVIDER, "expired", validBid()));
   });
 
   it("allows create while the job's bidding deadline is still in the future", async () => {
@@ -141,8 +180,7 @@ describe("Bids", () => {
       status: "open",
       deadline: new Date(Date.now() + 3_600_000),
     }]]);
-    await assertSucceeds(
-        setDoc(doc(dbAs(PROVIDER), bidPath("future")), validBid()));
+    await assertSucceeds(submitBidTx(PROVIDER, "future", validBid()));
   });
 
   it("allows create with a providerPhotoUrl matching the stored profile", async () => {
@@ -151,11 +189,10 @@ describe("Bids", () => {
       ...approvedProvider,
       profilePhotoUrl: "https://example.com/me.jpg",
     }]]);
-    await assertSucceeds(setDoc(
-        doc(dbAs(PHOTO_PROVIDER), bidPath(JOB_ID, PHOTO_PROVIDER)), validBid({
-          providerId: PHOTO_PROVIDER,
-          providerPhotoUrl: "https://example.com/me.jpg",
-        })));
+    await assertSucceeds(submitBidTx(PHOTO_PROVIDER, JOB_ID, validBid({
+      providerId: PHOTO_PROVIDER,
+      providerPhotoUrl: "https://example.com/me.jpg",
+    })));
   });
 
   it("denies create by a non-approved provider", async () => {
@@ -165,19 +202,192 @@ describe("Bids", () => {
       trustScore: 0,
       trust: {scoreVisible: false},
     }]]);
-    await assertFails(setDoc(
-        doc(dbAs("provider2"), bidPath(JOB_ID, "provider2")), validBid({
-          providerId: "provider2",
-          providerTrustScore: 0,
-          providerScoreVisible: false,
-        })));
+    await assertFails(submitBidTx("provider2", JOB_ID, validBid({
+      providerId: "provider2",
+      providerTrustScore: 0,
+      providerScoreVisible: false,
+    })));
   });
 
   it("denies create when the job isn't open", async () => {
     await seed([[`jobs/in-progress`,
       {requestorId: REQUESTOR, status: "in_progress"}]]);
-    await assertFails(
-        setDoc(doc(dbAs(PROVIDER), bidPath("in-progress")), validBid()));
+    await assertFails(submitBidTx(PROVIDER, "in-progress", validBid()));
+  });
+
+  // `bidCount` on the job may only step by one, together with the caller's own
+  // bid appearing (+1) or disappearing (-1).
+  describe("bidCount", () => {
+    const jobPath = `jobs/${JOB_ID}`;
+
+    beforeEach(async () => {
+      await seed([[jobPath, {
+        requestorId: REQUESTOR, status: "open", bidCount: 3,
+      }]]);
+    });
+
+    it("allows +1 in the same batch as creating the caller's own new bid", async () => {
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid());
+      batch.update(doc(db, jobPath), {bidCount: increment(1)});
+      await assertSucceeds(batch.commit());
+    });
+
+    it("allows +1 in a transaction that creates the caller's own new bid", async () => {
+      const db = dbAs(PROVIDER);
+      await assertSucceeds(runTransaction(db, async (tx) => {
+        const bidRef = doc(db, bidPath(JOB_ID));
+        const existing = await tx.get(bidRef);
+        tx.set(bidRef, validBid());
+        if (!existing.exists()) {
+          tx.update(doc(db, jobPath), {bidCount: increment(1)});
+        }
+      }));
+    });
+
+    it("submitBid shape: a new bid (tx.get, set, +1) is allowed", async () => {
+      await assertSucceeds(submitBidTx(PROVIDER, JOB_ID, validBid()));
+    });
+
+    it("withdrawBid shape: (tx.get, delete, -1) is allowed", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      await assertSucceeds(withdrawBidTx(PROVIDER, JOB_ID));
+    });
+
+    it("editing an existing bid with no increment is allowed", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      await assertSucceeds(
+          submitBidTx(PROVIDER, JOB_ID, validBid({amountSen: 40000})));
+      await assertSucceeds(updateDoc(
+          doc(dbAs(PROVIDER), bidPath(JOB_ID)), {amountSen: 30000}));
+    });
+
+    it("denies editing an existing bid together with a bidCount change", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.update(doc(db, bidPath(JOB_ID)), {amountSen: 40000});
+      batch.update(doc(db, jobPath), {bidCount: increment(-1)});
+      await assertFails(batch.commit());
+    });
+
+    it("denies creating a bid without the +1", async () => {
+      await assertFails(
+          setDoc(doc(dbAs(PROVIDER), bidPath(JOB_ID)), validBid()));
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid());
+      batch.update(doc(db, jobPath), {bidCount: increment(0)});
+      await assertFails(batch.commit());
+    });
+
+    it("denies creating a bid with more than +1", async () => {
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid());
+      batch.update(doc(db, jobPath), {bidCount: increment(2)});
+      await assertFails(batch.commit());
+    });
+
+    it("denies deleting a bid without the -1", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      await assertFails(deleteDoc(doc(dbAs(PROVIDER), bidPath(JOB_ID))));
+    });
+
+    it("denies deleting a bid with more than -1", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.delete(doc(db, bidPath(JOB_ID)));
+      batch.update(doc(db, jobPath), {bidCount: increment(-2)});
+      await assertFails(batch.commit());
+    });
+
+    it("denies the delete-without-decrement then recreate cycle", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      // Step 1 (a bare delete) is what lets the count drift; it must fail.
+      await assertFails(deleteDoc(doc(dbAs(PROVIDER), bidPath(JOB_ID))));
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        assert.ok((await getDoc(doc(db, bidPath(JOB_ID)))).exists());
+        assert.strictEqual((await getDoc(doc(db, jobPath))).data().bidCount, 3);
+      });
+      // With the bid still there, "re-creating" it with +1 fails too.
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid());
+      batch.update(doc(db, jobPath), {bidCount: increment(1)});
+      await assertFails(batch.commit());
+    });
+
+    it("lets a provider bid and withdraw when the job has no bidCount yet", async () => {
+      await seed([[`jobs/nocount`, {requestorId: REQUESTOR, status: "open"}]]);
+      await assertSucceeds(submitBidTx(PROVIDER, "nocount", validBid()));
+      await assertSucceeds(withdrawBidTx(PROVIDER, "nocount"));
+    });
+
+    it("lets a provider withdraw when the stored count is already wrong", async () => {
+      await seed([
+        [`jobs/zero`, {requestorId: REQUESTOR, status: "open", bidCount: 0}],
+        [bidPath("zero"), validBid()],
+      ]);
+      await assertSucceeds(withdrawBidTx(PROVIDER, "zero"));
+    });
+
+    it("denies +1 without creating a bid", async () => {
+      await assertFails(
+          updateDoc(doc(dbAs(PROVIDER), jobPath), {bidCount: increment(1)}));
+    });
+
+    it("denies +1 when the caller's bid already existed", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid({amountSen: 40000}));
+      batch.update(doc(db, jobPath), {bidCount: increment(1)});
+      await assertFails(batch.commit());
+    });
+
+    it("denies +1 when only someone else's bid exists", async () => {
+      await seed([[bidPath(JOB_ID, "provider3"),
+        validBid({providerId: "provider3"})]]);
+      await assertFails(
+          updateDoc(doc(dbAs(PROVIDER), jobPath), {bidCount: increment(1)}));
+    });
+
+    it("allows -1 together with deleting the caller's own bid", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.delete(doc(db, bidPath(JOB_ID)));
+      batch.update(doc(db, jobPath), {bidCount: increment(-1)});
+      await assertSucceeds(batch.commit());
+    });
+
+    it("denies -1 without deleting a bid", async () => {
+      await seed([[bidPath(JOB_ID), validBid()]]);
+      await assertFails(
+          updateDoc(doc(dbAs(PROVIDER), jobPath), {bidCount: increment(-1)}));
+    });
+
+    it("denies an arbitrary change such as +5, even with a new bid", async () => {
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid());
+      batch.update(doc(db, jobPath), {bidCount: increment(5)});
+      await assertFails(batch.commit());
+      await assertFails(
+          updateDoc(doc(dbAs(PROVIDER), jobPath), {bidCount: 0}));
+    });
+
+    it("denies +1 that also changes another job field", async () => {
+      const db = dbAs(PROVIDER);
+      const batch = writeBatch(db);
+      batch.set(doc(db, bidPath(JOB_ID)), validBid());
+      batch.update(doc(db, jobPath), {bidCount: increment(1), title: "x"});
+      await assertFails(batch.commit());
+    });
   });
 });
 
@@ -258,6 +468,44 @@ describe("Reviews", () => {
     // flagging - not a second, differently-scored review.
     await assertFails(review(REQUESTOR, PROVIDER, id, "taskB", 4));
   });
+
+  // Reporting a review: the same update review_repository.dart flagReview sends.
+  describe("reporting a review", () => {
+    const ID = `done_${PROVIDER}`;
+    const PATH = `users/${REQUESTOR}/reviews/${ID}`;
+    const flag = (uid, extra = {}) =>
+      updateDoc(doc(dbAs(uid), PATH), {
+        flagged: true, flagReason: "Never my provider.", flaggedByUid: uid,
+        ...extra,
+      });
+
+    it("allows reporting a review saved without a flagged field (as the app creates it)", async () => {
+      await seed([[PATH, {reviewerId: PROVIDER, jobId: "done", rating: 1}]]);
+      await assertSucceeds(flag(REQUESTOR));
+    });
+
+    it("allows reporting again after an admin kept it (flagged false)", async () => {
+      await seed([[PATH,
+        {reviewerId: PROVIDER, jobId: "done", rating: 1, flagged: false}]]);
+      await assertSucceeds(flag(REQUESTOR));
+    });
+
+    it("denies reporting a review that is already flagged", async () => {
+      await seed([[PATH,
+        {reviewerId: PROVIDER, jobId: "done", rating: 1, flagged: true}]]);
+      await assertFails(flag(REQUESTOR));
+    });
+
+    it("denies changing the rating while reporting", async () => {
+      await seed([[PATH, {reviewerId: PROVIDER, jobId: "done", rating: 1}]]);
+      await assertFails(flag(REQUESTOR, {rating: 5}));
+    });
+
+    it("denies reporting in someone else's name", async () => {
+      await seed([[PATH, {reviewerId: PROVIDER, jobId: "done", rating: 1}]]);
+      await assertFails(flag(REQUESTOR, {flaggedByUid: STRANGER}));
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -337,19 +585,16 @@ describe("Bundles", () => {
   });
 
   it("denies an ordinary per-job bid while the task's bundle is open", async () => {
-    await assertFails(setDoc(
-        doc(dbAs(PROVIDER), `jobs/${TASK_ID}/bids/${PROVIDER}`), validBid));
+    await assertFails(submitBidTx(PROVIDER, TASK_ID, validBid));
   });
 
   it("allows an ordinary per-job bid once the bundle is no longer open", async () => {
     await seed([[`bundles/${BUNDLE_ID}`, {...openBundle, status: "awarded"}]]);
-    await assertSucceeds(setDoc(
-        doc(dbAs(PROVIDER), `jobs/${TASK_ID}/bids/${PROVIDER}`), validBid));
+    await assertSucceeds(submitBidTx(PROVIDER, TASK_ID, validBid));
   });
 
   it("leaves bidding on an ordinary single-task job unchanged", async () => {
-    await assertSucceeds(setDoc(
-        doc(dbAs(PROVIDER), `jobs/plain1/bids/${PROVIDER}`), validBid));
+    await assertSucceeds(submitBidTx(PROVIDER, "plain1", validBid));
   });
 
   it("denies cancelling one task while its bundle is open", async () => {
@@ -414,6 +659,50 @@ describe("Server-owned job fields", () => {
           doc(dbAs(REQUESTOR), "jobs/job1"), {[field]: value}));
     });
   }
+
+  it("allows the owner to edit their job's title", async () => {
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), "jobs/job1"), {title: "New title"}));
+  });
+
+  it("allows the owner to cancel their open job, leaving bidCount alone", async () => {
+    await seed([["jobs/open1",
+      {requestorId: REQUESTOR, status: "open", bidCount: 2}]]);
+    await assertSucceeds(updateDoc(
+        doc(dbAs(REQUESTOR), "jobs/open1"), {status: "cancelled"}));
+  });
+
+  describe("owner changing bidCount", () => {
+    beforeEach(async () => {
+      await seed([["jobs/counted",
+        {requestorId: REQUESTOR, status: "open", bidCount: 2}]]);
+    });
+
+    const attempts = {
+      "alone (to 0)": {bidCount: 0},
+      "alone (to 999)": {bidCount: 999},
+      "by +1 with increment": {bidCount: increment(1)},
+      "by -1 with increment": {bidCount: increment(-1)},
+      "together with a title edit": {title: "x", bidCount: 0},
+    };
+    for (const [name, patch] of Object.entries(attempts)) {
+      it(`denies the owner changing bidCount ${name}`, async () => {
+        await assertFails(updateDoc(
+            doc(dbAs(REQUESTOR), "jobs/counted"), patch));
+      });
+    }
+
+    it("denies the owner adding bidCount to a job that has none", async () => {
+      await seed([["jobs/nocount2", {requestorId: REQUESTOR, status: "open"}]]);
+      await assertFails(updateDoc(
+          doc(dbAs(REQUESTOR), "jobs/nocount2"), {bidCount: 5}));
+    });
+
+    it("allows the owner to resend the same bidCount with another edit", async () => {
+      await assertSucceeds(updateDoc(
+          doc(dbAs(REQUESTOR), "jobs/counted"), {title: "x", bidCount: 2}));
+    });
+  });
 
   it("denies the owner clearing fundedAtAward", async () => {
     await assertFails(updateDoc(
@@ -566,6 +855,11 @@ describe("User profile", () => {
           {role: "requestor", ...extra}));
     });
   }
+
+  it("denies the owner writing walletBalanceSen on their user doc, even to 0", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(UID), `users/${UID}`), {walletBalanceSen: 0}));
+  });
 
   it("allows a normal sign-up to create its own profile", async () => {
     await assertSucceeds(setDoc(doc(dbAs("newcomer"), "users/newcomer"), {
@@ -766,6 +1060,39 @@ describe("Private user docs", () => {
     });
   }
 
+  // The balance lives here: the owner and admins read it, nobody writes it
+  // from a client (only Cloud Functions, which bypass the rules).
+  describe("wallet", () => {
+    it("lets the owner and admins read it, but not another user", async () => {
+      await seed([[at("wallet"), {walletBalanceSen: 5000}]]);
+      await assertSucceeds(getDoc(doc(dbAs(OWNER), at("wallet"))));
+      await assertSucceeds(getDoc(doc(dbAs(ADMIN), at("wallet"))));
+      await assertFails(getDoc(doc(dbAs(OTHER), at("wallet"))));
+    });
+
+    it("denies the owner creating it", async () => {
+      await assertFails(
+          setDoc(doc(dbAs(OWNER), at("wallet")), {walletBalanceSen: 999999}));
+    });
+
+    it("denies the owner updating it", async () => {
+      await seed([[at("wallet"), {walletBalanceSen: 5000}]]);
+      await assertFails(updateDoc(
+          doc(dbAs(OWNER), at("wallet")), {walletBalanceSen: 999999}));
+      await assertFails(setDoc(
+          doc(dbAs(OWNER), at("wallet")), {walletBalanceSen: 1},
+          {merge: true}));
+      await assertFails(deleteDoc(doc(dbAs(OWNER), at("wallet"))));
+    });
+
+    it("denies other users and admins writing it", async () => {
+      await assertFails(setDoc(
+          doc(dbAs(OTHER), at("wallet")), {walletBalanceSen: 999999}));
+      await assertFails(setDoc(
+          doc(dbAs(ADMIN), at("wallet")), {walletBalanceSen: 999999}));
+    });
+  });
+
   it("denies every client access to idRegistry", async () => {
     await seed([["idRegistry/abc", {uid: OWNER}]]);
     await assertFails(getDoc(doc(dbAs(OWNER), "idRegistry/abc")));
@@ -912,5 +1239,42 @@ describe("Bundle bids", () => {
         where("providerId", "==", providerId)));
     await assertSucceeds(mine(PROVIDER));
     await assertFails(mine(RIVAL));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Email verification - writes need `email_verified` in the ID token, except
+// the profile create at sign-up.
+// ---------------------------------------------------------------------------
+describe("Email verification", () => {
+  const USER = "user9";
+
+  beforeEach(async () => {
+    await seed([[`users/${USER}`, {role: "requestor"}]]);
+  });
+
+  it("still lets an unverified sign-up create its profile", async () => {
+    await assertSucceeds(setDoc(doc(dbAs("newcomer9", false), "users/newcomer9"), {
+      role: "requestor",
+      displayName: "New User",
+      verificationStatus: "none",
+    }));
+  });
+
+  it("denies an unverified user posting a job; allows once verified", async () => {
+    const job = {requestorId: USER, status: "open"};
+    await assertFails(setDoc(doc(dbAs(USER, false), "jobs/job9"), job));
+    await assertSucceeds(setDoc(doc(dbAs(USER), "jobs/job9"), job));
+  });
+
+  it("denies an unverified user editing their profile", async () => {
+    await assertFails(updateDoc(
+        doc(dbAs(USER, false), `users/${USER}`), {bio: "hi"}));
+  });
+
+  it("denies an unverified user writing private docs", async () => {
+    await assertFails(setDoc(
+        doc(dbAs(USER, false), `users/${USER}/private/verification`),
+        {icNumber: "900101075555"}));
   });
 });

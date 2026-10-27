@@ -10,6 +10,7 @@ import 'package:fairbid/features/jobs/data/bundle_bid_repository.dart';
 import 'package:fairbid/features/jobs/data/bundle_repository.dart';
 import 'package:fairbid/features/jobs/data/job_repository.dart';
 import 'package:fairbid/features/jobs/presentation/bundle/bundle_detail_screen.dart';
+import 'package:fairbid/features/profile/data/public_profile_repository.dart';
 import 'package:provider/provider.dart';
 import 'package:fairbid/features/auth/domain/app_user.dart';
 import 'package:fairbid/features/jobs/domain/bundle.dart';
@@ -285,6 +286,9 @@ Future<void> pumpOwnerBundleScreen(
                 Provider<BundleRepository>.value(value: bundles),
                 Provider<JobRepository>.value(value: FakeJobRepository(tasks)),
                 Provider<BundleBidRepository>.value(value: bundleBids),
+                Provider<PublicProfileRepository>.value(
+                  value: FakePublicProfileRepository(),
+                ),
                 ChangeNotifierProvider<AuthController>(
                   create: (_) => AuthController(
                     FakeAuthRepository()..seedSignedIn(UserRole.requestor),

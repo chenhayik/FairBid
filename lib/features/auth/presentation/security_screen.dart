@@ -13,6 +13,7 @@ import 'reauth_dialog.dart';
 /// What:   Profile > Security screen to turn two-factor authentication on or off.
 /// Input:  [AuthController] (enrolled factors, TOTP enrolment, unenrol).
 /// Output: Status or setup card; enrolment runs here because the TOTP secret lives in memory only.
+/// Notes:  Also the forced `/setup-2fa` screen for providers and admins, who cannot turn 2FA off.
 class SecurityScreen extends StatefulWidget {
   const SecurityScreen({super.key});
 
@@ -148,24 +149,32 @@ class _SecurityScreenState extends State<SecurityScreen> {
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthController>().user;
+    final forced = user?.needsTwoFactor ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('Security')),
+      appBar: AppBar(
+        title: const Text('Security'),
+        // The forced setup has no way back, so let the user leave.
+        actions: [
+          if (forced)
+            TextButton(
+              onPressed: () => context.read<AuthController>().signOut(),
+              child: const Text('Sign out'),
+            ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
             if (_error != null) ErrorBanner(_error!),
-            if (user != null && !user.emailVerified)
-              InfoBanner(
-                icon: Icons.mark_email_unread_outlined,
-                title: 'Verify your email first',
-                body: 'Two-factor authentication needs a verified email '
-                    'address. Check your inbox for the link we sent.',
-                color: context.fairbid.warningText,
-                background: context.fairbid.warning.withValues(alpha: 0.12),
-                leftAccent: true,
-              )
-            else if (_enrollment != null)
+            if (forced)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 16),
+                child: Text('Service providers and admins must turn on '
+                    'two-factor authentication before using FairBid.'),
+              ),
+            // Unverified users never get here: the router holds them on /verify-email.
+            if (_enrollment != null)
               _SetupCard(
                 enrollment: _enrollment!,
                 code: _code,
@@ -187,7 +196,10 @@ class _SecurityScreenState extends State<SecurityScreen> {
                     factor: factor,
                     busy: _busy,
                     onTurnOn: _startSetup,
-                    onTurnOff: factor == null ? null : () => _turnOff(factor),
+                    // Required for providers and admins, so no Turn off.
+                    onTurnOff: factor == null || (user?.requiresTwoFactor ?? false)
+                        ? null
+                        : () => _turnOff(factor),
                   );
                 },
               ),
@@ -199,7 +211,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
 }
 
 /// What:   The On/Off status with its turn-on or turn-off action.
-/// Input:  [factor] (null when off); [busy]; [onTurnOn] / [onTurnOff] callbacks.
+/// Input:  [factor] (null when off); [busy]; [onTurnOn] / [onTurnOff] callbacks (null [onTurnOff] hides Turn off).
 /// Output: AppCard with the status text and one button.
 class _StatusCard extends StatelessWidget {
   const _StatusCard({
@@ -259,12 +271,12 @@ class _StatusCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          if (on)
+          if (on && onTurnOff != null)
             SecondaryButton(
               label: 'Turn off',
               onPressed: busy ? null : onTurnOff,
             )
-          else
+          else if (!on)
             PrimaryButton(
               label: 'Turn on',
               busy: busy,

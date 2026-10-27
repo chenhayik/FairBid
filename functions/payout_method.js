@@ -4,7 +4,9 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const {FieldValue, Timestamp} = require("firebase-admin/firestore");
-const {callerUid, bad, throwIfSuspended, notifyUser} = require("./common");
+const {
+  callerUid, bad, throwIfSuspended, assertTwoFactor, notifyUser,
+} = require("./common");
 
 // Must match lib/core/util/malaysian_banks.dart. Lengths are account digits.
 const BANKS = [
@@ -154,6 +156,7 @@ exports.savePayoutMethod = functions.https.onCall(async (data, context) => {
           "permission-denied", "Admins don't have a payout method.");
     }
     throwIfSuspended(user);
+    await assertTwoFactor(uid, user.role);
     const built = buildPayoutMethod(data, {
       // Older accounts still keep the phone on the public doc.
       phone: payoutSnap.data()?.phone ?? user.phone,

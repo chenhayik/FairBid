@@ -61,6 +61,27 @@ class BundleBid {
     this.updatedAt,
   });
 
+  /// What:   Copy of the bid with the provider's current score.
+  /// Input:  [trustScore] and [scoreVisible] from the provider's profile.
+  /// Output: New BundleBid; the bid-time snapshot is stale for ranking.
+  BundleBid withTrust({required int trustScore, required bool scoreVisible}) =>
+      BundleBid(
+        bundleId: bundleId,
+        providerId: providerId,
+        providerName: providerName,
+        providerPhotoUrl: providerPhotoUrl,
+        providerTrustScore: trustScore,
+        providerScoreVisible: scoreVisible,
+        taskPrices: taskPrices,
+        bundlePriceSen: bundlePriceSen,
+        estimatedDuration: estimatedDuration,
+        message: message,
+        status: status,
+        bundleTitle: bundleTitle,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+      );
+
   /// From the doc path, not a stored field.
   final String bundleId;
   final String providerId;

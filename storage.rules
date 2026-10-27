@@ -11,13 +11,19 @@ service firebase.storage {
              .data.role == 'admin';
     }
 
+    // Uploads go only to the caller's own folder, and need a verified email.
+    function isVerifiedOwner(userId) {
+      return request.auth != null
+        && request.auth.uid == userId
+        && request.auth.token.email_verified == true;
+    }
+
     // Verification files: owner reads/writes, admins read. Images or PDF, under 10 MB.
     // `contentType` is client-set, so this is only an accident guard, not security.
     match /verification/{userId}/{allPaths=**} {
       allow read: if request.auth != null
                   && (request.auth.uid == userId || isAdmin());
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
+      allow write: if isVerifiedOwner(userId)
                    && request.resource.size > 0
                    && request.resource.size < 10 * 1024 * 1024
                    && request.resource.contentType != null
@@ -28,8 +34,7 @@ service firebase.storage {
     // Job photos/video: any signed-in user reads, only the owner writes (max 50 MB).
     match /jobs/{userId}/{allPaths=**} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
+      allow write: if isVerifiedOwner(userId)
                    && request.resource.size < 50 * 1024 * 1024
                    && (request.resource.contentType.matches('image/.*')
                        || request.resource.contentType.matches('video/.*'));
@@ -39,14 +44,13 @@ service firebase.storage {
     match /disputes/{userId}/{allPaths=**} {
       allow read: if request.auth != null
                   && (request.auth.uid == userId || isAdmin());
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if isVerifiedOwner(userId);
     }
 
     // Avatars: any signed-in user reads; the owner writes (images only, max 5 MB).
     match /avatars/{userId}/{allPaths=**} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
+      allow write: if isVerifiedOwner(userId)
                    && request.resource.size < 5 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*');
     }

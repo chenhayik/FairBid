@@ -10,7 +10,7 @@ abstract interface class StatsRepository {
   /// Loads the numbers once.
   Future<PlatformStats> load();
 
-  /// Recounts every user's completed jobs and lost disputes (`backfillTrust`); returns the user count. Safe to rerun.
+  /// Recounts every user's completed jobs and lost disputes (`backfillTrust`); returns the user count. It also moves any old wallet balance on the user doc into the private wallet. Safe to rerun.
   Future<int> recomputeTrustScores();
 }
 

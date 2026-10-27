@@ -110,17 +110,27 @@ class AuthController extends ChangeNotifier {
   Future<TotpEnrollment> startTotpEnrollment() =>
       _repository.startTotpEnrollment();
 
+  /// What:   Finishes TOTP enrolment.
+  /// Input:  [enrollment] and the app's [code]; AuthRepository.completeTotpEnrollment().
+  /// Output: True on success, then refreshes [user] so the router lifts the 2FA gate.
   Future<bool> completeTotpEnrollment({
     required TotpEnrollment enrollment,
     required String code,
-  }) =>
-      _run(() => _repository.completeTotpEnrollment(
-            enrollment: enrollment,
-            code: code,
-          ));
+  }) async {
+    final ok = await _run(() => _repository.completeTotpEnrollment(
+          enrollment: enrollment,
+          code: code,
+        ));
+    if (ok) await refreshUser();
+    return ok;
+  }
 
-  Future<bool> unenrollFactor(String factorUid) =>
-      _run(() => _repository.unenrollFactor(factorUid));
+  /// Removes a second factor, then refreshes [user]; the UI hides this for providers and admins.
+  Future<bool> unenrollFactor(String factorUid) async {
+    final ok = await _run(() => _repository.unenrollFactor(factorUid));
+    if (ok) await refreshUser();
+    return ok;
+  }
 
   /// Answers an MFA challenge; false with [errorMessage] on a wrong or expired code.
   Future<bool> submitMfaCode(MfaChallenge challenge, String code) =>

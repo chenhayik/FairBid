@@ -44,7 +44,8 @@ describe("storage.rules", () => {
     await testEnv.clearStorage();
   });
 
-  const asOwner = () => testEnv.authenticatedContext(OWNER).storage();
+  const asOwner = () =>
+    testEnv.authenticatedContext(OWNER, {email_verified: true}).storage();
 
   const verificationRef = (storage, name, uid = OWNER) =>
     ref(storage, `verification/${uid}/${name}`);
@@ -74,6 +75,9 @@ describe("storage.rules", () => {
         "huge.pdf", OWNER, OVER_10_MB, "application/pdf"],
       ["an upload into another user's folder",
         () => testEnv.authenticatedContext(STRANGER).storage(),
+        "ssm_document_1.pdf", OWNER, PDF_BYTES, "application/pdf"],
+      ["an upload from an unverified email",
+        () => testEnv.authenticatedContext(OWNER).storage(),
         "ssm_document_1.pdf", OWNER, PDF_BYTES, "application/pdf"],
       ["an unauthenticated upload",
         () => testEnv.unauthenticatedContext().storage(),

@@ -1,3 +1,4 @@
+import '../../../../core/config/platform_config.dart';
 import '../../domain/bundle_bid.dart';
 import '../../domain/job.dart';
 
@@ -43,4 +44,44 @@ List<String> pickHints(Map<String, String?> picks, List<BundleBid> bids) {
     }
   }
   return hints;
+}
+
+/// What:   Best Value score for one package bid, the same 60/40 blend single jobs use.
+/// Input:  [bid] and [cheapestByTask] (task id to the lowest price any bid offers for it).
+/// Output: PlatformConfig.priceWeight * (cheapest cost of the same tasks / the bid's quoted total)
+///         + trustWeight * trust (scaled to 0-1); cheaper and more trusted scores higher.
+/// Notes:  Bids can cover different tasks, so price is compared task by task, not by raw total.
+///         A "New" provider counts as the neutral baseline, as on single jobs.
+double bundleBidValueScore(BundleBid bid, Map<String, int> cheapestByTask) {
+  final quoted = bid.quotedTotalSen;
+  final cheapest = bid.taskPrices.keys.fold(
+    0,
+    (sum, id) => sum + (cheapestByTask[id] ?? bid.taskPrices[id]!),
+  );
+  final priceScore = quoted <= 0 ? 0.0 : cheapest / quoted;
+  final trust = (bid.providerScoreVisible
+          ? bid.providerTrustScore
+          : PlatformConfig.neutralTrustScore) /
+      1000;
+  return PlatformConfig.priceWeight * priceScore +
+      PlatformConfig.trustWeight * trust;
+}
+
+/// What:   Package bids in Best Value order.
+/// Input:  [bids] (any status).
+/// Output: A new list, highest bundleBidValueScore() first.
+List<BundleBid> rankBundleBidsByValue(List<BundleBid> bids) {
+  final cheapestByTask = <String, int>{};
+  for (final bid in bids) {
+    bid.taskPrices.forEach((id, price) {
+      final lowest = cheapestByTask[id];
+      if (lowest == null || price < lowest) cheapestByTask[id] = price;
+    });
+  }
+  final scores = {
+    for (final bid in bids)
+      bid.providerId: bundleBidValueScore(bid, cheapestByTask),
+  };
+  return [...bids]
+    ..sort((a, b) => scores[b.providerId]!.compareTo(scores[a.providerId]!));
 }
