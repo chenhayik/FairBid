@@ -4,12 +4,14 @@ import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
+import '../../auth/domain/user_role.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../notifications/data/notification_repository.dart';
 
 /// What:   Top bar shared by the main tabs.
-/// Input:  Signed-in uid; NotificationRepository.watchUnreadCount() (notification_repository.dart).
-/// Output: Wordmark and a bell with an unread badge that opens `/notifications`.
+/// Input:  Signed-in user (uid, role) from AuthController.user; NotificationRepository.watchUnreadCount() (notification_repository.dart).
+/// Output: Wordmark with the signed-in role underneath, and a bell with an unread badge that opens `/notifications`.
+/// Notes:  Role line is hidden while signed out; provider is shortened to "Provider".
 class HomeAppBar extends StatelessWidget implements PreferredSizeWidget {
   const HomeAppBar({super.key});
 
@@ -18,18 +20,25 @@ class HomeAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uid = context.watch<AuthController>().user?.uid;
+    final user = context.watch<AuthController>().user;
+    final role = user?.role;
+    final text = Theme.of(context).textTheme;
     return AppBar(
       automaticallyImplyLeading: false,
-      title: Text('FairBid',
-          style: Theme.of(context)
-              .textTheme
-              .titleLarge
-              ?.copyWith(color: context.fairbid.verified)),
+      title: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('FairBid',
+              style: text.titleLarge?.copyWith(color: context.fairbid.verified)),
+          if (role != null)
+            Text(role == UserRole.provider ? 'Provider' : role.label,
+                style: text.labelSmall),
+        ],
+      ),
       actions: [
         IconButton(
           tooltip: 'Notifications',
-          icon: _BellIcon(uid: uid),
+          icon: _BellIcon(uid: user?.uid),
           onPressed: () => context.push('/notifications'),
         ),
       ],
