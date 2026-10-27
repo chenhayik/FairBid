@@ -569,6 +569,18 @@ const TOYYIBPAY_CALLBACK_URL =
     "https://us-central1-fairbid-c9340.cloudfunctions.net/toyyibpayCallback";
 
 /**
+ * What:   Email sent with a toyyibPay bill.
+ * Input:  [email] from the caller's `users/{uid}` doc.
+ * Output: The email if it is a plain address, else a placeholder.
+ * Notes:  toyyibPay rejects some valid addresses (e.g. `a+tag@gmail.com`)
+ *         with "billEmail is invalid format"; it only shows on the receipt.
+ */
+function toyyibpayEmail(email) {
+  const plain = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+  return plain.test(email || "") ? email : "user@fairbid.app";
+}
+
+/**
  * What:   Callable that creates a toyyibPay bill.
  * Input:  {amountSen} from wallet_repository.dart.
  * Output: {billCode, paymentUrl}; a `topups/{billCode}` record is stored.
@@ -612,7 +624,7 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
         // Unique per bill, or toyyibPay may treat a new payment as a repeat.
         billExternalReferenceNo: `${uid}-${Date.now()}`,
         billTo: user.displayName || "FairBid user",
-        billEmail: user.email || "user@fairbid.app",
+        billEmail: toyyibpayEmail(user.email),
         // toyyibPay rejects an empty phone, so use a placeholder if none.
         billPhone: user.phone || "0123456789",
         billPaymentChannel: "2",
