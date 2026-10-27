@@ -35,6 +35,7 @@ class AppUser {
     this.skills = const [],
     this.isPasswordAccount = true,
     this.emailVerified = false,
+    this.mfaEnrolled = false,
     this.watchlist = const [],
     this.suspended = false,
     this.suspensionReason,
@@ -49,7 +50,8 @@ class AppUser {
 
   final String? bio;
 
-  /// Wallet balance in sen.
+  /// Wallet balance in sen: `users/{uid}/private/wallet` plus any legacy field on the
+  /// profile doc. Only the signed-in user's own [AppUser] carries it.
   final int walletBalanceSen;
 
   /// Denormalised rating totals, so stars render without loading reviews.
@@ -73,6 +75,19 @@ class AppUser {
 
   /// Whether the verification email link was confirmed; refreshed by [AuthRepository.reloadUser].
   final bool emailVerified;
+
+  /// Blocks the app until the email link is clicked; Google accounts arrive verified.
+  bool get needsEmailVerification => !emailVerified;
+
+  /// Whether an authenticator app (TOTP) is enrolled as a second factor.
+  final bool mfaEnrolled;
+
+  /// Providers and admins must use two-factor; requestors may opt in.
+  bool get requiresTwoFactor =>
+      role == UserRole.provider || role == UserRole.admin;
+
+  /// Blocks the app until a provider or admin sets up two-factor.
+  bool get needsTwoFactor => requiresTwoFactor && !mfaEnrolled;
 
   /// A provider's saved reference point for "Jobs near you"; null until chosen.
   final double? baseLat;

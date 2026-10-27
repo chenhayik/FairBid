@@ -15,12 +15,18 @@ const IMG_PREFIX =
 /**
  * What:   Auth guard for callables.
  * Input:  The callable [context].
- * Output: The caller's uid; throws `unauthenticated` when signed out.
+ * Output: The caller's uid; throws `unauthenticated` when signed out and
+ *         `failed-precondition` when the email is not verified.
+ * Notes:  Reads `email_verified` from the ID token, so it costs no lookup.
  */
 function callerUid(context) {
   if (!context.auth) {
     throw new functions.https.HttpsError(
         "unauthenticated", "You must be signed in.");
+  }
+  if (context.auth.token?.email_verified !== true) {
+    throw new functions.https.HttpsError(
+        "failed-precondition", "Verify your email address first.");
   }
   return context.auth.uid;
 }
@@ -50,7 +56,8 @@ function docId(value, name) {
 /**
  * What:   Admin guard.
  * Input:  [uid]; optional [tx] to read inside a transaction.
- * Output: Nothing; throws `permission-denied` unless `users/{uid}` is an admin.
+ * Output: Nothing; throws `permission-denied` unless `users/{uid}` is an
+ *         admin, and `failed-precondition` if that admin has no 2FA.
  */
 async function assertAdmin(uid, tx = null) {
   const ref = admin.firestore().doc(`users/${uid}`);
@@ -58,6 +65,23 @@ async function assertAdmin(uid, tx = null) {
   if (snap.data()?.role !== "admin") {
     throw new functions.https.HttpsError(
         "permission-denied", "Only an admin can do this.");
+  }
+  await assertTwoFactor(uid, "admin");
+}
+
+/**
+ * What:   Two-factor guard for providers and admins.
+ * Input:  [uid] and the [role] from their user doc; Firebase Auth getUser().
+ * Output: Nothing; throws `failed-precondition` when a provider or admin has
+ *         no second factor enrolled.
+ * Notes:  Requestors pass, since 2FA is optional for them.
+ */
+async function assertTwoFactor(uid, role) {
+  if (role !== "provider" && role !== "admin") return;
+  const user = await admin.auth().getUser(uid);
+  if (!user.multiFactor?.enrolledFactors?.length) {
+    throw new functions.https.HttpsError("failed-precondition",
+        "Turn on two-factor authentication first.");
   }
 }
 
@@ -76,15 +100,51 @@ function throwIfSuspended(user) {
 }
 
 /**
+ * What:   Where a user's spendable balance lives.
+ * Input:  The Firestore [db] and a [uid].
+ * Output: The ref `users/{uid}/private/wallet` (only the owner and admins can
+ *         read it; clients can never write it).
+ */
+function walletRef(db, uid) {
+  return db.doc(`users/${uid}/private/wallet`);
+}
+
+
+/**
+ * What:   Adds or takes money from a user's private wallet.
+ * Input:  A transaction or batch, the [db], a [uid] and [deltaSen] (negative
+ *         to debit).
+ * Output: Nothing; a merge-set increment, so it works if the doc is missing.
+ */
+function adjustWallet(txOrBatch, db, uid, deltaSen) {
+  txOrBatch.set(walletRef(db, uid),
+      {walletBalanceSen: FieldValue.increment(deltaSen)}, {merge: true});
+}
+/**
+ * What:   A user's balance in sen.
+ * Input:  The private wallet snapshot and the user doc's data (both read in
+ *         the same transaction; either may be missing).
+ * Output: private `walletBalanceSen` + legacy `walletBalanceSen` on the user
+ *         doc. The legacy part is moved by the admin backfill; until then the
+ *         private number can be negative and only the sum counts.
+ */
+function balanceOf(walletSnap, userData) {
+  return (walletSnap?.data()?.walletBalanceSen || 0) +
+      (userData?.walletBalanceSen || 0);
+}
+
+
+/**
  * What:   Balance guard for taking [requiredSen] out of a wallet.
- * Input:  A user doc's data, [requiredSen] and the error [message].
+ * Input:  The private wallet snapshot, the user doc's data, [requiredSen] and
+ *         the error [message].
  * Output: Nothing; throws `failed-precondition` with `reason`, `shortfallSen`,
  *         `availableSen` and `requiredSen` (the app reads them) when short.
  * Notes:  Ignores the legacy `escrowLockedSen`: nothing writes or releases it,
  *         so a value left on an old doc would cap the wallet forever.
  */
-function assertCanPay(wallet, requiredSen, message) {
-  const available = wallet.walletBalanceSen || 0;
+function assertCanPay(walletSnap, userData, requiredSen, message) {
+  const available = balanceOf(walletSnap, userData);
   if (available < requiredSen) {
     throw new functions.https.HttpsError("failed-precondition", message, {
       reason: "insufficient_balance",
@@ -202,8 +262,12 @@ exports.callerUid = callerUid;
 exports.bad = bad;
 exports.docId = docId;
 exports.assertAdmin = assertAdmin;
+exports.assertTwoFactor = assertTwoFactor;
 exports.throwIfSuspended = throwIfSuspended;
 exports.assertCanPay = assertCanPay;
+exports.walletRef = walletRef;
+exports.balanceOf = balanceOf;
+exports.adjustWallet = adjustWallet;
 exports.jobRole = jobRole;
 exports.counterpartyUid = counterpartyUid;
 exports.notifyUser = notifyUser;

@@ -529,7 +529,9 @@ class _BundleDetailScreenState extends State<BundleDetailScreen> {
                           ),
                         ),
                       ),
-                    for (final merged in mergeBundleOptions(_options!))
+                    for (final merged in bestValueFirst(
+                      mergeBundleOptions(_options!),
+                    ))
                       BundleOptionCard(
                         merged: merged,
                         tasks: tasks,

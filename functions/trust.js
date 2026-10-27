@@ -80,4 +80,19 @@ function computeTrust(user, privateData = {}) {
   };
 }
 
-module.exports = {computeTrust};
+/**
+ * What:   How a moderation ruling changes the reviewee's rating totals.
+ * Input:  The stored [review] ({rating, hidden}) and [hide], the ruling.
+ * Output: {sum, count} to add to `ratingSum` and `ratingCount`. Hiding a
+ *         visible review takes it out, un-hiding a hidden one puts it back;
+ *         any other case changes nothing, so a repeat ruling can't double count.
+ */
+function reviewRatingDelta(review, hide) {
+  const hidden = review?.hidden === true;
+  const rating = review?.rating || 0;
+  if (hide && !hidden) return {sum: -rating, count: -1};
+  if (!hide && hidden) return {sum: rating, count: 1};
+  return {sum: 0, count: 0};
+}
+
+module.exports = {computeTrust, reviewRatingDelta};

@@ -233,7 +233,7 @@ void main() {
   });
 
   group('Email verification', () {
-    testWidgets('unverified user sees the banner and can resend', (
+    testWidgets('unverified user is held on the verify screen and can resend', (
       tester,
     ) async {
       final auth = FakeAuthRepository()..emailVerified = false;
@@ -241,8 +241,9 @@ void main() {
       await logIn(tester);
 
       expect(find.text('Verify your email'), findsOneWidget);
+      expect(find.byType(NavigationBar), findsNothing);
 
-      await tester.tap(find.text('Resend'));
+      await tester.tap(find.text('Resend email'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
@@ -254,14 +255,15 @@ void main() {
       await tester.pump(const Duration(seconds: 61));
     });
 
-    testWidgets('verified user sees no banner', (tester) async {
+    testWidgets('verified user goes straight home', (tester) async {
       await pumpApp(tester, buildApp(FakeAuthRepository()));
       await logIn(tester);
 
       expect(find.text('Verify your email'), findsNothing);
+      expect(find.byType(NavigationBar), findsOneWidget);
     });
 
-    testWidgets('tapping refresh after verifying hides the banner', (
+    testWidgets("tapping I've verified after clicking the link opens home", (
       tester,
     ) async {
       final auth = FakeAuthRepository()
@@ -270,9 +272,54 @@ void main() {
       await pumpApp(tester, buildApp(auth));
       await logIn(tester);
 
-      await tester.tap(find.byTooltip("I've verified - refresh"));
+      await tester.tap(find.text("I've verified"));
       await tester.pumpAndSettle();
 
+      expect(find.text('Verify your email'), findsNothing);
+      expect(find.byType(NavigationBar), findsOneWidget);
+    });
+
+    testWidgets("I've verified while still unverified stays and explains", (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()..emailVerified = false;
+      await pumpApp(tester, buildApp(auth));
+      await logIn(tester);
+
+      await tester.tap(find.text("I've verified"));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Verify your email'), findsOneWidget);
+      expect(find.textContaining("couldn't see the confirmation"),
+          findsOneWidget);
+    });
+
+    testWidgets('new unverified requestor verifies before onboarding', (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()
+        ..emailVerified = false
+        ..verifyOnReload = true
+        ..onboardingComplete = false;
+      await pumpApp(tester, buildApp(auth));
+      await openRegisterAs(tester, 'Hire');
+
+      expect(find.text('Verify your email'), findsOneWidget);
+
+      await tester.tap(find.text("I've verified"));
+      await tester.pumpAndSettle();
+
+      expect(find.text('How will you hire?'), findsOneWidget);
+    });
+
+    testWidgets('suspension wins over email verification', (tester) async {
+      final auth = FakeAuthRepository()
+        ..emailVerified = false
+        ..suspended = true;
+      await pumpApp(tester, buildApp(auth));
+      await logIn(tester);
+
+      expect(find.text('Account suspended'), findsOneWidget);
       expect(find.text('Verify your email'), findsNothing);
     });
 
@@ -397,15 +444,64 @@ void main() {
       expect(find.text('On'), findsOneWidget);
     });
 
-    testWidgets('unverified email blocks turning 2FA on', (tester) async {
-
-      final auth = FakeAuthRepository()..emailVerified = false;
+    testWidgets('new provider must set up 2FA before using the app', (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()
+        ..verificationStatus = 'approved'
+        ..mfaEnrolled = false;
       await pumpApp(tester, buildApp(auth), size: const Size(500, 2200));
+      await openRegisterAs(tester, 'Work');
+
+      expect(find.textContaining('must turn on two-factor'), findsOneWidget);
+      expect(find.byType(NavigationBar), findsNothing);
+
+      await tester.tap(find.widgetWithText(PrimaryButton, 'Turn on'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Your password'),
+        'secret123',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '123456');
+      await tester.tap(find.text('Verify and turn on'));
+      await tester.pumpAndSettle();
+
+      // Enrolled → the gate lifts and the provider home opens.
+      expect(find.byType(StatCard), findsWidgets);
+    });
+
+    testWidgets('admin without 2FA is held on the setup screen', (
+      tester,
+    ) async {
+      final auth = FakeAuthRepository()
+        ..mfaEnrolled = false
+        ..seedSignedIn(UserRole.admin);
+      await pumpApp(tester, buildApp(auth), size: const Size(500, 2200));
+
+      expect(find.textContaining('must turn on two-factor'), findsOneWidget);
+      expect(find.byType(NavigationBar), findsNothing);
+    });
+
+    testWidgets('requestor without 2FA is not gated', (tester) async {
+      final auth = FakeAuthRepository()..mfaEnrolled = false;
+      await pumpApp(tester, buildApp(auth));
       await logIn(tester);
+
+      expect(find.byType(NavigationBar), findsOneWidget);
+    });
+
+    testWidgets('provider with 2FA on cannot turn it off', (tester) async {
+      final auth = FakeAuthRepository()
+        ..verificationStatus = 'approved'
+        ..mfaFactors = const [MfaFactor(uid: 'factor-1')]
+        ..seedSignedIn(UserRole.provider);
+      await pumpApp(tester, buildApp(auth), size: const Size(500, 2200));
       await openSecurityScreen(tester);
 
-      expect(find.text('Verify your email first'), findsOneWidget);
-      expect(find.text('Turn on'), findsNothing);
+      expect(find.text('On'), findsOneWidget);
+      expect(find.text('Turn off'), findsNothing);
     });
 
     testWidgets('turning off asks for confirmation, then returns to Off', (
