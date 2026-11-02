@@ -122,8 +122,7 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Submit a bid'), findsNothing);
     });
 
-    testWidgets('approved provider sees "Bidding closed" once the deadline has '
-        'passed', (tester) async {
+    testWidgets('approved provider sees Bidding closed once the deadline has passed', (tester) async {
 
       final auth = FakeAuthRepository()
         ..verificationStatus = 'approved'

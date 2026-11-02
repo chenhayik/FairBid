@@ -7,7 +7,7 @@ const {FieldValue, Timestamp} = require("firebase-admin/firestore");
 const {bundleBiddingOpen, splitBundlePrice} = require("./bundles");
 const {
   callerUid, bad, docId, throwIfSuspended, assertCanPay, notifyUser,
-  writeFundedMilestone,
+  writeFundedMilestone, walletRef, adjustWallet,
 } = require("./common");
 
 // Keep in sync with PlatformConfig.priceWeight / trustWeight / neutralTrustScore.
@@ -425,10 +425,31 @@ function bidFromSnap(doc) {
 }
 
 /**
+ * What:   Swaps the Trust Score saved on a bid for the provider's current one.
+ * Input:  [bid] from bidFromSnap() and the provider's `users/{uid}` [user]
+ *         data (undefined if the account is gone).
+ * Output: The bid with current trustScore and scoreVisible; unchanged when
+ *         [user] is missing.
+ * Notes:  The score on the bid is only refreshed when the provider edits it,
+ *         so ranking on it could use an out-of-date number. Same rules as
+ *         bidFromSnap: a hidden ("New") score ranks as NEUTRAL_TRUST.
+ */
+function withLiveTrust(bid, user) {
+  if (!user) return bid;
+  const visible = user.trust?.scoreVisible === true;
+  return {
+    ...bid,
+    trustScore: visible ? user.trustScore || 0 : NEUTRAL_TRUST,
+    scoreVisible: visible,
+  };
+}
+
+/**
  * What:   Loader for an award or preview.
  * Input:  Firestore [db], [bundleId] and the caller [uid].
  * Output: {bundle, tasks, bids} with only pending bids; throws `not-found`, or
  *         `permission-denied` unless the caller posted the bundle.
+ *         Each bid carries its provider's current Trust Score.
  */
 async function readBundleForAward(db, bundleId, uid) {
   const bundleSnap = await db.doc(`bundles/${bundleId}`).get();
@@ -450,9 +471,14 @@ async function readBundleForAward(db, bundleId, uid) {
 
   const bidSnaps =
       await db.collection(`bundles/${bundleId}/bundleBids`).get();
-  const bids = bidSnaps.docs
-      .filter((doc) => doc.data().status === "pending")
-      .map(bidFromSnap);
+  const pending = bidSnaps.docs
+      .filter((doc) => doc.data().status === "pending");
+  // Current Trust Scores, so Best Value ranks like single-job bids do.
+  const userSnaps = pending.length === 0 ?
+      [] :
+      await db.getAll(...pending.map((doc) => db.doc(`users/${doc.id}`)));
+  const bids = pending.map((doc, i) =>
+    withLiveTrust(bidFromSnap(doc), userSnaps[i].data()));
 
   return {bundle, tasks, bids};
 }
@@ -572,7 +598,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
 
   await db.runTransaction(async (tx) => {
     const bundleRef = db.doc(`bundles/${bundleId}`);
-    const walletRef = db.doc(`users/${uid}`);
+    const userRef = db.doc(`users/${uid}`);
 
     const bundle = (await tx.get(bundleRef)).data();
     if (bundle && bundle.requestorId !== uid) {
@@ -588,11 +614,11 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
 
     const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
     const taskRefs = taskIds.map((id) => db.doc(`jobs/${id}`));
-    const [walletSnap, ...taskSnaps] =
-        await tx.getAll(walletRef, ...taskRefs);
+    const [userSnap, walletSnap, ...taskSnaps] =
+        await tx.getAll(userRef, walletRef(db, uid), ...taskRefs);
 
-    const wallet = walletSnap.data() || {};
-    throwIfSuspended(wallet);
+    const user = userSnap.data() || {};
+    throwIfSuspended(user);
 
     // Queried inside the transaction so bids added after the preview count.
     const bidsSnap = await tx.get(db.collection(
@@ -631,7 +657,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           {reason: "changed", totalSen});
     }
 
-    assertCanPay(wallet, totalSen,
+    assertCanPay(walletSnap, user, totalSen,
         "Insufficient available balance to award this bundle.");
 
     // Each awarded task becomes an ordinary one-provider job.
@@ -668,9 +694,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
     });
 
     // The money moves into escrow once, for the whole award.
-    tx.update(walletRef, {
-      walletBalanceSen: (wallet.walletBalanceSen || 0) - totalSen,
-    });
+    adjustWallet(tx, db, uid, -totalSen);
 
     // Every bid lands on accepted, partly accepted or rejected.
     bidsSnap.docs.forEach((doc) => {
@@ -712,5 +736,6 @@ exports.offersFor = offersFor;
 exports.buildAwardOptions = buildAwardOptions;
 exports.checkManualAward = checkManualAward;
 exports.bidFromSnap = bidFromSnap;
+exports.withLiveTrust = withLiveTrust;
 exports.manualOption = manualOption;
 exports.leftoverTaskUpdate = leftoverTaskUpdate;

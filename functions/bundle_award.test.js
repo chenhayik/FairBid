@@ -8,6 +8,7 @@ const {
   buildAwardOptions,
   checkManualAward,
   bidFromSnap,
+  withLiveTrust,
   manualOption,
   leftoverTaskUpdate,
 } = require("./bundle_award");
@@ -357,4 +358,32 @@ test("leftoverTaskUpdate drops a task by cancelling it", () => {
   assert.ok(update.cancelledAt);
   assert.ok(update.cancellationReason.includes("dropped"));
   assert.strictEqual(update.releasedAt, undefined);
+});
+
+test("withLiveTrust ranks on the provider's current Trust Score", () => {
+  const doc = (id, data) => ({id, data: () => data});
+  const base = {taskPrices: {A: 50000, B: 50000}, bundlePriceSen: null};
+  // Saved on the bid as 500, but the provider has since reached 900.
+  const stale = bidFromSnap(doc("pro", {
+    ...base, providerTrustScore: 500, providerScoreVisible: true,
+  }));
+  const live = withLiveTrust(stale, {trustScore: 900, trust: {scoreVisible: true}});
+  assert.strictEqual(live.trustScore, 900);
+  assert.strictEqual(live.scoreVisible, true);
+
+  // A score that is now hidden ranks as the neutral 700.
+  const hidden = withLiveTrust(stale, {trustScore: 100, trust: {scoreVisible: false}});
+  assert.strictEqual(hidden.trustScore, 700);
+  assert.strictEqual(hidden.scoreVisible, false);
+
+  // No user doc: keep what the bid says.
+  assert.deepStrictEqual(withLiveTrust(stale, undefined), stale);
+
+  // Same price, so the current scores decide Best Value: 900 beats 800,
+  // although the saved 500 would have lost.
+  const rival = bidFromSnap(doc("rival", {
+    ...base, providerTrustScore: 800, providerScoreVisible: true,
+  }));
+  const options = buildAwardOptions({tasks: TWO_TASKS, bids: [rival, live]});
+  assert.strictEqual(pick(options, "bestValue").awards[0].providerId, "pro");
 });

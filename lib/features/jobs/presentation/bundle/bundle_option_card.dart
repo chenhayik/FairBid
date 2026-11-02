@@ -64,6 +64,14 @@ List<MergedBundleOption> mergeBundleOptions(List<BundleAwardOption> options) {
   return merged;
 }
 
+/// What:   Award option cards with the Best Value card first.
+/// Input:  [merged] from mergeBundleOptions().
+/// Output: Same cards; the Best Value one moved to the top, the rest in server order.
+List<MergedBundleOption> bestValueFirst(List<MergedBundleOption> merged) => [
+  ...merged.where((m) => m.isBestValue),
+  ...merged.where((m) => !m.isBestValue),
+];
+
 /// What:   One award option card: total, premium, providers, Trust Score, Award button.
 /// Input:  [merged] from mergeBundleOptions(); [tasks] for titles; [bids] for photos and bundle savings; [primary] fills the button.
 /// Output: Card with a profile chip per provider, calling [onAward], and [onUse] to fill the manual picks from it.

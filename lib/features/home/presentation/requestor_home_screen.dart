@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/keyed_stream_builder.dart';
 import '../../auth/presentation/auth_controller.dart';
-import '../../auth/presentation/email_verification_banner.dart';
 import '../../jobs/data/job_repository.dart';
 import '../../jobs/domain/job.dart';
 import '../../jobs/presentation/widgets/job_card.dart';
@@ -30,7 +29,6 @@ class RequestorHomeScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            const EmailVerificationBanner(),
             Text('Hello, $firstName', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 4),
             Text("Here's what's happening today.",

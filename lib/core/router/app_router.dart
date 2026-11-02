@@ -8,6 +8,7 @@ import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/security_screen.dart';
 import '../../features/auth/presentation/suspended_screen.dart';
+import '../../features/auth/presentation/verify_email_screen.dart';
 import '../../features/disputes/domain/dispute.dart';
 import '../../features/disputes/presentation/dispute_detail_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
@@ -32,7 +33,7 @@ import 'package:flutter/foundation.dart';
 
 /// What:   A listenable that fires only when an input to the redirects changes.
 /// Input:  [auth].
-/// Output: Notifies on sign in/out, role, suspension or onboarding changes only.
+/// Output: Notifies on sign in/out, role, suspension, email, 2FA or onboarding changes only.
 /// Notes:  Refreshing the router on every profile edit swallows a pop made in the same frame.
 Listenable _redirectInputs(AuthController auth) {
   final inputs = ValueNotifier<Object?>(null);
@@ -42,7 +43,8 @@ Listenable _redirectInputs(AuthController auth) {
     final user = auth.user;
     // Records compare by value, so unchanged inputs don't notify.
     inputs.value = (auth.isInitializing, user?.uid, user?.role,
-    user?.suspended, user?.needsOnboarding);
+    user?.suspended, user?.emailVerified, user?.mfaEnrolled,
+    user?.needsOnboarding);
   }
 
   sync();
@@ -74,6 +76,18 @@ GoRouter buildRouter(AuthController auth) {
       }
       if (location == '/suspended') return '/home';
 
+      // Email first: 2FA setup and onboarding uploads need a confirmed address.
+      if (user.needsEmailVerification) {
+        return location == '/verify-email' ? null : '/verify-email';
+      }
+      if (location == '/verify-email') return '/home';
+
+      // Providers and admins must turn on 2FA before using the app.
+      if (user.needsTwoFactor) {
+        return location == '/setup-2fa' ? null : '/setup-2fa';
+      }
+      if (location == '/setup-2fa') return '/home';
+
       // Users who haven't finished onboarding are locked into it.
       if (user.needsOnboarding) {
         return location == '/onboarding' ? null : '/onboarding';
@@ -87,6 +101,10 @@ GoRouter buildRouter(AuthController auth) {
     routes: [
       GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
       GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),
+      GoRoute(
+          path: '/verify-email',
+          builder: (_, _) => const VerifyEmailScreen()),
+      GoRoute(path: '/setup-2fa', builder: (_, _) => const SecurityScreen()),
       GoRoute(
           path: '/onboarding',
           builder: (_, _) => const OnboardingFlowScreen()),

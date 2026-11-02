@@ -106,8 +106,8 @@ class FakeAuthRepository implements AuthRepository {
   /// mutate it via [setJobSaved]) so tests can assert the watchlist toggle.
   List<String> watchlist = [];
 
-  /// Mirrors `User.emailVerified`. Defaults true so the existing dashboard
-  /// tests don't render the banner; banner tests opt in with false.
+  /// Mirrors `User.emailVerified`. Defaults true so existing tests skip the
+  /// verify-email gate; gate tests opt in with false.
   bool emailVerified = true;
 
   /// Set true so the next [reloadUser] flips [emailVerified] - mimics the
@@ -121,6 +121,10 @@ class FakeAuthRepository implements AuthRepository {
   /// Enrolled second factors. Empty = 2FA off, which every existing test
   /// expects.
   List<MfaFactor> mfaFactors = [];
+
+  /// Passes the provider/admin 2FA gate without enrolled [mfaFactors].
+  /// Defaults true so existing tests skip the gate; gate tests set false.
+  bool mfaEnrolled = true;
 
   /// When true, the next sign-in or re-auth raises an MFA challenge instead
   /// of succeeding - mirrors Firebase pausing for a second factor.
@@ -182,6 +186,7 @@ class FakeAuthRepository implements AuthRepository {
       suspensionReason: suspensionReason,
       watchlist: List.of(watchlist),
       emailVerified: emailVerified,
+      mfaEnrolled: mfaEnrolled || mfaFactors.isNotEmpty,
     );
   }
 

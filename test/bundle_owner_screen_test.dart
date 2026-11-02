@@ -296,6 +296,13 @@ void main() {
       );
       expect(find.text('Lowest total · Fewest providers'), findsOneWidget);
       expect(find.text('Best Value'), findsOneWidget);
+      // Best Value is listed first, although the server sends it last.
+      expect(
+        tester.getTopLeft(find.text('Best Value')).dy,
+        lessThan(
+          tester.getTopLeft(find.text('Lowest total · Fewest providers')).dy,
+        ),
+      );
       // Each card explains itself; a merged card shows its top-priority line.
       expect(find.text('The cheapest way to cover every task.'),
           findsOneWidget);
@@ -845,6 +852,33 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.textContaining('Bundle price (all tasks)'), findsOneWidget);
       });
+
+      testWidgets('lists the Best Value bid first, with its badge', (
+        tester,
+      ) async {
+        await pumpBundle(
+          tester,
+          bids: [
+            sampleBundleBid(providerId: 'p1', providerName: 'Dear Co',
+                taskPrices: const {'job-1': 40000}),
+            sampleBundleBid(providerId: 'p2', providerName: 'Cheap Co',
+                taskPrices: const {'job-1': 30000}),
+          ],
+        );
+        await tester.tap(find.text('View all bids (2)'));
+        await tester.pumpAndSettle();
+
+        // Same Trust Score, so the cheaper bid ranks first.
+        final sheet = find.byType(DraggableScrollableSheet);
+        final cheap = find.descendant(of: sheet, matching: find.text('Cheap Co'));
+        final dear = find.descendant(of: sheet, matching: find.text('Dear Co'));
+        expect(tester.getTopLeft(cheap).dy, lessThan(tester.getTopLeft(dear).dy));
+        expect(find.text('BEST VALUE'), findsOneWidget);
+        expect(
+          tester.getTopLeft(find.text('BEST VALUE')).dy,
+          lessThan(tester.getTopLeft(cheap).dy),
+        );
+      });
     });
 
     test('bundleSavingSen is the single-task total minus the amounts paid', () {
@@ -879,6 +913,83 @@ void main() {
           "Picking fewer than all of Aida's tasks drops their bundle price.",
         ]);
       });
+    });
+  });
+
+  group('Best Value order', () {
+    test('bestValueFirst moves the Best Value card to the top', () {
+      final merged = mergeBundleOptions([
+        sampleOption(key: 'cheapest', label: 'Lowest total', totalSen: 1),
+        sampleOption(key: 'fewest', label: 'Fewest providers', totalSen: 2,
+            awards: const [
+              BundleAwardItem(
+                providerId: 'prov-2',
+                providerName: 'Dev Tiling',
+                taskAmountsSen: {'job-1': 2},
+              ),
+            ]),
+        sampleOption(totalSen: 3, awards: const [
+          BundleAwardItem(
+            providerId: 'prov-3',
+            providerName: 'Lim Plumbing',
+            taskAmountsSen: {'job-1': 3},
+          ),
+        ]),
+      ]);
+      expect(
+        bestValueFirst(merged).map((m) => m.combinedLabel),
+        ['Best Value', 'Lowest total', 'Fewest providers'],
+      );
+    });
+
+    test('rankBundleBidsByValue blends price (60%) and Trust Score (40%)', () {
+      // Cheap but untrusted vs 10% dearer and trusted, on the same task:
+      // cheap = 0.6 * 1 + 0.4 * 0.5 = 0.80; trusted = 0.6 * (100/110) +
+      // 0.4 * 0.95 = 0.925, so the trusted bid ranks first.
+      final cheap = sampleBundleBid(
+        providerId: 'cheap',
+        taskPrices: const {'job-1': 10000},
+      ).withTrust(trustScore: 500, scoreVisible: true);
+      final trusted = sampleBundleBid(
+        providerId: 'trusted',
+        taskPrices: const {'job-1': 11000},
+      ).withTrust(trustScore: 950, scoreVisible: true);
+      expect(
+        rankBundleBidsByValue([cheap, trusted]).map((b) => b.providerId),
+        ['trusted', 'cheap'],
+      );
+    });
+
+    test('rankBundleBidsByValue compares each bid with the cheapest prices '
+        'for the same tasks', () {
+      // One bid covers both tasks with a bundle price, the other only one
+      // task. Raw totals would put the single-task bid first; per task, the
+      // bundle deal is the better value.
+      final bundle = sampleBundleBid(
+        providerId: 'bundle',
+        taskPrices: const {'job-1': 10000, 'job-2': 10000},
+        bundlePriceSen: 16000,
+      ).withTrust(trustScore: 700, scoreVisible: true);
+      final single = sampleBundleBid(
+        providerId: 'single',
+        taskPrices: const {'job-1': 9000},
+      ).withTrust(trustScore: 700, scoreVisible: true);
+      expect(
+        rankBundleBidsByValue([single, bundle]).map((b) => b.providerId),
+        ['bundle', 'single'],
+      );
+    });
+
+    test('a hidden score ranks as the neutral 700', () {
+      final hidden = sampleBundleBid(
+        providerId: 'new',
+        taskPrices: const {'job-1': 10000},
+      ).withTrust(trustScore: 100, scoreVisible: false);
+      final rival = sampleBundleBid(
+        providerId: 'rival',
+        taskPrices: const {'job-1': 10000},
+      ).withTrust(trustScore: 680, scoreVisible: true);
+      expect(rankBundleBidsByValue([rival, hidden]).first.providerId, 'new');
     });
   });
 }
