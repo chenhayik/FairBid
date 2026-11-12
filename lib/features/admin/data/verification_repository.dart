@@ -2,11 +2,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../onboarding/domain/face_box.dart';
 import '../../onboarding/domain/id_extract.dart';
+import '../../onboarding/domain/ssm_extract.dart';
 import '../domain/pending_verification.dart';
 
 /// What:   Admin verification API.
 /// Input:  Firestore `users` and their private docs via FirestoreVerificationRepository; a fake in tests.
-/// Output: The pending queue, identity documents, the ID check and decisions.
+/// Output: The pending queue, identity documents, the ID and SSM checks and decisions.
 abstract interface class VerificationRepository {
   /// Users with `verificationStatus == 'pending'`, oldest submission first.
   Stream<List<PendingVerification>> watchPending();
@@ -16,6 +17,9 @@ abstract interface class VerificationRepository {
 
   /// The automated MyKad check for [uid], or null if none has run.
   Future<IdExtract?> loadIdExtract(String uid);
+
+  /// The automated SSM document check for [uid], or null if none has run.
+  Future<SsmExtract?> loadSsmExtract(String uid);
 
   /// Sets `verificationStatus` to approved or rejected, stamps `reviewedAt` and stores a reject [reason].
   Future<void> decide({
@@ -114,6 +118,10 @@ class FirestoreVerificationRepository implements VerificationRepository {
   @override
   Future<IdExtract?> loadIdExtract(String uid) async =>
       IdExtract.fromMap((await _private(uid, 'idExtract').get()).data());
+
+  @override
+  Future<SsmExtract?> loadSsmExtract(String uid) async =>
+      SsmExtract.fromMap((await _private(uid, 'ssmExtract').get()).data());
 
   @override
   Future<void> decide({

@@ -110,7 +110,8 @@ abstract interface class AuthRepository {
 }
 
 /// What:   Production [AuthRepository].
-/// Input:  Firebase Auth (credentials) and Firestore `users/{uid}` (role, wallet, Trust Score).
+/// Input:  Firebase Auth (credentials) and Firestore `users/{uid}` (role, Trust Score)
+///         plus `users/{uid}/private/wallet` (the balance).
 /// Output: AppUser values and streams; writes the profile docs.
 class FirebaseAuthRepository implements AuthRepository {
   FirebaseAuthRepository({
@@ -129,6 +130,33 @@ class FirebaseAuthRepository implements AuthRepository {
   DocumentReference<Map<String, dynamic>> _payoutDoc(String uid) =>
       _users.doc(uid).collection('private').doc('payout');
 
+  /// Owner+admin-only doc holding the wallet balance (only Cloud Functions write it).
+  DocumentReference<Map<String, dynamic>> _walletDoc(String uid) =>
+      _users.doc(uid).collection('private').doc('wallet');
+
+  /// What:   Reads a user's private wallet balance once.
+  /// Input:  [uid]; `users/{uid}/private/wallet`.
+  /// Output: The `walletBalanceSen` in sen; a missing doc or read failure gives 0.
+  Future<int> _privateWalletSen(String uid) async {
+    try {
+      final data = (await _walletDoc(uid).get()).data();
+      return (data?['walletBalanceSen'] as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// What:   Two-factor check for the signed-in account.
+  /// Input:  [user]; Firebase Auth `multiFactor.getEnrolledFactors()`.
+  /// Output: True when a second factor is enrolled; false on any error.
+  Future<bool> _hasMfa(User user) async {
+    try {
+      return (await user.multiFactor.getEnrolledFactors()).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// What:   Reads a user's private payout doc.
   /// Input:  [uid]; `users/{uid}/private/payout`.
   /// Output: The data (holds the phone number); a missing doc or read failure gives null.
@@ -142,10 +170,12 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Stream<AppUser?> authStateChanges() {
-    // Also re-emits on every profile doc change, so admin approvals show live.
+    // Also re-emits on every profile or private wallet doc change, so admin
+    // approvals and balance changes show live.
     late final StreamController<AppUser?> controller;
     StreamSubscription<User?>? authSub;
     StreamSubscription<AppUser?>? profileSub;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? walletSub;
 
     void emit(AppUser? user) {
       if (!controller.isClosed) controller.add(user);
@@ -156,26 +186,55 @@ class FirebaseAuthRepository implements AuthRepository {
         authSub = _auth.authStateChanges().listen((user) {
           profileSub?.cancel();
           profileSub = null;
+          walletSub?.cancel();
+          walletSub = null;
           if (user == null) {
             emit(null);
             return;
           }
+          // The latest of each part; the user is rebuilt when any one changes.
+          Map<String, dynamic>? profile;
+          Map<String, dynamic>? payout;
+          var privateWalletSen = 0;
+          var mfaEnrolled = false;
+          var profileLoaded = false;
+          AppUser build() => _mapUser(
+                // reload() swaps in a new currentUser; prefer it.
+                _auth.currentUser ?? user,
+                profile,
+                payout,
+                privateWalletSen: privateWalletSen,
+                mfaEnrolled: mfaEnrolled,
+              );
+
           // Falls back to a minimal user so a read error never strands the splash
           // screen; asyncMap re-reads the private payout doc for the phone.
           profileSub = _users
               .doc(user.uid)
               .snapshots()
-              .asyncMap((snapshot) async => _mapUser(
-                    // reload() swaps in a new currentUser; prefer it.
-                    _auth.currentUser ?? user,
-                    snapshot.data(),
-                    await _payoutData(user.uid),
-                  ))
+              .asyncMap((snapshot) async {
+                final data = snapshot.data();
+                final payoutData = await _payoutData(user.uid);
+                mfaEnrolled = await _hasMfa(_auth.currentUser ?? user);
+                profile = data;
+                payout = payoutData;
+                profileLoaded = true;
+                return build();
+              })
               .listen(emit, onError: (_) => emit(_fallbackUser(user)));
+
+          // The balance lives in a private doc. If it can't be read, the legacy
+          // field on the profile still shows.
+          walletSub = _walletDoc(user.uid).snapshots().listen((snapshot) {
+            privateWalletSen =
+                (snapshot.data()?['walletBalanceSen'] as num?)?.toInt() ?? 0;
+            if (profileLoaded) emit(build());
+          }, onError: (_) {});
         });
       },
       onCancel: () async {
         await profileSub?.cancel();
+        await walletSub?.cancel();
         await authSub?.cancel();
       },
     );
@@ -550,7 +609,7 @@ class FirebaseAuthRepository implements AuthRepository {
 
   /// What:   Creates the profile doc on first sign-in only.
   /// Input:  [user], [role] and [displayName].
-  /// Output: Writes role, name, email and zeroed wallet fields; an existing profile keeps its role and balance.
+  /// Output: Writes role, name, email and onboarding state, no wallet field (the balance lives in `private/wallet`); an existing profile keeps its role and balance.
   /// Notes:  No trust fields are written: rules reject them and `recomputeTrustOnUserWrite` seeds the score.
   Future<void> _ensureProfile(
     User user,
@@ -570,7 +629,6 @@ class FirebaseAuthRepository implements AuthRepository {
       'displayName':
           displayName.isEmpty ? _nameFromEmail(user.email) : displayName,
       'email': user.email,
-      'walletBalanceSen': 0,
       'verificationStatus': 'none',
       'onboardingComplete': false,
       'createdAt': FieldValue.serverTimestamp(),
@@ -606,7 +664,13 @@ class FirebaseAuthRepository implements AuthRepository {
     if (user == null) return null;
     try {
       final snapshot = await _users.doc(user.uid).get();
-      return _mapUser(user, snapshot.data(), await _payoutData(user.uid));
+      return _mapUser(
+        user,
+        snapshot.data(),
+        await _payoutData(user.uid),
+        privateWalletSen: await _privateWalletSen(user.uid),
+        mfaEnrolled: await _hasMfa(user),
+      );
     } on FirebaseException {
       // Unreadable profile (offline): fall back so the splash screen can't hang.
       return _fallbackUser(user);
@@ -614,14 +678,16 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   /// What:   Maps Firebase user and Firestore data into an [AppUser].
-  /// Input:  [user]; profile [data] and private [payoutData], either may be null.
-  /// Output: AppUser with defaults for missing fields.
+  /// Input:  [user]; profile [data] and private [payoutData], either may be null; [privateWalletSen] from `private/wallet`; [mfaEnrolled] from [_hasMfa].
+  /// Output: AppUser with defaults for missing fields. The balance is [privateWalletSen] plus any legacy `walletBalanceSen` still on the profile.
   /// How:    Phone comes from the private doc, falling back to the legacy public field; base location falls back to the onboarding service location so "Jobs near you" works at once.
   AppUser _mapUser(
     User user,
     Map<String, dynamic>? data,
-    Map<String, dynamic>? payoutData,
-  ) {
+    Map<String, dynamic>? payoutData, {
+    int privateWalletSen = 0,
+    bool mfaEnrolled = false,
+  }) {
     final onboarding = data?['onboarding'] as Map<String, dynamic>?;
     // The phone lives in private/payout; legacy accounts still have it public.
     return AppUser(
@@ -645,7 +711,8 @@ class FirebaseAuthRepository implements AuthRepository {
       defaultDistrictCode: data?['districtCode'] as String?,
       defaultTown: data?['town'] as String?,
       bio: data?['bio'] as String?,
-      walletBalanceSen: (data?['walletBalanceSen'] as num?)?.toInt() ?? 0,
+      walletBalanceSen: privateWalletSen +
+          ((data?['walletBalanceSen'] as num?)?.toInt() ?? 0),
       ratingCount: (data?['ratingCount'] as num?)?.toInt() ?? 0,
       ratingSum: (data?['ratingSum'] as num?)?.toInt() ?? 0,
       jobsCompleted: (data?['jobsCompleted'] as num?)?.toInt() ?? 0,
@@ -659,6 +726,7 @@ class FirebaseAuthRepository implements AuthRepository {
           const [],
       isPasswordAccount: _isPasswordAccount(user),
       emailVerified: user.emailVerified,
+      mfaEnrolled: mfaEnrolled,
       watchlist:
           (data?['watchlist'] as List?)?.whereType<String>().toList() ??
               const [],

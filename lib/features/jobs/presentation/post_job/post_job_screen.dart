@@ -210,16 +210,16 @@ class _PostJobViewState extends State<_PostJobView> {
   }
 
   /// What:   Removes an added task.
-  /// Output: Disposes it, drops its photo tags and re-syncs the assist photos.
+  /// Output: Disposes it and drops its photo tags and price hint.
   void _removeTask(int index) {
     setState(() {
       final removed = _extraTasks.removeAt(index);
       for (final tags in _photoTasks.values) {
         tags.remove(removed);
       }
+      context.read<PostJobController>().forgetTask(removed);
       removed.dispose();
     });
-    _syncAssistPhotos();
   }
 
   /// What:   Tag text for a bundle photo.
@@ -241,24 +241,25 @@ class _PostJobViewState extends State<_PostJobView> {
       if (_photoTasks[url]?.contains(tag) ?? false) i,
   ];
 
-  /// What:   Tells the AI assists which photos don't show task 1.
-  /// Output: Sets PostJobController.skipForAssist to photos tagged only to other tasks.
-  void _syncAssistPhotos() {
-    context.read<PostJobController>().skipForAssist = {
-      for (final MapEntry(key: url, value: tags) in _photoTasks.entries)
-        if (tags.isNotEmpty && !tags.contains(_task1Tag)) url,
-    };
+  /// What:   The photo the AI reads for one task.
+  /// Input:  Task [tag]; PostJobController.photoUrls and [_photoTasks].
+  /// Output: The first photo untagged or tagged with [tag] (as the server's taskPhotoUrls does), or null.
+  String? _assistPhotoFor(Object tag) {
+    final urls = context.read<PostJobController>().photoUrls;
+    return urls.where((url) {
+      final tags = _photoTasks[url];
+      return tags == null || tags.isEmpty || tags.contains(tag);
+    }).firstOrNull;
   }
 
   /// What:   Removes a photo and its task tags.
   void _removePhoto(String url) {
     context.read<PostJobController>().removePhoto(url);
     _photoTasks.remove(url);
-    _syncAssistPhotos();
   }
 
   /// What:   Lets the user tag a bundle photo with the tasks it shows.
-  /// Output: Sets [_photoTasks] for [url] from _PhotoTasksSheet and re-syncs the assist photos.
+  /// Output: Sets [_photoTasks] for [url] from _PhotoTasksSheet.
   Future<void> _pickPhotoTasks(String url) async {
     // Otherwise closing the sheet re-focuses the last text field.
     FocusScope.of(context).unfocus();
@@ -278,7 +279,6 @@ class _PostJobViewState extends State<_PostJobView> {
     );
     if (picked == null || !mounted) return;
     setState(() => _photoTasks[url] = {for (final i in picked) tags[i]});
-    _syncAssistPhotos();
   }
 
   /// What:   Label for a task.
@@ -464,9 +464,42 @@ class _PostJobViewState extends State<_PostJobView> {
   void _snack(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
 
-  /// What:   AI draft flow.
+  /// What:   One task's editable fields, so the AI helpers work on any task.
+  /// Input:  Task [tag]: [_task1Tag] (fields on the form) or a [_TaskFields].
+  /// Output: A _TaskTarget over that task's controllers and category.
+  _TaskTarget _targetFor(Object tag) {
+    if (tag == _task1Tag) {
+      final controller = context.read<PostJobController>();
+      return _TaskTarget(
+        title: _title,
+        description: _description,
+        budgetMin: _budgetMin,
+        budgetMax: _budgetMax,
+        category: controller.category,
+        setCategory: controller.setCategory,
+      );
+    }
+    final fields = tag as _TaskFields;
+    return _TaskTarget(
+      title: fields.title,
+      description: fields.description,
+      budgetMin: fields.budgetMin,
+      budgetMax: fields.budgetMax,
+      category: fields.category,
+      setCategory: (v) => setState(() => fields.category = v),
+    );
+  }
+
+  /// What:   Whether a task is still on the form.
+  /// Output: False once [tag]'s card was removed (its controllers are disposed).
+  bool _taskStillExists(Object tag) =>
+      tag == _task1Tag || _extraTasks.contains(tag);
+
+  /// What:   AI draft flow for one task.
+  /// Input:  Task [tag].
   /// Output: Asks for a rough note in _DraftSheet, then PostJobController.suggestDraft() and [_applyDraft]; a snackbar if unavailable.
-  Future<void> _draftFromNote() async {
+  /// Notes:  Does nothing if the task was removed while the draft ran.
+  Future<void> _draftFromNote(Object tag) async {
     final note = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -478,39 +511,42 @@ class _PostJobViewState extends State<_PostJobView> {
       _snack('Tell us a bit more first, e.g. "leaking pipe under sink".');
       return;
     }
-    final draft = await context.read<PostJobController>().suggestDraft(note);
-    if (!mounted) return;
+    final draft = await context.read<PostJobController>().suggestDraft(
+        tag, note,
+        photoUrl: _assistPhotoFor(tag));
+    if (!mounted || !_taskStillExists(tag)) return;
     if (draft == null) {
       _snack('Couldn\'t draft it right now. Fill the form in yourself.');
       return;
     }
-    _applyDraft(draft);
+    // Built after the await so the category is current.
+    _applyDraft(draft, _targetFor(tag));
   }
 
-  /// What:   Fills the form from an AI draft.
-  /// Input:  [draft] (title, category, description, budget range).
+  /// What:   Fills one task from an AI draft.
+  /// Input:  [draft] (title, category, description, budget range) and the [task] to fill.
   /// Output: Fills only empty fields, never overwriting what the user typed; a snackbar lists what changed.
-  void _applyDraft(JobDraft draft) {
-    final controller = context.read<PostJobController>();
+  void _applyDraft(JobDraft draft, _TaskTarget task) {
     final filled = <String>[];
-    if (_title.text.trim().isEmpty) {
-      _title.text = draft.title;
+    if (task.title.text.trim().isEmpty) {
+      task.title.text = draft.title;
       filled.add('title');
     }
-    if (controller.category == null) {
-      controller.setCategory(draft.category);
+    if (task.category == null) {
+      task.setCategory(draft.category);
       filled.add('category');
     }
-    if (_description.text.trim().isEmpty) {
-      _description.text = draft.description;
+    if (task.description.text.trim().isEmpty) {
+      task.description.text = draft.description;
       filled.add('description');
     }
     final minSen = draft.minSen;
     final maxSen = draft.maxSen;
     if (minSen != null && maxSen != null &&
-        _budgetMin.text.trim().isEmpty && _budgetMax.text.trim().isEmpty) {
-      _budgetMin.text = (minSen / 100).toStringAsFixed(2);
-      _budgetMax.text = (maxSen / 100).toStringAsFixed(2);
+        task.budgetMin.text.trim().isEmpty &&
+        task.budgetMax.text.trim().isEmpty) {
+      task.budgetMin.text = (minSen / 100).toStringAsFixed(2);
+      task.budgetMax.text = (maxSen / 100).toStringAsFixed(2);
       filled.add('budget');
     }
     setState(() {});
@@ -519,24 +555,33 @@ class _PostJobViewState extends State<_PostJobView> {
         : 'Filled in ${filled.join(', ')}. Check each one before posting.');
   }
 
-  /// What:   Fair-price assist.
-  /// Output: Needs a category and a description; PostJobController.suggestPrice() sets the range hint the user can apply with "Use this".
-  Future<void> _suggestPrice() async {
+  /// What:   Fair-price assist for one task.
+  /// Input:  Task [tag].
+  /// Output: Needs a category and a description; PostJobController.suggestPrice() sets that task's range hint the user can apply with "Use this".
+  /// Notes:  A task removed while the request ran gets its hint dropped.
+  Future<void> _suggestPrice(Object tag) async {
     final controller = context.read<PostJobController>();
-    if (controller.category == null) {
+    final task = _targetFor(tag);
+    final category = task.category;
+    if (category == null) {
       _snack('Pick a category first.');
       return;
     }
-    final description = _description.text.trim();
+    final description = task.description.text.trim();
     if (description.length < 3) {
       _snack('Describe the job first, then ask for a price range.');
       return;
     }
-    await controller.suggestPrice(description);
+    final hint = await controller.suggestPrice(tag,
+        category: category,
+        description: description,
+        photoUrl: _assistPhotoFor(tag));
     if (!mounted) return;
-    if (context.read<PostJobController>().priceHint == null) {
-      _snack('Couldn\'t get a suggestion right now.');
+    if (!_taskStillExists(tag)) {
+      controller.forgetTask(tag);
+      return;
     }
+    if (hint == null) _snack('Couldn\'t get a suggestion right now.');
   }
 
   /// What:   Task 1's category, title and description fields.
@@ -610,8 +655,10 @@ class _PostJobViewState extends State<_PostJobView> {
                 const SizedBox(height: 16),
                 _DraftCard(
                   isBundle: _isBundle,
-                  busy: controller.assistingDraft,
-                  onTap: controller.isBusy ? null : _draftFromNote,
+                  busy: controller.draftingTask == _task1Tag,
+                  onTap: controller.isBusy
+                      ? null
+                      : () => _draftFromNote(_task1Tag),
                 ),
                 const SizedBox(height: 24),
                 if (controller.errorMessage != null)
@@ -629,11 +676,13 @@ class _PostJobViewState extends State<_PostJobView> {
                         ..._task1Fields(controller, theme),
                         const SizedBox(height: 8),
                         _BudgetFields(
-                          controller: controller,
+                          priceHint: controller.priceHints[_task1Tag],
+                          pricing: controller.isPricing(_task1Tag),
                           budgetMin: _budgetMin,
                           budgetMax: _budgetMax,
-                          onSuggestPrice:
-                              controller.isBusy ? null : _suggestPrice,
+                          onSuggestPrice: controller.isBusy
+                              ? null
+                              : () => _suggestPrice(_task1Tag),
                         ),
                       ],
                     ),
@@ -653,6 +702,15 @@ class _PostJobViewState extends State<_PostJobView> {
                     onRemove: () => _removeTask(i),
                     onCategory: (v) =>
                         setState(() => _extraTasks[i].category = v),
+                    priceHint: controller.priceHints[_extraTasks[i]],
+                    pricing: controller.isPricing(_extraTasks[i]),
+                    drafting: controller.draftingTask == _extraTasks[i],
+                    onDraft: controller.isBusy
+                        ? null
+                        : () => _draftFromNote(_extraTasks[i]),
+                    onSuggestPrice: controller.isBusy
+                        ? null
+                        : () => _suggestPrice(_extraTasks[i]),
                   ),
                 const SizedBox(height: 8),
                 if (_extraTasks.length + 1 < PlatformConfig.maxBundleTasks)
@@ -831,10 +889,13 @@ class _PostJobViewState extends State<_PostJobView> {
                 if (!_isBundle) ...[
                   const SizedBox(height: 16),
                   _BudgetFields(
-                    controller: controller,
+                    priceHint: controller.priceHints[_task1Tag],
+                    pricing: controller.isPricing(_task1Tag),
                     budgetMin: _budgetMin,
                     budgetMax: _budgetMax,
-                    onSuggestPrice: controller.isBusy ? null : _suggestPrice,
+                    onSuggestPrice: controller.isBusy
+                        ? null
+                        : () => _suggestPrice(_task1Tag),
                   ),
                 ],
 
@@ -1005,9 +1066,30 @@ class _TaskFields {
   }
 }
 
+/// What:   The editable fields of one task, so the AI helpers work on any task.
+/// Input:  Task 1's form fields or a [_TaskFields], via _PostJobViewState._targetFor().
+/// Output: The controllers, current category and a category setter.
+class _TaskTarget {
+  _TaskTarget({
+    required this.title,
+    required this.description,
+    required this.budgetMin,
+    required this.budgetMax,
+    required this.category,
+    required this.setCategory,
+  });
+
+  final TextEditingController title;
+  final TextEditingController description;
+  final TextEditingController budgetMin;
+  final TextEditingController budgetMax;
+  final String? category;
+  final ValueChanged<String?> setCategory;
+}
+
 /// What:   One added task of a bundle ("Task 2" on; Task 1 uses the form's own fields).
-/// Input:  [number], [fields], [onRemove], [onCategory].
-/// Output: Card with category, title, description and budget range fields.
+/// Input:  [number], [fields], [onRemove], [onCategory]; the task's [priceHint], [pricing] and [drafting] state; [onDraft] and [onSuggestPrice].
+/// Output: Card with an AI draft button, category, title, description and budget range fields with the fair-range assist.
 class _TaskCard extends StatelessWidget {
   const _TaskCard({
     super.key,
@@ -1015,12 +1097,22 @@ class _TaskCard extends StatelessWidget {
     required this.fields,
     required this.onRemove,
     required this.onCategory,
+    required this.priceHint,
+    required this.pricing,
+    required this.drafting,
+    required this.onDraft,
+    required this.onSuggestPrice,
   });
 
   final int number;
   final _TaskFields fields;
   final VoidCallback onRemove;
   final ValueChanged<String?> onCategory;
+  final ({int minSen, int maxSen})? priceHint;
+  final bool pricing;
+  final bool drafting;
+  final VoidCallback? onDraft;
+  final VoidCallback? onSuggestPrice;
 
   @override
   Widget build(BuildContext context) {
@@ -1043,6 +1135,20 @@ class _TaskCard extends StatelessWidget {
                     onPressed: onRemove,
                   ),
               ],
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: drafting ? null : onDraft,
+                icon: drafting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.auto_awesome, size: 18),
+                label: Text("Describe task $number, we'll fill it in"),
+              ),
             ),
             const SizedBox(height: 8),
             _categoryField(
@@ -1068,10 +1174,14 @@ class _TaskCard extends StatelessWidget {
               maxLines: 4,
               validator: (v) => Validators.required(v, 'Description'),
             ),
-            Text('Likely price range (optional)',
-                style: theme.textTheme.labelLarge),
-            const SizedBox(height: 8),
-            _rangeFields(fields.budgetMin, fields.budgetMax),
+            _BudgetFields(
+              label: 'Likely price range (optional)',
+              priceHint: priceHint,
+              pricing: pricing,
+              budgetMin: fields.budgetMin,
+              budgetMax: fields.budgetMax,
+              onSuggestPrice: onSuggestPrice,
+            ),
           ],
         ),
       ),
@@ -1194,17 +1304,21 @@ class _SectionHeader extends StatelessWidget {
 }
 
 /// What:   Price range inputs with the fair-range assist.
-/// Input:  [controller] priceHint and assisting state; [budgetMin], [budgetMax]; [onSuggestPrice].
+/// Input:  One task's [priceHint] and [pricing] state from PostJobController; [budgetMin], [budgetMax]; [onSuggestPrice]; optional [label].
 /// Output: "Suggest a fair range" button and, once a hint exists, a "Use this" shortcut that fills the fields.
 class _BudgetFields extends StatelessWidget {
   const _BudgetFields({
-    required this.controller,
+    required this.priceHint,
+    required this.pricing,
     required this.budgetMin,
     required this.budgetMax,
     required this.onSuggestPrice,
+    this.label = 'Likely price range',
   });
 
-  final PostJobController controller;
+  final ({int minSen, int maxSen})? priceHint;
+  final bool pricing;
+  final String label;
   final TextEditingController budgetMin;
   final TextEditingController budgetMax;
   final VoidCallback? onSuggestPrice;
@@ -1214,7 +1328,7 @@ class _BudgetFields extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final priceHint = controller.priceHint;
+    final priceHint = this.priceHint;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1223,10 +1337,10 @@ class _BudgetFields extends StatelessWidget {
           alignment: WrapAlignment.spaceBetween,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Text('Likely price range', style: theme.textTheme.labelLarge),
+            Text(label, style: theme.textTheme.labelLarge),
             TextButton.icon(
-              onPressed: controller.assistingPrice ? null : onSuggestPrice,
-              icon: controller.assistingPrice
+              onPressed: pricing ? null : onSuggestPrice,
+              icon: pricing
                   ? const SizedBox(
                       width: 16,
                       height: 16,

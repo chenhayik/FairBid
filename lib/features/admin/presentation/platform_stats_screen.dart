@@ -31,7 +31,9 @@ class _PlatformStatsScreenState extends State<PlatformStatsScreen> {
   /// Output: Replaces _stats and completes when the new load finishes.
   Future<void> _refresh() async {
     final fresh = context.read<StatsRepository>().load();
-    setState(() => _stats = fresh);
+    setState(() {
+      _stats = fresh;
+    });
     await fresh;
   }
 

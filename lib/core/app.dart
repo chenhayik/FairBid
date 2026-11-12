@@ -143,7 +143,7 @@ class _FairBidAppViewState extends State<_FairBidAppView> {
   /// What:   Push wiring that follows auth state.
   /// Input:  [auth] user; NotificationRepository (notification_repository.dart) and PushService (push_service.dart).
   /// Output: Side effects only: init push once, ask permission, register this device's token once per signed-in uid.
-  /// Notes:  Waits until onboarding is done; also sets auth.onBeforeSignOut to detach the token.
+  /// Notes:  Waits until the email is verified and onboarding is done; also sets auth.onBeforeSignOut to detach the token.
   void _syncPush(AuthController auth) {
     final user = auth.user;
     if (user == null) {
@@ -151,7 +151,12 @@ class _FairBidAppViewState extends State<_FairBidAppView> {
       return;
     }
     // After onboarding, so the permission prompt appears once the app has shown its value.
-    if (user.needsOnboarding || _pushTokenUid == user.uid) return;
+    // Rules reject profile writes until the email is verified.
+    if (user.needsEmailVerification ||
+        user.needsOnboarding ||
+        _pushTokenUid == user.uid) {
+      return;
+    }
     _pushTokenUid = user.uid;
 
     final notifications = context.read<NotificationRepository>();

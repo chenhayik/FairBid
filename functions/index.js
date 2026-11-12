@@ -4,11 +4,12 @@ const {FieldValue, Timestamp} = require("firebase-admin/firestore");
 const {defineSecret} = require("firebase-functions/params");
 const {GoogleGenAI, Type, ThinkingLevel, MediaResolution} =
     require("@google/genai");
-const {computeTrust} = require("./trust");
+const {computeTrust, reviewRatingDelta} = require("./trust");
 const {
-  callerUid, docId, assertAdmin, throwIfSuspended, assertCanPay, jobRole,
+  callerUid, docId, assertAdmin, assertTwoFactor, throwIfSuspended,
+  assertCanPay, jobRole,
   counterpartyUid, notifyUser, logJobEvent, ESCROW, appendLedger,
-  writeFundedMilestone, IMG_PREFIX,
+  writeFundedMilestone, IMG_PREFIX, walletRef, balanceOf, adjustWallet,
 } = require("./common");
 const {
   disputeRefundPlan, canCancelFunded, cancellationPlan, planIncrease,
@@ -21,6 +22,8 @@ const scheduling = require("./scheduling");
 const payoutMethod = require("./payout_method");
 const ssm = require("./ssm");
 const idcheck = require("./idcheck");
+const {withBusyRetry, errorStatus} = require("./gemini_retry");
+const aiQuota = require("./ai_quota");
 
 admin.initializeApp();
 
@@ -41,6 +44,8 @@ exports.cleanupUserDoc = functions.auth.user().onDelete(async (user) => {
     functions.logger.warn("suspended read failed", {uid: user.uid});
   }
   await db.recursiveDelete(ref);
+   // The AI assist counter (ai_quota.js) sits outside the profile tree.
+  await db.doc(`aiUsage/${user.uid}`).delete().catch(() => {});
   try {
     const [files] = await admin.storage().bucket()
         .getFiles({prefix: `verification/${user.uid}/`});
@@ -281,17 +286,18 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
   const jobRef = db.doc(`jobs/${jobId}`);
   const bidsRef = jobRef.collection("bids");
   const winnerRef = bidsRef.doc(providerId);
-  const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
-    const [jobSnap, winnerSnap, walletSnap, pendingBids] = await Promise.all([
-      tx.get(jobRef),
-      tx.get(winnerRef),
-      tx.get(walletRef),
-      tx.get(bidsRef.where("status", "==", "pending")),
-    ]);
-    const wallet = walletSnap.data() || {};
-    throwIfSuspended(wallet);
+    const [jobSnap, winnerSnap, userSnap, walletSnap, pendingBids] =
+        await Promise.all([
+          tx.get(jobRef),
+          tx.get(winnerRef),
+          tx.get(db.doc(`users/${uid}`)),
+          tx.get(walletRef(db, uid)),
+          tx.get(bidsRef.where("status", "==", "pending")),
+        ]);
+    const user = userSnap.data() || {};
+    throwIfSuspended(user);
     const job = jobSnap.data();
     if (job?.requestorId !== uid) {
       throw new functions.https.HttpsError(
@@ -310,14 +316,14 @@ exports.acceptBid = functions.https.onCall(async (data, context) => {
     }
     // Use the stored bid amount, never client input.
     const amount = checkAmount(winner.amountSen);
-    assertCanPay(wallet, amount,
+    assertCanPay(walletSnap, user, amount,
         "Insufficient available balance to accept this bid.");
 
     tx.update(winnerRef, {status: "accepted"});
     pendingBids.docs
         .filter((bid) => bid.id !== providerId)
         .forEach((bid) => tx.update(bid.ref, {status: "rejected"}));
-    tx.update(walletRef, {walletBalanceSen: FieldValue.increment(-amount)});
+    adjustWallet(tx, db, uid, -amount);
     writeFundedMilestone(tx, {
       jobRef, title: job.title, requestorId: uid, providerId, amountSen: amount,
     });
@@ -377,8 +383,7 @@ exports.releaseMilestone = functions.https.onCall(async (data, context) => {
     }
     const amountSen = milestoneSnap.data().amountSen;
 
-    tx.update(db.doc(`users/${job.acceptedProviderId}`),
-        {walletBalanceSen: FieldValue.increment(amountSen)});
+    adjustWallet(tx, db, job.acceptedProviderId, amountSen);
     tx.update(milestoneRef, {status: "released"});
     const wasLast = completesJob(job, milestoneRows(allMilestones), milestoneId);
     if (wasLast) {
@@ -460,19 +465,21 @@ exports.topUpWallet = functions.https.onCall(async (data, context) => {
   functions.logger.info("topUpWallet requested", {uid, amountSen});
   capTopUp(amountSen, "topUpWallet", uid);
   const db = admin.firestore();
-  const walletRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, uid);
-    const walletSnap = await tx.get(walletRef);
-    const balance = walletSnap.data()?.walletBalanceSen || 0;
+    const [userSnap, walletSnap] = await Promise.all([
+      tx.get(db.doc(`users/${uid}`)),
+      tx.get(walletRef(db, uid)),
+    ]);
+    throwIfSuspended(userSnap.data());
+    const balance = balanceOf(walletSnap, userSnap.data());
     if (balance + amountSen > MAX_WALLET_BALANCE_SEN) {
       functions.logger.error("topUpWallet rejected: over wallet cap",
           {uid, amountSen, balance, capSen: MAX_WALLET_BALANCE_SEN});
       throw new functions.https.HttpsError(
           "failed-precondition", "Wallet balance is capped at RM 50,000.");
     }
-    tx.update(walletRef, {walletBalanceSen: FieldValue.increment(amountSen)});
+    adjustWallet(tx, db, uid, amountSen);
     appendLedger(tx, {
       fromUid: null,
       toUid: uid,
@@ -495,15 +502,17 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
   const amountSen = checkAmount(data.amountSen);
   functions.logger.info("withdrawFromWallet requested", {uid, amountSen});
   const db = admin.firestore();
-  const walletRef = db.doc(`users/${uid}`);
+  const userRef = db.doc(`users/${uid}`);
 
   await db.runTransaction(async (tx) => {
-    await assertNotSuspended(tx, uid);
-    const [walletSnap, methodSnap, payoutSnap] = await Promise.all([
-      tx.get(walletRef),
-      tx.get(walletRef.collection("private").doc("payoutMethod")),
-      tx.get(walletRef.collection("private").doc("payout")),
+    const [userSnap, walletSnap, methodSnap, payoutSnap] = await Promise.all([
+      tx.get(userRef),
+      tx.get(walletRef(db, uid)),
+      tx.get(userRef.collection("private").doc("payoutMethod")),
+      tx.get(userRef.collection("private").doc("payout")),
     ]);
+    throwIfSuspended(userSnap.data());
+    await assertTwoFactor(uid, userSnap.data()?.role);
     // Money needs somewhere to go, and new details wait out a 24-hour hold.
     const method = methodSnap.data();
     if (!method) {
@@ -517,21 +526,20 @@ exports.withdrawFromWallet = functions.https.onCall(async (data, context) => {
     }
     if (method.proxyType === "mobile" &&
         payoutMethod.normaliseMobile(
-            payoutSnap.data()?.phone ?? walletSnap.data()?.phone) !==
+            payoutSnap.data()?.phone ?? userSnap.data()?.phone) !==
             method.mobile) {
       throw new functions.https.HttpsError("failed-precondition",
           "Your profile phone number changed. Update your DuitNow payout " +
           "method to match it first.");
     }
-    const wallet = walletSnap.data() || {};
-    const balance = wallet.walletBalanceSen || 0;
+    const balance = balanceOf(walletSnap, userSnap.data());
     if (balance < amountSen) {
       functions.logger.error("withdrawFromWallet rejected: insufficient balance",
           {uid, amountSen, balance});
       throw new functions.https.HttpsError(
           "failed-precondition", "Insufficient wallet balance.");
     }
-    tx.update(walletRef, {walletBalanceSen: balance - amountSen});
+    adjustWallet(tx, db, uid, -amountSen);
     appendLedger(tx, {
       fromUid: uid,
       toUid: null,
@@ -561,6 +569,18 @@ const TOYYIBPAY_CALLBACK_URL =
     "https://us-central1-fairbid-c9340.cloudfunctions.net/toyyibpayCallback";
 
 /**
+ * What:   Email sent with a toyyibPay bill.
+ * Input:  [email] from the caller's `users/{uid}` doc.
+ * Output: The email if it is a plain address, else a placeholder.
+ * Notes:  toyyibPay rejects some valid addresses (e.g. `a+tag@gmail.com`)
+ *         with "billEmail is invalid format"; it only shows on the receipt.
+ */
+function toyyibpayEmail(email) {
+  const plain = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+  return plain.test(email || "") ? email : "user@fairbid.app";
+}
+
+/**
  * What:   Callable that creates a toyyibPay bill.
  * Input:  {amountSen} from wallet_repository.dart.
  * Output: {billCode, paymentUrl}; a `topups/{billCode}` record is stored.
@@ -573,14 +593,17 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
       functions.logger.info("createToyyibpayBill requested", {uid, amountSen});
       capTopUp(amountSen, "createToyyibpayBill", uid);
       const db = admin.firestore();
-      const userSnap = await db.doc(`users/${uid}`).get();
+      const [userSnap, walletSnap] = await Promise.all([
+        db.doc(`users/${uid}`).get(),
+        walletRef(db, uid).get(),
+      ]);
       const user = userSnap.data() || {};
       if (user.suspended === true) {
         functions.logger.error("createToyyibpayBill rejected: suspended user",
             {uid});
       }
       throwIfSuspended(user);
-      if ((user.walletBalanceSen || 0) + amountSen > MAX_WALLET_BALANCE_SEN) {
+      if (balanceOf(walletSnap, user) + amountSen > MAX_WALLET_BALANCE_SEN) {
         functions.logger.error("createToyyibpayBill rejected: over wallet cap",
             {uid, amountSen, capSen: MAX_WALLET_BALANCE_SEN});
         throw new functions.https.HttpsError(
@@ -601,7 +624,7 @@ exports.createToyyibpayBill = functions.runWith({secrets: [toyyibpaySecret]})
         // Unique per bill, or toyyibPay may treat a new payment as a repeat.
         billExternalReferenceNo: `${uid}-${Date.now()}`,
         billTo: user.displayName || "FairBid user",
-        billEmail: user.email || "user@fairbid.app",
+        billEmail: toyyibpayEmail(user.email),
         // toyyibPay rejects an empty phone, so use a placeholder if none.
         billPhone: user.phone || "0123456789",
         billPaymentChannel: "2",
@@ -686,18 +709,17 @@ async function creditToyyibpayTopup(billCode) {
       return {credited: true, reason: "already_credited"};
     }
 
-    const walletRef = db.doc(`users/${rec.uid}`);
-    const walletSnap = await tx.get(walletRef);
-    const newBalance =
-        (walletSnap.data()?.walletBalanceSen || 0) + rec.amountSen;
+    const [userSnap, walletSnap] = await Promise.all([
+      tx.get(db.doc(`users/${rec.uid}`)),
+      tx.get(walletRef(db, rec.uid)),
+    ]);
+    const newBalance = balanceOf(walletSnap, userSnap.data()) + rec.amountSen;
     if (newBalance > MAX_WALLET_BALANCE_SEN) {
       // Paid money is always credited; the cap is only a pre-check.
       functions.logger.warn("toyyibpay credit exceeds wallet cap",
           {billCode, uid: rec.uid, newBalance});
     }
-    tx.update(walletRef, {
-      walletBalanceSen: FieldValue.increment(rec.amountSen),
-    });
+    adjustWallet(tx, db, rec.uid, rec.amountSen);
     tx.update(topupRef, {
       status: "credited",
       creditedAt: FieldValue.serverTimestamp(),
@@ -784,7 +806,8 @@ exports.reconcileToyyibpayTopup =
  * What:   Admin callable that rules on a flagged review.
  * Input:  {revieweeId, reviewId, hide} from moderation_repository.dart.
  * Output: Hiding removes the rating from the reviewee's totals and notifies
- *         them; keeping just clears the flag.
+ *         them; un-hiding a hidden review adds it back; keeping just clears
+ *         the flag.
  */
 exports.moderateReview = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -805,12 +828,14 @@ exports.moderateReview = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError("not-found", "Review not found.");
     }
 
-    // `!review.hidden` stops a double subtract if moderated twice.
-    if (hide && !review.hidden) {
+    // Hiding takes the rating out; un-hiding puts it back. Moderating a
+    // review twice the same way changes nothing.
+    const delta = reviewRatingDelta(review, hide);
+    if (delta.count !== 0) {
       tx.update(userRef, {
-        ratingSum:
-            Math.max(0, (userSnap.data()?.ratingSum || 0) - review.rating),
-        ratingCount: Math.max(0, (userSnap.data()?.ratingCount || 0) - 1),
+        ratingSum: Math.max(0, (userSnap.data()?.ratingSum || 0) + delta.sum),
+        ratingCount:
+            Math.max(0, (userSnap.data()?.ratingCount || 0) + delta.count),
       });
     }
     tx.update(reviewRef, {
@@ -1011,6 +1036,7 @@ exports.withdrawDispute = functions.https.onCall(async (data, context) => {
       .where("status", "==", "open");
 
   await db.runTransaction(async (tx) => {
+    await assertNotSuspended(tx, uid);
     const [jobSnap, milestoneSnap, disputes] = await Promise.all([
       tx.get(jobRef), tx.get(milestoneRef), tx.get(openQuery),
     ]);
@@ -1078,7 +1104,6 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
     const jobRef = db.doc(`jobs/${dispute.jobId}`);
     const milestonesRef = jobRef.collection("milestones");
     const milestoneRef = milestonesRef.doc(dispute.milestoneId);
-    const requestorRef = db.doc(`users/${dispute.requestorId}`);
     const providerRef = db.doc(`users/${dispute.providerId}`);
     const [milestoneSnap, allMilestones, jobSnap, openOnJob] =
         await Promise.all([
@@ -1100,8 +1125,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
 
     if (released) {
       // Provider is paid. If it was the last milestone, the job completes.
-      tx.update(providerRef,
-          {walletBalanceSen: FieldValue.increment(amountSen)});
+      adjustWallet(tx, db, dispute.providerId, amountSen);
       tx.update(milestoneRef, {status: "released", disputedBy: null});
       if (completesJob(job, milestoneRows(allMilestones),
           dispute.milestoneId)) {
@@ -1122,8 +1146,7 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
       // so it can't simply be funded again as if nothing happened.
       const plan = disputeRefundPlan(milestoneRows(allMilestones));
       refundedSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
-      tx.update(requestorRef,
-          {walletBalanceSen: FieldValue.increment(refundedSen)});
+      adjustWallet(tx, db, dispute.requestorId, refundedSen);
       for (const refund of plan.refunds) {
         tx.update(milestonesRef.doc(refund.id),
             {status: "refunded", disputedBy: null});
@@ -1195,11 +1218,33 @@ exports.resolveDispute = functions.https.onCall(async (data, context) => {
 });
 
 /**
- * What:   Admin callable that recounts every user's trust counters.
+ * Moves one user's legacy `walletBalanceSen` (on the user doc) into their
+ * private wallet and deletes the field, in one transaction. Safe to re-run:
+ * once the field is gone there is nothing left to move. Returns true if a
+ * field was moved.
+ */
+function migrateLegacyWallet(db, userRef) {
+  return db.runTransaction(async (tx) => {
+    const legacy = (await tx.get(userRef)).data()?.walletBalanceSen;
+    if (legacy === undefined) return false;
+    if (Number.isFinite(legacy) && legacy !== 0) {
+      adjustWallet(tx, db, userRef.id, legacy);
+    }
+    tx.update(userRef, {walletBalanceSen: FieldValue.delete()});
+    return true;
+  });
+}
+
+/**
+ * What:   Admin callable that recounts every user's trust counters and moves
+ *         legacy wallet balances.
  * Input:  None (stats_repository.dart); safe to re-run.
  * Output: `jobsCompleted` and `disputesLost` rewritten from jobs and disputes
  *         with the live rules (bundle once per person; auto-closed disputes
- *         don't count), then every user's Trust Score recomputed.
+ *         don't count), then every user's Trust Score recomputed. Each user's
+ *         old `walletBalanceSen` on the user doc is moved to
+ *         `users/{uid}/private/wallet` (one transaction each). Returns
+ *         {users, walletsMoved}.
  */
 exports.backfillTrust = functions.https.onCall(async (data, context) => {
   await assertAdmin(callerUid(context));
@@ -1228,14 +1273,16 @@ exports.backfillTrust = functions.https.onCall(async (data, context) => {
 
   // Fix the counters, then recompute the score directly: a write that
   // changes nothing does not fire the trust trigger.
+  let walletsMoved = 0;
   for (const doc of users.docs) {
+    if (await migrateLegacyWallet(db, doc.ref)) walletsMoved++;
     await doc.ref.update({
       jobsCompleted: completed.get(doc.id)?.size ?? 0,
       disputesLost: lost.get(doc.id) ?? 0,
     });
     await refreshTrust(doc.ref);
   }
-  return {users: users.size};
+  return {users: users.size, walletsMoved};
 });
 
 // Job cancellation: one side asks, the other accepts (an admin can override).
@@ -1270,8 +1317,7 @@ function finaliseCancellation(tx, jobRef, job, milestonesSnap, cancelledBy) {
   }
   const refundSen = plan.refunds.reduce((sum, r) => sum + r.amountSen, 0);
   if (refundSen > 0) {
-    tx.update(admin.firestore().doc(`users/${job.requestorId}`),
-        {walletBalanceSen: FieldValue.increment(refundSen)});
+    adjustWallet(tx, admin.firestore(), job.requestorId, refundSen);
   }
   for (const refund of plan.refunds) {
     appendLedger(tx, {
@@ -1311,6 +1357,7 @@ exports.requestJobCancellation =
     const milestonesRef = jobRef.collection("milestones");
 
     await db.runTransaction(async (tx) => {
+      await assertNotSuspended(tx, uid);
       const [jobSnap, milestones] = await Promise.all([
         tx.get(jobRef),
         tx.get(milestonesRef),
@@ -1370,6 +1417,7 @@ exports.respondToJobCancellation =
     const milestonesRef = jobRef.collection("milestones");
 
     await db.runTransaction(async (tx) => {
+      await assertNotSuspended(tx, uid);
       const [jobSnap, milestones] = await Promise.all([
         tx.get(jobRef),
         tx.get(milestonesRef),
@@ -1491,21 +1539,22 @@ exports.requestPriceChange = functions.https.onCall(async (data, context) => {
 
 /**
  * What:   Money move for an accepted price change on a funded-at-award job.
- * Input:  [tx] and {job, jobRef, milestonesRef, rows, walletRef, delta} where
- *         [delta] is the new price minus the old, in sen.
- * Output: Increase: wallet to escrow, growing the only funded stage or adding
- *         a "Price change" stage. Decrease: refund from funded stages. Ledger
- *         entry written; returns true when the decrease finished the job.
+ * Input:  [tx] and {job, jobRef, milestonesRef, rows, delta} where [delta] is
+ *         the new price minus the old, in sen.
+ * Output: Increase: private wallet to escrow, growing the only funded stage or
+ *         adding a "Price change" stage. Decrease: refund from funded stages.
+ *         Ledger entry written; returns true when the decrease finished the
+ *         job.
  */
-function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
-  delta}) {
+function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, delta}) {
+  const db = admin.firestore();
   const ledger = {
     jobId: jobRef.id,
     jobTitle: job.title || null,
     participantIds: [job.requestorId],
   };
   if (delta > 0) {
-    tx.update(walletRef, {walletBalanceSen: FieldValue.increment(-delta)});
+    adjustWallet(tx, db, job.requestorId, -delta);
     const plan = planIncrease(rows, delta);
     if (plan.grow) {
       tx.update(milestonesRef.doc(plan.grow.id),
@@ -1525,7 +1574,7 @@ function repriceFundedStages(tx, {job, jobRef, milestonesRef, rows, walletRef,
   }
   const refundSen = -delta;
   const plan = planDecrease(rows, refundSen);
-  tx.update(walletRef, {walletBalanceSen: FieldValue.increment(refundSen)});
+  adjustWallet(tx, db, job.requestorId, refundSen);
   for (const {id, amountSen} of plan.updates) {
     tx.update(milestonesRef.doc(id), {amountSen});
   }
@@ -1591,8 +1640,10 @@ exports.respondToPriceChange =
 
       const oldSen = job.acceptedBidAmountSen;
       const newSen = request.newAmountSen;
-      const walletRef = db.doc(`users/${job.requestorId}`);
-      const walletSnap = await tx.get(walletRef);
+      const [requestorSnap, walletSnap] = await Promise.all([
+        tx.get(db.doc(`users/${job.requestorId}`)),
+        tx.get(walletRef(db, job.requestorId)),
+      ]);
       const problem = validatePriceChange({
         job, milestones: milestones.docs.map((d) => d.data()),
         newAmountSen: newSen,
@@ -1602,13 +1653,12 @@ exports.respondToPriceChange =
       }
       const delta = newSen - oldSen;
       if (delta > 0) {
-        assertCanPay(walletSnap.data() || {}, delta,
+        assertCanPay(walletSnap, requestorSnap.data() || {}, delta,
             "Insufficient available balance to accept this price change.");
       }
 
       const completed = repriceFundedStages(tx, {
-        job, jobRef, milestonesRef, rows: milestoneRows(milestones),
-        walletRef, delta,
+        job, jobRef, milestonesRef, rows: milestoneRows(milestones), delta,
       });
       const count = (job.priceChangeCount || 0) + 1;
       tx.update(jobRef, {
@@ -1753,7 +1803,7 @@ const DEAD_TOKEN_CODES = [
 ];
 
 /**
- * What:   Trigger that sends a new notification as an FCM push.
+ * What:   Trigger that send notification as an FCM push.
  * Input:  A new `users/{uid}/notifications/{id}` doc.
  * Output: A push to the user's devices; dead tokens are removed.
  * Notes:  Best-effort; the in-app list is the source of truth.
@@ -2172,7 +2222,7 @@ async function fetchInlineImage(photoUrl) {
 exports.suggestJobDetails = functions
     .runWith({secrets: [geminiKey]})
     .https.onCall(async (data, context) => {
-      callerUid(context); // signed-in users only
+      const uid = callerUid(context); // signed-in users only
       const kind = data.kind;
       const category = String(data.category || "").slice(0, 60);
       const roughText = String(data.roughText || "").trim().slice(0, 600);
@@ -2185,6 +2235,17 @@ exports.suggestJobDetails = functions
         throw new functions.https.HttpsError(
             "invalid-argument", "Tell us a bit more first.");
       }
+      // Daily allowance: one unit per button press, taken before Gemini is
+      // asked. The busy retries in withBusyRetry happen inside this same
+      // call, so they never use up the allowance.
+      const db = admin.firestore();
+      if (!(await aiQuota.reserveAiCall(db, uid))) {
+        throw new functions.https.HttpsError("resource-exhausted",
+            `You have used today's ${aiQuota.DAILY_AI_LIMIT} AI ` +
+            "suggestions. Please try again tomorrow.");
+      }
+
+
 
       try {
         const ai = new GoogleGenAI({apiKey: geminiKey.value()});
@@ -2212,16 +2273,31 @@ exports.suggestJobDetails = functions
           contents = text;
         }
 
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents,
-          config,
-        });
-        return draft ? parseDraftJson(response.text) :
-            parsePriceJson(response.text);
+        // Gemini often answers 503/429 for a moment, so retry those briefly.
+        const response = await withBusyRetry(
+            () => ai.models.generateContent({
+              model: GEMINI_MODEL,
+              contents,
+              config,
+            }),
+            {
+              onRetry: ({status, attempt}) => functions.logger.info(
+                  "assist retrying after busy reply", {status, attempt, kind}),
+            });
+        // `response.text` is a getter, so read it once.
+        const reply = response.text;
+        const result = draft ? parseDraftJson(reply) : parsePriceJson(reply);
+        if (result === null) {
+          // Metadata only: the reply text echoes the user's note.
+          functions.logger.warn("assist unusable reply", {
+            kind,
+            replyLength: typeof reply === "string" ? reply.length : null,
+            finishReason: response.candidates?.[0]?.finishReason ?? null,
+          });
+        }
+        return result;
       } catch (err) {
-        const status = typeof err?.status === "number" ? err.status :
-            (typeof err?.code === "number" ? err.code : null);
+        const status = errorStatus(err);
         // 400/403/404 are config bugs, so log them as errors; other failures
         // are soft misses. Never log the API key or request body.
         if (status === 400 || status === 403 || status === 404) {
@@ -2231,6 +2307,8 @@ exports.suggestJobDetails = functions
           functions.logger.info("assist soft-miss (quota/offline/transient)",
               {status, kind});
         }
+        // Gemini gave no answer, so give the unit back (best effort).
+        await aiQuota.refundAiCall(db, uid).catch(() => {});
         return null;
       }
     });
@@ -2255,6 +2333,3 @@ exports.withdrawAppointmentProposal = scheduling.withdrawAppointmentProposal;
 exports.markOnTheWay = scheduling.markOnTheWay;
 exports.markArrived = scheduling.markArrived;
 exports.sendVisitReminders = scheduling.sendVisitReminders;
-
-
-

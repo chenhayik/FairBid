@@ -36,8 +36,14 @@ service cloud.firestore {
       return isSignedIn() && me().get('suspended', false) == true;
     }
 
+    // Writes need a verified email (ID token claim; Google accounts arrive verified)
+    // and no suspension. The profile create at sign-up is the only exception.
+    function canWrite() {
+      return request.auth.token.email_verified == true && !isSuspended();
+    }
+
     // Signed-in users read profiles; owners edit their own, except trust/wallet.
-    // TODO: wallet balances are readable by all signed-in users; move to private/.
+    // Wallet balances live in `private/wallet` (owner and admins read only).
     match /users/{userId} {
       // Fields only Cloud Functions may write (trust score, job counters).
       function trustFields() {
@@ -79,7 +85,7 @@ service cloud.firestore {
 
       allow update: if isSignedIn() && (
                       (request.auth.uid == userId
-                          && !isSuspended()
+                          && canWrite()
                           && roleUnchanged()
                           && selfVerificationWriteOk()
                           && !request.resource.data.diff(resource.data)
@@ -114,7 +120,7 @@ service cloud.firestore {
 
         allow read: if isSignedIn();
         allow create: if isSignedIn()
-                      && !isSuspended()
+                      && canWrite()
                       && request.resource.data.reviewerId == request.auth.uid
                       && request.auth.uid != userId
                       && jobData(request.resource.data.jobId).status == 'completed'
@@ -133,23 +139,28 @@ service cloud.firestore {
                           request.resource.data.jobId);
         // Only exception: a review can be flagged once for moderation.
         // Hiding it is done by the moderateReview Cloud Function.
+        // New reviews have no `flagged` field, so read it with a default.
         allow update: if isSignedIn()
-                      && resource.data.flagged != true
+                      && resource.data.get('flagged', false) != true
                       && request.resource.data.flagged == true
+                      && request.resource.data.flaggedByUid == request.auth.uid
                       && request.resource.data.diff(resource.data)
                           .affectedKeys()
                           .hasOnly(['flagged', 'flagReason', 'flaggedByUid']);
         allow delete: if false;
       }
 
-      // Private data (ID documents, payout details, phone number).
+      // Private data (ID documents, payout details, phone number, wallet).
       // Only the owner and admins can read it; the owner writes it.
       match /private/{doc} {
         allow read: if isSignedIn()
                     && (request.auth.uid == userId || isAdmin());
-        // Server results and the payout method are written by functions only.
+        // Server results, the payout method and the wallet balance are written
+        // by functions only.
         allow write: if isSignedIn() && request.auth.uid == userId
-                     && !(doc in ['ssmExtract', 'idExtract', 'payoutMethod']);
+                     && canWrite()
+                     && !(doc in ['ssmExtract', 'idExtract', 'payoutMethod',
+                                  'wallet']);
       }
 
       // Only Cloud Functions create notifications. The owner may only change `read`.
@@ -240,12 +251,38 @@ service cloud.firestore {
           || job.get('appointment', {}).get('confirmedAt', null) != null;
     }
 
+    // The job's `bidCount` before and after this write (the same batch or
+    // transaction). Both are relative, so a wrong or missing count never blocks a bid.
+    function bidCountBefore(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId))
+          .data.get('bidCount', 0);
+    }
+    function bidCountAfter(jobId) {
+      return getAfter(/databases/$(database)/documents/jobs/$(jobId))
+          .data.get('bidCount', 0);
+    }
+
+    // A bidder may move `bidCount` by exactly one, in the same write as their
+    // own bid appearing (+1) or disappearing (-1). Needs a batch or transaction.
+    // The bid rules below require the same step, so neither side can drift.
+    function bidCountStepOk(jobId) {
+      let bidPath = /databases/$(database)/documents/jobs/$(jobId)/bids/$(request.auth.uid);
+      let before = resource.data.get('bidCount', 0);
+      let after = request.resource.data.get('bidCount', 0);
+      return request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['bidCount'])
+          && ((after == before + 1 && !exists(bidPath) && existsAfter(bidPath))
+              || (after == before - 1 && exists(bidPath)
+                  && !existsAfter(bidPath)));
+    }
+
     // Jobs: signed-in users read. Only a requestor creates their own job, and only
-    // the owner edits it. Anyone may change `bidCount` (the bid counter).
+    // the owner edits it (but never `bidCount`). A bidder may step `bidCount` with
+    // their own bid.
     match /jobs/{jobId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn()
-                    && !isSuspended()
+                    && canWrite()
                     && request.resource.data.requestorId == request.auth.uid
                     && me().role == 'requestor'
                     && !request.resource.data.keys().hasAny(bundleFields())
@@ -259,40 +296,53 @@ service cloud.firestore {
                          && noPriceChangeFieldWrites()
                          && noScheduleFieldWrites()
                          && noBundleFieldWrites()
-                         && bundleTaskStatusWriteOk())
-                        || request.resource.data.diff(resource.data)
-                            .affectedKeys().hasOnly(['bidCount']));
+                         && bundleTaskStatusWriteOk()
+                         // Only a bid moves the counter, not the owner.
+                         && request.resource.data.get('bidCount', 0)
+                             == resource.data.get('bidCount', 0))
+                        || bidCountStepOk(jobId));
       allow delete: if false;
 
       // Bids: one per provider, keyed by provider uid. Only approved providers write.
       // Accepting is server-only; a provider can withdraw their own bid.
+      // `bidCount` moves with the bid: a new bid is +1, a withdrawal is -1, an
+      // edit leaves it alone. This stops delete-then-recreate from inflating it.
       match /bids/{bidId} {
+        function bidWriteOk() {
+          return isSignedIn()
+              && canWrite()
+              && request.auth.uid == bidId
+              && request.resource.data.providerId == bidId
+              && isApprovedProvider()
+              && jobBiddingOpen(jobId)
+              && jobTakesOrdinaryBids(jobId)
+              // Accepting is server-only, so a bid can only be written as pending.
+              && request.resource.data.status == 'pending'
+              // Amount must be a positive int up to RM 50,000 (acceptBid trusts it).
+              // Keep in sync with PlatformConfig.maxBidSen.
+              && request.resource.data.amountSen is int
+              && request.resource.data.amountSen > 0
+              && request.resource.data.amountSen <= 5000000
+              // Trust Score and photo must match the caller's own profile, not made-up values.
+              && request.resource.data.providerTrustScore
+                  == me().get('trustScore', 0)
+              && request.resource.data
+                  .get('providerScoreVisible', false)
+                  == me().get('trust', {}).get('scoreVisible', false)
+              && request.resource.data
+                  .get('providerPhotoUrl', null)
+                  == me().get('profilePhotoUrl', null);
+        }
+
         allow read: if isSignedIn();
-        allow create, update: if isSignedIn()
-                              && !isSuspended()
-                              && request.auth.uid == bidId
-                              && request.resource.data.providerId == bidId
-                              && isApprovedProvider()
-                              && jobBiddingOpen(jobId)
-                              && jobTakesOrdinaryBids(jobId)
-                              // Accepting is server-only, so a bid can only be written as pending.
-                              && request.resource.data.status == 'pending'
-                              // Amount must be a positive int up to RM 1,000,000 (acceptBid trusts it).
-                              && request.resource.data.amountSen is int
-                              && request.resource.data.amountSen > 0
-                              && request.resource.data.amountSen <= 100000000
-                              // Trust Score and photo must match the caller's own profile, not made-up values.
-                              && request.resource.data.providerTrustScore
-                                  == me().get('trustScore', 0)
-                              && request.resource.data
-                                  .get('providerScoreVisible', false)
-                                  == me().get('trust', {}).get('scoreVisible', false)
-                              && request.resource.data
-                                  .get('providerPhotoUrl', null)
-                                  == me().get('profilePhotoUrl', null);
+        allow create: if bidWriteOk()
+                      && bidCountAfter(jobId) == bidCountBefore(jobId) + 1;
+        allow update: if bidWriteOk()
+                      && bidCountAfter(jobId) == bidCountBefore(jobId);
         // Withdraw only while pending, so an accepted bid cannot be deleted.
         allow delete: if isSignedIn() && request.auth.uid == bidId
-                      && resource.data.status == 'pending';
+                      && resource.data.status == 'pending'
+                      && bidCountAfter(jobId) == bidCountBefore(jobId) - 1;
       }
 
       // Milestones/ Stages and money moves are written by Cloud Functions.
@@ -302,7 +352,7 @@ service cloud.firestore {
         allow read: if isSignedIn()
                     && (ownsJob(jobId) || isAcceptedProvider(jobId));
         allow create: if false;
-        allow update: if isSignedIn() && !isSuspended()
+        allow update: if isSignedIn() && canWrite()
                       && isAcceptedProvider(jobId)
                       && jobScheduleReady(jobId)
                       && resource.data.status == 'funded'
@@ -326,7 +376,7 @@ service cloud.firestore {
       match /private/{docId} {
         allow read: if isSignedIn()
                     && (ownsJob(jobId) || isAcceptedProvider(jobId) || isAdmin());
-        allow create, update: if isSignedIn() && !isSuspended() && ownsJob(jobId);
+        allow create, update: if isSignedIn() && canWrite() && ownsJob(jobId);
         allow delete: if false;
       }
     }
@@ -375,7 +425,7 @@ service cloud.firestore {
                       || request.auth.uid in resource.data.participantIds
                       || isAdmin());
       allow create: if isSignedIn()
-                    && !isSuspended()
+                    && canWrite()
                     && request.auth.uid in request.resource.data.participantIds
                     && request.resource.data.participantIds.size() == 2;
       // Clients may only write the last-message and unread fields, so
@@ -407,7 +457,7 @@ service cloud.firestore {
                     && (request.auth.uid in conversation().participantIds
                         || isAdmin());
         allow create: if isSignedIn()
-                      && !isSuspended()
+                      && canWrite()
                       && request.auth.uid in conversation().participantIds
                       && request.resource.data.senderId == request.auth.uid
                       && chatIsOpen(conversation());
@@ -443,7 +493,7 @@ service cloud.firestore {
     match /reports/{reportId} {
       allow read: if isAdmin();
       allow create: if isSignedIn()
-                    && !isSuspended()
+                    && canWrite()
                     && request.resource.data.reporterId == request.auth.uid
                     && request.resource.data.reportedUid is string
                     && request.resource.data.reportedUid != request.auth.uid

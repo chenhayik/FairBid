@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/util/money.dart';
 import '../../../../core/widgets/app_widgets.dart';
+import '../../../../core/widgets/user_avatar.dart';
 import '../../domain/bundle_bid.dart';
 import 'bundle_pick_logic.dart';
 
@@ -32,9 +34,18 @@ Future<String?> showBundlePickSheet(
   );
 }
 
+/// What:   The bundle-deal line of a bid.
+/// Input:  [bid] with a bundle price.
+/// Output: "Bundle deal RM x if they win all N tasks", plus "(saves RM y)" when y is above 0.
+String _bundleNote(BundleBid bid) {
+  final saving = bid.taskTotalSen - bid.bundlePriceSen!;
+  return 'Bundle deal ${formatRm(bid.bundlePriceSen!)} if they win all '
+      '${bid.taskCount} tasks${saving > 0 ? ' (saves ${formatRm(saving)})' : ''}';
+}
+
 /// What:   Sheet body listing the bids for one task.
 /// Input:  [bids] already filtered and sorted by bidsCoveringTask(); [currentProviderId] is highlighted.
-/// Output: Rows with a "Lowest price" badge and bundle-price note; pops with the provider id, or [bundleNoProviderPick].
+/// Output: Rows with avatar, "Lowest price alone" badge, bundle-deal note and a profile button (keeps the sheet open); pops with the provider id, or [bundleNoProviderPick].
 class _PickSheet extends StatelessWidget {
   const _PickSheet({
     required this.title,
@@ -64,26 +75,33 @@ class _PickSheet extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               selected: bid.providerId == currentProviderId,
               onTap: () => Navigator.of(context).pop(bid.providerId),
+              leading: UserAvatar(photoUrl: bid.providerPhotoUrl),
               title: Text(bid.providerName),
               subtitle: Wrap(
                 spacing: 8,
                 children: [
                   if (bid.priceFor(taskId) == lowest)
                     PillBadge(
-                      label: 'Lowest price',
+                      label: 'Lowest price alone',
                       color: context.fairbid.verified,
                     ),
                   if (bid.bundlePriceSen != null)
-                    Text(
-                      'Bundle price ${formatRm(bid.bundlePriceSen!)} if they '
-                      'win all ${bid.taskCount} tasks',
-                      style: theme.textTheme.bodySmall,
-                    ),
+                    Text(_bundleNote(bid), style: theme.textTheme.bodySmall),
                 ],
               ),
-              trailing: Text(
-                formatRm(bid.priceFor(taskId)!),
-                style: theme.textTheme.titleSmall,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    formatRm(bid.priceFor(taskId)!),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  IconButton(
+                    tooltip: 'View profile',
+                    icon: const Icon(Icons.person_outline),
+                    onPressed: () => context.push('/users/${bid.providerId}'),
+                  ),
+                ],
               ),
             ),
           ListTile(

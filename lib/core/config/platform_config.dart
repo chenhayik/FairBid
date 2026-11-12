@@ -11,6 +11,7 @@ class PlatformConfig {
       bool.fromEnvironment('FAIRBID_DEMO_TOPUP');
 
   /// "Best Value" weights (sum 1) for the normalised price and trust scores.
+  /// The bundle "Best Value" option in `bundle_award.js` uses its own copy.
   static const double priceWeight = 0.6;
   static const double trustWeight = 0.4;
 
@@ -28,11 +29,6 @@ class PlatformConfig {
 
   /// Max tasks in a bundle; `createBundle` keeps its own copy.
   static const int maxBundleTasks = 6;
-
-  /// The fewest-providers bundle option beats the cheapest only if it costs at most
-  /// [consolidationCapPct]% and [consolidationCapSen] (RM 500) more (the smaller limit wins). `createBundle` keeps its own copy.
-  static const int consolidationCapPct = 5;
-  static const int consolidationCapSen = 50000; // RM 500
 
   /// Bayesian priors: a new provider starts as if they had [trustPriorWeight] reviews averaging [trustPriorMean] stars.
   static const double trustPriorMean = 3.5;

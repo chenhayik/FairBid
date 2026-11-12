@@ -7,11 +7,16 @@ const {FieldValue, Timestamp} = require("firebase-admin/firestore");
 const {bundleBiddingOpen, splitBundlePrice} = require("./bundles");
 const {
   callerUid, bad, docId, throwIfSuspended, assertCanPay, notifyUser,
-  writeFundedMilestone,
+  writeFundedMilestone, walletRef, adjustWallet,
 } = require("./common");
 
-// Must match PlatformConfig.neutralTrustScore.
+// Keep in sync with PlatformConfig.priceWeight / trustWeight / neutralTrustScore.
+const PRICE_WEIGHT = 0.6;
+const TRUST_WEIGHT = 0.4;
 const NEUTRAL_TRUST = 700;
+
+// Two Best Value scores closer than this count as a tie (float noise).
+const SCORE_EPSILON = 1e-9;
 
 /**
  * What:   Price of a bid for a set of tasks.
@@ -93,64 +98,83 @@ function countBits(value) {
 }
 
 /**
- * What:   Consolidation allowance.
- * Input:  The [cheapestSen] total, the cap percent [capPct] and the cap
- *         [capSen].
- * Output: The most a fewer-provider option may cost above the cheapest: the
- *         smaller of the percent and the sen cap.
- */
-function allowanceSen(cheapestSen, capPct, capSen) {
-  return Math.min(Math.floor(cheapestSen * capPct / 100), capSen);
-}
-
-/**
- * What:   Best award with exactly [k] providers within a cost [ceiling].
+ * What:   Best Value award: the best price and Trust Score balance.
  * Input:  [bidOffers] (offersFor() per bid), [trustByProvider], the task
- *         [coverage] count, [k] and [ceiling] in sen.
- * Output: {costSen, awards} with the top weighted Trust Score (cheaper on a
- *         tie), or null when none fits.
- * How:    Depth-first search over bids, pruned by provider count and ceiling.
+ *         [coverage] count, [cheapestSen] total and [maskCount].
+ * Output: {costSen, awards} with the top Best Value score, or null when none
+ *         covers [coverage] tasks. A tie goes to the lower total, then to
+ *         fewer providers.
+ * How:    Score = PRICE_WEIGHT * cheapestSen / total + TRUST_WEIGHT *
+ *         (money-weighted Trust / 1000). A DP over task masks keeps, per mask,
+ *         only awards no other award beats on both total and money-weighted
+ *         Trust. Any extension scores strictly lower with a higher total or
+ *         lower Trust, so dropping a dominated award never loses the best one.
  */
-function bestWithinCap({bidOffers, trustByProvider, coverage, k, ceiling}) {
-  let best = null;
-  const awards = [];
+function bestValueAward(
+    {bidOffers, trustByProvider, coverage, cheapestSen, maskCount}) {
+  // states[mask] = non-dominated {costSen, trustMoney, awards}, where
+  // trustMoney is sum of (Trust Score * sen paid), kept as an exact integer.
+  let states = Array.from({length: maskCount}, () => []);
+  states[0].push({costSen: 0, trustMoney: 0, awards: []});
 
-  function consider(mask, providers, costSen) {
-    if (providers !== k || countBits(mask) !== coverage) return;
-    const candidate = {costSen, awards: [...awards]};
-    if (!best) {
-      best = candidate;
-      return;
-    }
-    const bestTrust = weightedTrust(best.awards, trustByProvider);
-    const candidateTrust = weightedTrust(candidate.awards, trustByProvider);
-    if (candidateTrust > bestTrust ||
-        (candidateTrust === bestTrust && candidate.costSen < best.costSen)) {
-      best = candidate;
-    }
-  }
+  // True when [a] is at least as good as [b] on every count that can matter.
+  const dominates = (a, b) =>
+    a.costSen <= b.costSen && a.trustMoney >= b.trustMoney &&
+    (a.costSen < b.costSen || a.trustMoney > b.trustMoney ||
+        a.awards.length <= b.awards.length);
 
-  function dfs(i, mask, providers, costSen) {
-    if (providers > k || costSen > ceiling) return; // prune
-    if (i === bidOffers.length) {
-      consider(mask, providers, costSen);
-      return;
+  const insert = (list, candidate) => {
+    if (list.some((s) => dominates(s, candidate))) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (dominates(candidate, list[i])) list.splice(i, 1);
     }
-    dfs(i + 1, mask, providers, costSen); // skip this bid entirely
-    bidOffers[i].forEach((offer) => {
-      if (mask & offer.taskMask) return; // a task here is already taken
-      awards.push({
-        providerId: offer.providerId,
-        taskAmountsSen: offer.taskAmountsSen,
+    list.push(candidate);
+  };
+
+  // One bid at a time, so no provider appears twice in an award.
+  bidOffers.forEach((offers) => {
+    const next = states.map((list) => [...list]);
+    for (let mask = 0; mask < maskCount; mask++) {
+      states[mask].forEach((soFar) => {
+        offers.forEach((offer) => {
+          if (mask & offer.taskMask) return; // a task here is already taken
+          insert(next[mask | offer.taskMask], {
+            costSen: soFar.costSen + offer.priceSen,
+            trustMoney: soFar.trustMoney +
+                (trustByProvider[offer.providerId] || 0) * offer.priceSen,
+            awards: [...soFar.awards, {
+              providerId: offer.providerId,
+              taskAmountsSen: offer.taskAmountsSen,
+            }],
+          });
+        });
       });
-      dfs(i + 1, mask | offer.taskMask, providers + 1,
-          costSen + offer.priceSen);
-      awards.pop();
+    }
+    states = next;
+  });
+
+  const scoreOf = (s) => PRICE_WEIGHT * cheapestSen / s.costSen +
+      TRUST_WEIGHT * (s.trustMoney / s.costSen) / 1000;
+
+  let best = null;
+  let bestScore = 0;
+  for (let mask = 0; mask < maskCount; mask++) {
+    if (countBits(mask) !== coverage) continue;
+    states[mask].forEach((candidate) => {
+      if (candidate.costSen <= 0) return;
+      const score = scoreOf(candidate);
+      const better = !best || score > bestScore + SCORE_EPSILON ||
+          (Math.abs(score - bestScore) <= SCORE_EPSILON &&
+          (candidate.costSen < best.costSen ||
+          (candidate.costSen === best.costSen &&
+              candidate.awards.length < best.awards.length)));
+      if (better) {
+        best = candidate;
+        bestScore = score;
+      }
     });
   }
-
-  dfs(0, 0, 0, 0);
-  return best;
+  return best && {costSen: best.costSen, awards: best.awards};
 }
 
 /**
@@ -164,16 +188,16 @@ function trustByProviderFrom(bids) {
 
 /**
  * What:   Builds the three options the requestor chooses between.
- * Input:  {tasks, bids, capPct, capSen} (shapes from taskFromSnap/bidFromSnap).
- * Output: [cheapest, fewest, recommended], or [] when nothing can be awarded.
+ * Input:  {tasks, bids} (shapes from taskFromSnap/bidFromSnap).
+ * Output: [cheapest, fewest, bestValue], or [] when nothing can be awarded.
  * How:    Most tasks covered first, then cost; a DP over task masks.
  */
-function buildAwardOptions({tasks, bids, capPct, capSen}) {
+function buildAwardOptions({tasks, bids}) {
   const trustByProvider = trustByProviderFrom(bids);
   const taskIndex = Object.fromEntries(tasks.map((t, i) => [t.id, i]));
   const maskCount = 1 << tasks.length;
 
-  // Built once and reused by the DP and the Recommended search.
+  // Built once and reused by both searches.
   const bidOffers = bids.map((bid) => offersFor(bid, taskIndex));
 
   // best[covered tasks][providers used] = cheapest way to get there.
@@ -237,22 +261,20 @@ function buildAwardOptions({tasks, bids, capPct, capSen}) {
 
   const fewest = cheapestByCount.find(Boolean);
 
-  // Recommended: fewest providers within the cap, then Trust Score, then price.
-  const ceiling =
-      cheapest.costSen + allowanceSen(cheapest.costSen, capPct, capSen);
-  const k = cheapestByCount.findIndex((p) => p && p.costSen <= ceiling);
-  const recommended = bestWithinCap({
-    bidOffers, trustByProvider, coverage: bestCoverage, k, ceiling,
-  }) || cheapestByCount[k] || cheapest;
+  // Best Value: the same weights single jobs rank bids by.
+  const bestValue = bestValueAward({
+    bidOffers, trustByProvider, coverage: bestCoverage,
+    cheapestSen: cheapest.costSen, maskCount,
+  }) || cheapest;
 
   const toOption = (key, label, partial) => option({
     key, label, partial, tasks, bids, trustByProvider,
     cheapestCostSen: cheapest.costSen,
   });
   return [
-    toOption("cheapest", "Cheapest", cheapest),
+    toOption("cheapest", "Lowest total", cheapest),
     toOption("fewest", "Fewest providers", fewest),
-    toOption("recommended", "Recommended", recommended),
+    toOption("bestValue", "Best Value", bestValue),
   ];
 }
 
@@ -403,10 +425,31 @@ function bidFromSnap(doc) {
 }
 
 /**
+ * What:   Swaps the Trust Score saved on a bid for the provider's current one.
+ * Input:  [bid] from bidFromSnap() and the provider's `users/{uid}` [user]
+ *         data (undefined if the account is gone).
+ * Output: The bid with current trustScore and scoreVisible; unchanged when
+ *         [user] is missing.
+ * Notes:  The score on the bid is only refreshed when the provider edits it,
+ *         so ranking on it could use an out-of-date number. Same rules as
+ *         bidFromSnap: a hidden ("New") score ranks as NEUTRAL_TRUST.
+ */
+function withLiveTrust(bid, user) {
+  if (!user) return bid;
+  const visible = user.trust?.scoreVisible === true;
+  return {
+    ...bid,
+    trustScore: visible ? user.trustScore || 0 : NEUTRAL_TRUST,
+    scoreVisible: visible,
+  };
+}
+
+/**
  * What:   Loader for an award or preview.
  * Input:  Firestore [db], [bundleId] and the caller [uid].
  * Output: {bundle, tasks, bids} with only pending bids; throws `not-found`, or
  *         `permission-denied` unless the caller posted the bundle.
+ *         Each bid carries its provider's current Trust Score.
  */
 async function readBundleForAward(db, bundleId, uid) {
   const bundleSnap = await db.doc(`bundles/${bundleId}`).get();
@@ -428,9 +471,14 @@ async function readBundleForAward(db, bundleId, uid) {
 
   const bidSnaps =
       await db.collection(`bundles/${bundleId}/bundleBids`).get();
-  const bids = bidSnaps.docs
-      .filter((doc) => doc.data().status === "pending")
-      .map(bidFromSnap);
+  const pending = bidSnaps.docs
+      .filter((doc) => doc.data().status === "pending");
+  // Current Trust Scores, so Best Value ranks like single-job bids do.
+  const userSnaps = pending.length === 0 ?
+      [] :
+      await db.getAll(...pending.map((doc) => db.doc(`users/${doc.id}`)));
+  const bids = pending.map((doc, i) =>
+    withLiveTrust(bidFromSnap(doc), userSnaps[i].data()));
 
   return {bundle, tasks, bids};
 }
@@ -439,7 +487,6 @@ async function readBundleForAward(db, bundleId, uid) {
  * What:   Callable that previews how a bundle could be awarded.
  * Input:  {bundleId, providerByTaskId?} from BundleRepository.previewAward().
  * Output: {options, manual?, problems?}: 3 options, plus "Your pick" if sent.
- * Notes:  Uses the cap saved on the bundle when it was posted.
  */
 exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   const uid = callerUid(context);
@@ -457,12 +504,7 @@ exports.previewBundleAward = functions.https.onCall(async (data, context) => {
   }
 
   const openTasks = tasks.filter((t) => t.status === "open");
-  const options = buildAwardOptions({
-    tasks: openTasks,
-    bids,
-    capPct: bundle.consolidationCapPct || 0,
-    capSen: bundle.consolidationCapSen || 0,
-  });
+  const options = buildAwardOptions({tasks: openTasks, bids});
   if (picks == null) return {options};
 
   const {manual, problems} = manualOption({
@@ -556,7 +598,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
 
   await db.runTransaction(async (tx) => {
     const bundleRef = db.doc(`bundles/${bundleId}`);
-    const walletRef = db.doc(`users/${uid}`);
+    const userRef = db.doc(`users/${uid}`);
 
     const bundle = (await tx.get(bundleRef)).data();
     if (bundle && bundle.requestorId !== uid) {
@@ -572,11 +614,11 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
 
     const taskIds = Array.isArray(bundle.taskIds) ? bundle.taskIds : [];
     const taskRefs = taskIds.map((id) => db.doc(`jobs/${id}`));
-    const [walletSnap, ...taskSnaps] =
-        await tx.getAll(walletRef, ...taskRefs);
+    const [userSnap, walletSnap, ...taskSnaps] =
+        await tx.getAll(userRef, walletRef(db, uid), ...taskRefs);
 
-    const wallet = walletSnap.data() || {};
-    throwIfSuspended(wallet);
+    const user = userSnap.data() || {};
+    throwIfSuspended(user);
 
     // Queried inside the transaction so bids added after the preview count.
     const bidsSnap = await tx.get(db.collection(
@@ -615,7 +657,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
           {reason: "changed", totalSen});
     }
 
-    assertCanPay(wallet, totalSen,
+    assertCanPay(walletSnap, user, totalSen,
         "Insufficient available balance to award this bundle.");
 
     // Each awarded task becomes an ordinary one-provider job.
@@ -652,9 +694,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
     });
 
     // The money moves into escrow once, for the whole award.
-    tx.update(walletRef, {
-      walletBalanceSen: (wallet.walletBalanceSen || 0) - totalSen,
-    });
+    adjustWallet(tx, db, uid, -totalSen);
 
     // Every bid lands on accepted, partly accepted or rejected.
     bidsSnap.docs.forEach((doc) => {
@@ -695,6 +735,7 @@ exports.awardBundle = functions.https.onCall(async (data, context) => {
 exports.offersFor = offersFor;
 exports.buildAwardOptions = buildAwardOptions;
 exports.checkManualAward = checkManualAward;
-exports.allowanceSen = allowanceSen;
+exports.bidFromSnap = bidFromSnap;
+exports.withLiveTrust = withLiveTrust;
 exports.manualOption = manualOption;
 exports.leftoverTaskUpdate = leftoverTaskUpdate;
