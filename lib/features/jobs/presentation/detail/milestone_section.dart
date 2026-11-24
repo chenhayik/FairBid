@@ -72,43 +72,15 @@ class MilestoneSectionState extends State<MilestoneSection> {
       );
       if (!early || !mounted) return;
     }
-    final note = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Mark as delivered?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'The client will be asked to review the work and release '
-              'the payment.',
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: note,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                hintText: 'Delivery note (optional)',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Mark delivered'),
-          ),
-        ],
-      ),
+    final text = await showNoteDialog(
+      context,
+      title: 'Mark as delivered?',
+      body: 'The client will be asked to review the work and release '
+          'the payment.',
+      hint: 'Delivery note (optional)',
+      actionLabel: 'Mark delivered',
     );
-    final text = note.text.trim();
-    note.dispose();
-    if (confirmed != true || !mounted) return;
+    if (text == null || !mounted) return;
     await _run(
       milestone,
       () => repo.submitMilestone(

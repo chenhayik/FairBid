@@ -385,43 +385,18 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   /// What:   Asks the other party to cancel an in-progress job.
   /// Output: Dialog with an optional reason, then JobRepository.requestCancellation().
   Future<void> _requestCancellation(BuildContext context, Job job) async {
-    final reason = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Request cancellation?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'The other party must agree before the job is cancelled. '
-              'Money in escrow for work not yet delivered is refunded to the '
-              'client. A delivered or disputed milestone must be released or '
-              'resolved first.',
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reason,
-              maxLines: 3,
-              decoration: const InputDecoration(hintText: 'Reason (optional)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Back'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Request'),
-          ),
-        ],
-      ),
+    final text = await showNoteDialog(
+      context,
+      title: 'Request cancellation?',
+      body: 'The other party must agree before the job is cancelled. '
+          'Money in escrow for work not yet delivered is refunded to the '
+          'client. A delivered or disputed milestone must be released or '
+          'resolved first.',
+      hint: 'Reason (optional)',
+      actionLabel: 'Request',
+      cancelLabel: 'Back',
     );
-    final text = reason.text.trim();
-    reason.dispose();
-    if (confirmed != true || !context.mounted) return;
+    if (text == null || !context.mounted) return;
     await _runCall(
       context,
       () => context.read<JobRepository>().requestCancellation(
@@ -435,89 +410,20 @@ class _JobDetailBodyState extends State<_JobDetailBody> {
   /// Input:  [job] current price (acceptedBidAmountSen).
   /// Output: Validated amount and required reason, sent via JobRepository.requestPriceChange().
   Future<void> _requestPriceChange(BuildContext context, Job job) async {
-    final current = job.acceptedBidAmountSen ?? 0;
-    final original = job.originalBidAmountSen;
-    final amount = TextEditingController(
-      text: (current / 100).toStringAsFixed(2),
-    );
-    final reason = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    final confirmed = await showDialog<bool>(
+    final result = await showDialog<(int, String)>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Request price change'),
-        content: SingleChildScrollView(
-          child: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Current price: ${formatRm(current)}'),
-                if (original != null && original != current)
-                  Text('Original: ${formatRm(original)}'),
-                const SizedBox(height: 12),
-                AppTextField(
-                  controller: amount,
-                  label: 'New price (RM)',
-                  prefixText: 'RM ',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  validator: (v) {
-                    final sen = parseRmToSen(v);
-                    if (sen == null) return 'Enter the new price.';
-                    if (sen <= 0) return 'Amount must be more than RM 0.';
-                    if (sen == current) return 'That is the current price.';
-                    return null;
-                  },
-                ),
-                AppTextField(
-                  controller: reason,
-                  label: 'Reason',
-                  maxLines: 3,
-                  maxLength: 500,
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Explain why the price should change.'
-                      : null,
-                ),
-                Text(
-                  'The other party must agree. An increase moves the extra '
-                  'into escrow; a decrease is refunded to the client from '
-                  'work not yet delivered.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Back'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) {
-                Navigator.of(context).pop(true);
-              }
-            },
-            child: const Text('Send request'),
-          ),
-        ],
+      builder: (_) => _PriceChangeDialog(
+        current: job.acceptedBidAmountSen ?? 0,
+        original: job.originalBidAmountSen,
       ),
     );
-    final newSen = parseRmToSen(amount.text);
-    final text = reason.text.trim();
-    amount.dispose();
-    reason.dispose();
-    if (confirmed != true || newSen == null || !context.mounted) return;
+    if (result == null || !context.mounted) return;
     await _runCall(
       context,
       () => context.read<JobRepository>().requestPriceChange(
         job.id,
-        newAmountSen: newSen,
-        reason: text,
+        newAmountSen: result.$1,
+        reason: result.$2,
       ),
     );
   }
@@ -2429,6 +2335,105 @@ class _Bar extends StatelessWidget {
                 ),
         ),
       ),
+    );
+  }
+}
+
+/// What:   Form for a new agreed price and the reason for it.
+/// Input:  [current] and [original] prices in sen.
+/// Output: Pops (newAmountSen, reason) on send, null on back.
+/// Notes:  Owns its controllers so they are disposed only after the close animation.
+class _PriceChangeDialog extends StatefulWidget {
+  const _PriceChangeDialog({required this.current, this.original});
+
+  final int current;
+  final int? original;
+
+  @override
+  State<_PriceChangeDialog> createState() => _PriceChangeDialogState();
+}
+
+class _PriceChangeDialogState extends State<_PriceChangeDialog> {
+  late final _amount = TextEditingController(
+    text: (widget.current / 100).toStringAsFixed(2),
+  );
+  final _reason = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final current = widget.current;
+    final original = widget.original;
+    return AlertDialog(
+      title: const Text('Request price change'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Current price: ${formatRm(current)}'),
+              if (original != null && original != current)
+                Text('Original: ${formatRm(original)}'),
+              const SizedBox(height: 12),
+              AppTextField(
+                controller: _amount,
+                label: 'New price (RM)',
+                prefixText: 'RM ',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) {
+                  final sen = parseRmToSen(v);
+                  if (sen == null) return 'Enter the new price.';
+                  if (sen <= 0) return 'Amount must be more than RM 0.';
+                  if (sen == current) return 'That is the current price.';
+                  return null;
+                },
+              ),
+              AppTextField(
+                controller: _reason,
+                label: 'Reason',
+                maxLines: 3,
+                maxLength: 500,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Explain why the price should change.'
+                    : null,
+              ),
+              Text(
+                'The other party must agree. An increase moves the extra '
+                'into escrow; a decrease is refunded to the client from '
+                'work not yet delivered.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Back'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              Navigator.of(context).pop(
+                (parseRmToSen(_amount.text)!, _reason.text.trim()),
+              );
+            }
+          },
+          child: const Text('Send request'),
+        ),
+      ],
     );
   }
 }

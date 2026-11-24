@@ -31,6 +31,7 @@ import 'package:fairbid/features/jobs/domain/bundle_bid.dart';
 import 'package:fairbid/features/jobs/domain/job.dart';
 import 'package:fairbid/features/jobs/domain/job_event.dart';
 import 'package:fairbid/features/jobs/domain/milestone.dart';
+import 'package:fairbid/features/jobs/domain/price_change_request.dart';
 import 'package:fairbid/features/jobs/domain/service_address.dart';
 import 'package:fairbid/features/messages/data/chat_repository.dart';
 import 'package:fairbid/features/messages/domain/conversation.dart';
@@ -602,6 +603,17 @@ class FakeJobRepository implements JobRepository {
     required String reason,
   }) async {
     priceChangeCalls.add('request:$jobId:$newAmountSen');
+    _updateJob(
+      jobId,
+      (j) => _rebuild(
+        j,
+        priceChangeRequest: PriceChangeRequest(
+          by: j.requestorId == appointmentUid ? 'requestor' : 'provider',
+          newAmountSen: newAmountSen,
+          reason: reason,
+        ),
+      ),
+    );
   }
 
   @override
@@ -790,6 +802,7 @@ class FakeJobRepository implements JobRepository {
     DateTime? onTheWayAt,
     int? etaMinutes,
     DateTime? arrivedAt,
+    PriceChangeRequest? priceChangeRequest,
   }) => Job(
     id: j.id,
     requestorId: j.requestorId,
@@ -825,6 +838,9 @@ class FakeJobRepository implements JobRepository {
     onTheWayAt: onTheWayAt ?? j.onTheWayAt,
     etaMinutes: etaMinutes ?? j.etaMinutes,
     arrivedAt: arrivedAt ?? j.arrivedAt,
+    originalBidAmountSen: j.originalBidAmountSen,
+    priceChangeCount: j.priceChangeCount,
+    priceChangeRequest: priceChangeRequest ?? j.priceChangeRequest,
   );
 }
 

@@ -50,6 +50,58 @@ void main() {
     });
   });
 
+  // Typing into a field before closing used to throw "TextEditingController
+  // was used after being disposed" because the dialog disposed it too early.
+  group('request dialogs', () {
+    Future<void> pick(WidgetTester tester, String option) async {
+      await openMenu(tester);
+      await tester.tap(find.text(option));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('price change validates, then sends without errors', (
+      tester,
+    ) async {
+      final jobs = await pumpJobDetail(tester, testJob(owner: true), owner: true);
+      await pick(tester, 'Change the price');
+      final fields = find.byType(TextFormField);
+      await tester.enterText(fields.at(0), '200');
+      await tester.tap(find.text('Send request'));
+      await tester.pumpAndSettle();
+      expect(find.text('Explain why the price should change.'), findsOneWidget);
+      expect(jobs.priceChangeCalls, isEmpty);
+
+      await tester.enterText(fields.at(1), ' Extra pipework ');
+      await tester.tap(find.text('Send request'));
+      await tester.pumpAndSettle();
+      expect(find.text('Request price change'), findsNothing);
+      expect(jobs.priceChangeCalls, ['request:job-1:20000']);
+      expect(find.text('Waiting for the other party'), findsOneWidget);
+    });
+
+    testWidgets('price change Back sends nothing', (tester) async {
+      final jobs = await pumpJobDetail(tester, testJob(owner: true), owner: true);
+      await pick(tester, 'Change the price');
+      await tester.enterText(find.byType(TextFormField).at(0), '200');
+      await tester.tap(find.text('Back'));
+      await tester.pumpAndSettle();
+      expect(find.text('Request price change'), findsNothing);
+      expect(jobs.priceChangeCalls, isEmpty);
+    });
+
+    testWidgets('cancellation sends the typed reason without errors', (
+      tester,
+    ) async {
+      await pumpJobDetail(tester, testJob(owner: true), owner: true);
+      await pick(tester, 'Ask to cancel the job');
+      await tester.enterText(find.byType(TextField), ' No longer needed ');
+      await tester.tap(find.text('Request'));
+      await tester.pumpAndSettle();
+      expect(find.text('Cancellation requested'), findsOneWidget);
+      expect(find.text('"No longer needed"'), findsOneWidget);
+    });
+  });
+
   group('pending request', () {
     const request = PriceChangeRequest(
       by: 'provider',

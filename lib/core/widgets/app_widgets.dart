@@ -566,3 +566,83 @@ Future<bool> showConfirmDialog(
       ),
     ) ??
     false;
+
+/// What:   A Cancel / confirm dialog with an optional free-text note.
+/// Input:  [title], [body], the note's [hint] and the confirm button's [actionLabel].
+/// Output: The trimmed note ('' when left empty) if confirmed, null if cancelled or dismissed.
+Future<String?> showNoteDialog(
+  BuildContext context, {
+  required String title,
+  required String body,
+  required String hint,
+  required String actionLabel,
+  String cancelLabel = 'Cancel',
+}) =>
+    showDialog<String>(
+      context: context,
+      builder: (_) => _NoteDialog(
+        title: title,
+        body: body,
+        hint: hint,
+        actionLabel: actionLabel,
+        cancelLabel: cancelLabel,
+      ),
+    );
+
+/// What:   Body of [showNoteDialog].
+/// Notes:  Owns its controller so it is disposed only after the close animation.
+class _NoteDialog extends StatefulWidget {
+  const _NoteDialog({
+    required this.title,
+    required this.body,
+    required this.hint,
+    required this.actionLabel,
+    required this.cancelLabel,
+  });
+
+  final String title;
+  final String body;
+  final String hint;
+  final String actionLabel;
+  final String cancelLabel;
+
+  @override
+  State<_NoteDialog> createState() => _NoteDialogState();
+}
+
+class _NoteDialogState extends State<_NoteDialog> {
+  final _note = TextEditingController();
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: Text(widget.title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.body),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _note,
+              maxLines: 3,
+              decoration: InputDecoration(hintText: widget.hint),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(widget.cancelLabel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _note.text.trim()),
+            child: Text(widget.actionLabel),
+          ),
+        ],
+      );
+}
