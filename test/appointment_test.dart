@@ -12,6 +12,7 @@ import 'package:fairbid/features/jobs/presentation/detail/propose_time_sheet.dar
 import 'package:fairbid/features/disputes/presentation/raise_dispute_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 
 import 'helpers/builders.dart';
 import 'helpers/fakes.dart';
@@ -573,6 +574,20 @@ void main() {
       );
     });
 
+    // Visit times are pinned to Malaysia time (UTC+8) on every device.
+    test('shows any moment in Malaysia time', () {
+      final t = DateTime.utc(2026, 11, 26, 1); // 9:00 AM in Kuala Lumpur
+      expect(formatVisitTime(t), 'Thu 26 Nov, 9:00 AM');
+      expect(formatVisitTime(t.toLocal()), 'Thu 26 Nov, 9:00 AM');
+      expect(formatClock(t), '9:00 am');
+      expect(formatVisitDate(DateTime.utc(2026, 11, 26, 17)), 'Fri 27 Nov');
+    });
+
+    test('reads picked dates and times as Malaysia time', () {
+      expect(fromMyt(2026, 11, 26, 9), DateTime.utc(2026, 11, 26, 1));
+      expect(mytDay(DateTime.utc(2026, 11, 26, 17)), DateTime(2026, 11, 27));
+    });
+
     testWidgets('Send with no time picked shows an error', (tester) async {
       final jobs = await open(tester, testJob(schedulingRequired: true, owner: true), owner: true);
       await tapAt(tester, find.text('Propose a time'));
@@ -601,6 +616,10 @@ void main() {
       expect(find.byType(ProposeTimeSheet), findsNothing);
       expect(find.text('Visit confirmed'), findsNothing);
       expect(find.text('Waiting for Pro Fixer to confirm'), findsOneWidget);
+      // The default pick is tomorrow 9:00 AM, Malaysia time.
+      final tomorrowKl = DateTime.now().toUtc().add(const Duration(hours: 32));
+      final tomorrow = DateFormat('EEE d MMM').format(tomorrowKl);
+      expect(find.text('$tomorrow, 9:00 AM'), findsOneWidget);
     });
 
     Future<FakeJobRepository> openBundleSheet(WidgetTester tester) async {

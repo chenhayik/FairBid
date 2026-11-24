@@ -78,6 +78,8 @@ class ProposeTimeSheet extends StatefulWidget {
 class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
   final _note = TextEditingController();
   final _options = <DateTime?>[null];
+
+  /// End of a multi-day visit: 23:59 Malaysia time on the chosen finish date.
   DateTime? _finishesOn;
   String? _error;
   bool _busy = false;
@@ -124,13 +126,6 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     super.dispose();
   }
 
-  /// What:   Finish time of a multi-day visit.
-  /// Output: End of the chosen finish date (23:59), or null if none.
-  DateTime? get _endAt {
-    final d = _finishesOn;
-    return d == null ? null : DateTime(d.year, d.month, d.day, 23, 59);
-  }
-
   /// What:   Whether this reschedules a visit starting within 24 hours.
   /// Output: True when an agreed visit is less than 24 hours away (late changes are recorded on the job).
   bool get _isLateChange {
@@ -142,12 +137,14 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
   /// What:   Date then time picker for one option.
   /// Input:  [current] pre-selected value, if any.
   /// Output: The picked DateTime, or null if either picker is dismissed.
+  /// Notes:  Both pickers show Malaysia time (visit_time.dart).
   Future<DateTime?> _pickDateTime(DateTime? current) async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final today = mytDay(DateTime.now());
     final date = await showDatePicker(
       context: context,
-      initialDate: current ?? today.add(const Duration(days: 1)),
+      initialDate: current != null
+          ? mytDay(current)
+          : today.add(const Duration(days: 1)),
       firstDate: today,
       lastDate: today.add(_maxAhead),
     );
@@ -155,11 +152,11 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
     final time = await showTimePicker(
       context: context,
       initialTime: current != null
-          ? TimeOfDay.fromDateTime(current)
+          ? TimeOfDay.fromDateTime(toMyt(current))
           : const TimeOfDay(hour: 9, minute: 0),
     );
     if (time == null) return null;
-    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    return fromMyt(date.year, date.month, date.day, time.hour, time.minute);
   }
 
   Future<void> _pickOption(int index) async {
@@ -175,14 +172,19 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
           (a, b) => a == null || b.isAfter(a) ? b : a,
         ) ??
         DateTime.now();
-    final first = DateTime(latest.year, latest.month, latest.day);
+    final first = mytDay(latest);
+    final finish = _finishesOn;
     final date = await showDatePicker(
       context: context,
-      initialDate: _finishesOn ?? first,
+      initialDate: finish != null ? mytDay(finish) : first,
       firstDate: first,
       lastDate: first.add(_maxAhead),
     );
-    if (date != null) setState(() => _finishesOn = date);
+    if (date != null) {
+      setState(
+        () => _finishesOn = fromMyt(date.year, date.month, date.day, 23, 59),
+      );
+    }
   }
 
   /// What:   Send button handler.
@@ -191,7 +193,7 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
   Future<void> _send() async {
     final problem = validateVisitTimes(
       options: _options,
-      endAt: _endAt,
+      endAt: _finishesOn,
       now: DateTime.now(),
     );
     if (problem != null) {
@@ -210,7 +212,7 @@ class _ProposeTimeSheetState extends State<ProposeTimeSheet> {
       await repo.proposeAppointment(
         widget.job.id,
         options: _options.whereType<DateTime>().toList()..sort(),
-        endAt: _endAt,
+        endAt: _finishesOn,
         note: note.isEmpty ? null : note,
         alsoJobIds: [
           for (final t in _siblings)
